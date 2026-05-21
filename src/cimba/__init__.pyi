@@ -1,3 +1,5 @@
+from typing import Final
+
 from ._cimba import (
     CANCELLED as CANCELLED,
     INTERRUPTED as INTERRUPTED,
@@ -52,4 +54,4 @@ from ._cimba import (
     yield_process as yield_process,
 )
 
-__version__: str
+__version__: Final[str]
