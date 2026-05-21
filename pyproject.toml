@@ -1,0 +1,57 @@
+[build-system]
+requires = ["meson-python>=0.16", "cython>=3.0"]
+build-backend = "mesonpy"
+
+[project]
+name = "cimba"
+version = "0.1.0"
+description = "Python bindings for Cimba, a multithreaded discrete-event-simulation C library"
+readme = "README.md"
+requires-python = ">=3.13"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "FBarrca", email = "franbarragan87@gmail.com" }]
+keywords = ["simulation", "discrete-event-simulation", "cimba", "cython"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Cython",
+    "Programming Language :: C",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/FBarrca/cimba_python"
+"Upstream C library" = "https://github.com/ambonvik/cimba"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+# Build tools kept separate from test deps. Installed by default (see
+# tool.uv.default-groups) so the no-build-isolation editable build below can find
+# them in the project venv. (build-system.requires covers isolated wheel builds.)
+build = ["meson-python>=0.16", "meson>=1.1", "ninja", "cython>=3.0"]
+
+[tool.uv]
+# meson-python's editable install rebuilds the extension on import, baking in the
+# meson/cython paths used at setup. Under build isolation those live in a throwaway
+# temp dir that gets deleted, breaking rebuild-on-import after a meson.build/.pyx
+# edit. Building against the project venv records persistent .venv paths instead.
+no-build-isolation-package = ["cimba"]
+default-groups = ["dev", "build"]
+
+[tool.pytest.ini_options]
+# Only collect our tests; never descend into the vendored C library submodule.
+testpaths = ["tests"]
+
+[tool.meson-python.args]
+setup = ["-Dbuildtype=release"]
+# Build only our extension (+ its real deps: libcimba, codegen) via the alias
+# defined in meson.build. This avoids compiling upstream's tutorials/benchmarks/
+# tests, which are in Meson's default `all` target but irrelevant to the wheel
+# (one of them links system HDF5).
+compile = ["cimba_ext"]
+# Cimba is statically linked into the extension at build time, so its install
+# artifacts (libcimba.a + upstream headers, marked install:true upstream) must
+# not be copied into the wheel. Skip subproject installs.
+install = ["--skip-subprojects"]

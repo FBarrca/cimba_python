@@ -1,0 +1,21 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Compiled extension + Cython/Meson build artifacts
+*.so
+*.pyd
+/src/cimba/_cimba.c
+.mesonpy-*/
+builddir/
+/subprojects/*.wraplock
+
+# Test / tooling caches
+.pytest_cache/
+
+# Virtual environments
+.venv

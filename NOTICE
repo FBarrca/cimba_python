@@ -1,0 +1,15 @@
+cimba (Python wrapper)
+Copyright (c) 2026 FBarrca
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product bundles, in compiled form within its binary wheels, the Cimba
+discrete event simulation library:
+
+    Cimba discrete event simulation library
+    Copyright (c) Asbjørn M. Bonvik 1994, 1995, 2025 - 26.
+    Licensed under the Apache License, Version 2.0.
+    https://github.com/ambonvik/cimba
+
+Cimba's own NOTICE (third-party components it adapts, e.g. the Ziggurat fast
+PRNG and other MIT / public-domain code) applies to that bundled library and is
+distributed at subprojects/cimba/NOTICE in the source tree.
