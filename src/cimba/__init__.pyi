@@ -1,12 +1,26 @@
+"""Typed re-export surface for the private Cython extension."""
+
 from typing import Final
 
-from ._cimba import (
-    CANCELLED as CANCELLED,
-    INTERRUPTED as INTERRUPTED,
+from .cimba import native_version as native_version
+from .cmb_buffer import Buffer as Buffer, UNLIMITED as UNLIMITED
+from .cmb_condition import Condition as Condition
+from .cmb_datasummary import DataSummary as DataSummary
+from .cmb_dataset import Dataset as Dataset
+from .cmb_event import Simulation as Simulation, time as time
+from .cmb_logger import (
     LOGGER_ERROR as LOGGER_ERROR,
     LOGGER_FATAL as LOGGER_FATAL,
     LOGGER_INFO as LOGGER_INFO,
     LOGGER_WARNING as LOGGER_WARNING,
+    logger_flags_off as logger_flags_off,
+    logger_flags_on as logger_flags_on,
+)
+from .cmb_objectqueue import ObjectQueue as ObjectQueue
+from .cmb_priorityqueue import PriorityQueue as PriorityQueue
+from .cmb_process import (
+    CANCELLED as CANCELLED,
+    INTERRUPTED as INTERRUPTED,
     PREEMPTED as PREEMPTED,
     PROCESS_CREATED as PROCESS_CREATED,
     PROCESS_FINISHED as PROCESS_FINISHED,
@@ -14,44 +28,34 @@ from ._cimba import (
     STOPPED as STOPPED,
     SUCCESS as SUCCESS,
     TIMEOUT as TIMEOUT,
-    UNLIMITED as UNLIMITED,
+    Process as Process,
+    current_process as current_process,
+    hold as hold,
+    process_exit as process_exit,
+    yield_process as yield_process,
+)
+from .cmb_random import (
     bernoulli as bernoulli,
     beta as beta,
-    Buffer as Buffer,
-    Condition as Condition,
-    current_process as current_process,
     current_seed as current_seed,
-    DataSummary as DataSummary,
-    Dataset as Dataset,
     dice as dice,
     exponential as exponential,
     flip as flip,
     fmix64 as fmix64,
     gamma as gamma,
-    hold as hold,
     hwseed as hwseed,
-    logger_flags_off as logger_flags_off,
-    logger_flags_on as logger_flags_on,
-    native_version as native_version,
     normal as normal,
-    ObjectQueue as ObjectQueue,
     pert as pert,
     pert_mod as pert_mod,
-    PriorityQueue as PriorityQueue,
-    process_exit as process_exit,
-    Process as Process,
     random as random,
     random_u64 as random_u64,
-    Resource as Resource,
-    ResourcePool as ResourcePool,
     seed as seed,
-    Simulation as Simulation,
-    time as time,
-    TimeSeries as TimeSeries,
     triangular as triangular,
     uniform as uniform,
-    WeightedSummary as WeightedSummary,
-    yield_process as yield_process,
 )
+from .cmb_resource import Resource as Resource
+from .cmb_resourcepool import ResourcePool as ResourcePool
+from .cmb_timeseries import TimeSeries as TimeSeries
+from .cmb_wtdsummary import WeightedSummary as WeightedSummary
 
 __version__: Final[str]

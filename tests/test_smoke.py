@@ -1,4 +1,15 @@
 import cimba
+from cimba.cmb_buffer import Buffer
+from cimba.cmb_event import Simulation
+from cimba.cmb_process import Process
+from cimba.cmb_random import exponential
+
+
+def test_c_module_shaped_imports_are_available():
+    assert Buffer is cimba.Buffer
+    assert Simulation is cimba.Simulation
+    assert Process is cimba.Process
+    assert exponential is cimba.exponential
 
 
 def test_versions_are_available():

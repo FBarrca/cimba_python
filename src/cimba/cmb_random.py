@@ -1,0 +1,41 @@
+"""Bindings for Cimba's cmb_random module."""
+
+from ._cimba import (
+    bernoulli,
+    beta,
+    current_seed,
+    dice,
+    exponential,
+    flip,
+    fmix64,
+    gamma,
+    hwseed,
+    normal,
+    pert,
+    pert_mod,
+    random,
+    random_u64,
+    seed,
+    triangular,
+    uniform,
+)
+
+__all__ = [
+    "bernoulli",
+    "beta",
+    "current_seed",
+    "dice",
+    "exponential",
+    "flip",
+    "fmix64",
+    "gamma",
+    "hwseed",
+    "normal",
+    "pert",
+    "pert_mod",
+    "random",
+    "random_u64",
+    "seed",
+    "triangular",
+    "uniform",
+]

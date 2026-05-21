@@ -1,12 +1,24 @@
 """Python bindings for Cimba, a discrete-event-simulation library."""
 
-from ._cimba import (
-    CANCELLED,
-    INTERRUPTED,
+from .cimba import native_version
+from .cmb_buffer import Buffer, UNLIMITED
+from .cmb_condition import Condition
+from .cmb_datasummary import DataSummary
+from .cmb_dataset import Dataset
+from .cmb_event import Simulation, time
+from .cmb_logger import (
     LOGGER_ERROR,
     LOGGER_FATAL,
     LOGGER_INFO,
     LOGGER_WARNING,
+    logger_flags_off,
+    logger_flags_on,
+)
+from .cmb_objectqueue import ObjectQueue
+from .cmb_priorityqueue import PriorityQueue
+from .cmb_process import (
+    CANCELLED,
+    INTERRUPTED,
     PREEMPTED,
     PROCESS_CREATED,
     PROCESS_FINISHED,
@@ -14,45 +26,35 @@ from ._cimba import (
     STOPPED,
     SUCCESS,
     TIMEOUT,
-    UNLIMITED,
+    Process,
+    current_process,
+    hold,
+    process_exit,
+    yield_process,
+)
+from .cmb_random import (
     bernoulli,
     beta,
-    Buffer,
-    Condition,
-    current_process,
     current_seed,
-    DataSummary,
-    Dataset,
     dice,
     exponential,
     flip,
     fmix64,
     gamma,
-    hold,
     hwseed,
-    logger_flags_off,
-    logger_flags_on,
-    native_version,
     normal,
-    ObjectQueue,
     pert,
     pert_mod,
-    PriorityQueue,
-    process_exit,
-    Process,
     random,
     random_u64,
-    Resource,
-    ResourcePool,
     seed,
-    Simulation,
-    time,
-    TimeSeries,
     triangular,
     uniform,
-    WeightedSummary,
-    yield_process,
 )
+from .cmb_resource import Resource
+from .cmb_resourcepool import ResourcePool
+from .cmb_timeseries import TimeSeries
+from .cmb_wtdsummary import WeightedSummary
 
 __all__ = [
     "CANCELLED",
