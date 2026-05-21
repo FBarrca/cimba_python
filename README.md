@@ -4,9 +4,10 @@ Python bindings for [**Cimba**](https://github.com/ambonvik/cimba) — a
 multithreaded discrete-event-simulation library written in C (POSIX pthreads for
 parallel replications, stackful coroutines for concurrent processes per thread).
 
-> **Status: scaffolding.** The repository and build pipeline are in place, but
-> the simulation API is not wrapped yet. `cimba.native_version()` calls into the
-> linked C library so you can confirm the toolchain works end to end.
+> **Status: early bindings.** The package wraps the core single-thread Cimba
+> simulation API: `Simulation`, `Process`, buffers, object/priority queues,
+> resources, conditions, random distributions, and summary/time-series helpers.
+> Parallel experiment orchestration is still a later layer.
 
 ## How it's put together
 
@@ -46,11 +47,48 @@ git submodule update --init --recursive    # pulls subprojects/cimba
 
 uv sync                       # creates .venv, installs deps, compiles cimba (~15s first run)
 uv run python -c "import cimba; print(cimba.native_version())"   # -> 3.0.0-beta
-uv run pytest                 # -> 2 passed
+uv run pytest                 # runs the wrapper smoke/behavior tests
 ```
 
 No manual `.venv` activation needed — `uv run` handles it. The first `uv sync`
 compiles the C library + Cython extension; later runs are incremental.
+
+## Minimal simulation
+
+```python
+import cimba
+
+
+def arrival(me, queue):
+    while True:
+        cimba.hold(cimba.exponential(1.0 / 0.75))
+        queue.put(1)
+
+
+def service(me, queue):
+    while True:
+        queue.get(1)
+        cimba.hold(cimba.exponential(1.0))
+
+
+with cimba.Simulation(seed=123) as sim:
+    queue = cimba.Buffer("Queue")
+    queue.start_recording()
+
+    cimba.Process("Arrival", arrival, queue).start()
+    cimba.Process("Service", service, queue).start()
+
+    sim.stop_at(1000.0)
+    sim.execute()
+
+    queue.stop_recording()
+    print(queue.history().summary().mean)
+```
+
+`Simulation` owns Cimba's thread-local event queue and random generator. Objects
+created while a simulation is active are kept alive by the simulation and closed
+in reverse creation order, so `Process(...).start()` is safe even if you do not
+store the process in a local variable.
 
 ## Build a wheel
 

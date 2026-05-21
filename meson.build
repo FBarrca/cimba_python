@@ -36,6 +36,7 @@ cimba_dep = cimba_proj.get_variable('my_lib_dep')
 py.install_sources(
     files(
         'src/cimba/__init__.py',
+        'src/cimba/__init__.pyi',
         'src/cimba/py.typed',
         'src/cimba/_cimba.pyi',  # type stub so editors get hover/autocomplete
     ),
