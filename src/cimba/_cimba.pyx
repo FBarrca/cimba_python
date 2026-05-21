@@ -282,6 +282,7 @@ cdef extern from "cimba.h":
 
     cmb_timeseries *cmb_timeseries_create()
     void cmb_timeseries_destroy(cmb_timeseries *tsp)
+    uint64_t cmb_timeseries_copy(cmb_timeseries *tgt, const cmb_timeseries *src)
     uint64_t cmb_timeseries_add(cmb_timeseries *tsp, double x, double t)
     uint64_t cmb_timeseries_finalize(cmb_timeseries *tsp, double t)
     uint64_t cmb_timeseries_summarize(const cmb_timeseries *tsp, cmb_wtdsummary *wsp)
@@ -865,7 +866,7 @@ cdef class Buffer:
 
     def history(self):
         _raise_if_closed(self)
-        return _timeseries_view(cmb_buffer_history(self._ptr))
+        return _timeseries_copy(cmb_buffer_history(self._ptr))
 
     def close(self) -> None:
         if self._closed:
@@ -949,7 +950,7 @@ cdef class ObjectQueue:
 
     def history(self):
         _raise_if_closed(self)
-        return _timeseries_view(cmb_objectqueue_history(self._ptr))
+        return _timeseries_copy(cmb_objectqueue_history(self._ptr))
 
     cdef void _decref_queued_objects(self):
         cdef void *ptr = NULL
@@ -1069,7 +1070,7 @@ cdef class PriorityQueue:
 
     def history(self):
         _raise_if_closed(self)
-        return _timeseries_view(cmb_priorityqueue_history(self._ptr))
+        return _timeseries_copy(cmb_priorityqueue_history(self._ptr))
 
     cdef void _decref_queued_objects(self):
         cdef void *ptr = NULL
@@ -1152,7 +1153,7 @@ cdef class Resource:
 
     def history(self):
         _raise_if_closed(self)
-        return _timeseries_view(cmb_resource_history(self._ptr))
+        return _timeseries_copy(cmb_resource_history(self._ptr))
 
     def close(self) -> None:
         if self._closed:
@@ -1233,7 +1234,7 @@ cdef class ResourcePool:
 
     def history(self):
         _raise_if_closed(self)
-        return _timeseries_view(cmb_resourcepool_get_history(self._ptr))
+        return _timeseries_copy(cmb_resourcepool_get_history(self._ptr))
 
     def close(self) -> None:
         if self._closed:
@@ -1306,10 +1307,11 @@ cdef WeightedSummary _wtdsummary_owner(cmb_wtdsummary *ptr):
     return summary
 
 
-cdef TimeSeries _timeseries_view(cmb_timeseries *ptr):
+cdef TimeSeries _timeseries_copy(cmb_timeseries *ptr):
     cdef TimeSeries ts = TimeSeries.__new__(TimeSeries)
-    ts._ptr = ptr
-    ts._owner = False
+    ts._ptr = cmb_timeseries_create()
+    cmb_timeseries_copy(ts._ptr, ptr)
+    ts._owner = True
     ts._closed = False
     return ts
 
