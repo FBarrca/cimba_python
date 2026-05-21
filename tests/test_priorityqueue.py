@@ -14,11 +14,15 @@ def test_priorityqueue_returns_highest_priority_first():
 
     with cimba.Simulation(seed=1) as sim:
         queue = cimba.PriorityQueue("Priority")
+        queue.start_recording()
         cimba.Process("Putter", putter, queue).start()
         cimba.Process("Getter", getter, queue).start()
         sim.execute()
+        queue.stop_recording()
+        history = queue.history()
 
     assert log == [(cimba.SUCCESS, "high"), (cimba.SUCCESS, "low")]
+    assert history.count >= 2
 
 
 def test_priorityqueue_cancel_releases_item_and_removes_handle():
@@ -31,3 +35,44 @@ def test_priorityqueue_cancel_releases_item_and_removes_handle():
         assert queue.cancel(handle) is True
         assert queue.position(handle) == 0
         assert queue.length == 0
+
+
+def test_priorityqueue_reprioritize_changes_get_order():
+    with cimba.Simulation(seed=1):
+        queue = cimba.PriorityQueue("Priority")
+        assert queue.put("first", priority=1)[0] == cimba.SUCCESS
+        sig, handle = queue.put("second", priority=0)
+        assert sig == cimba.SUCCESS
+        queue.reprioritize(handle, 2)
+        assert queue.get() == (cimba.SUCCESS, "second")
+        assert queue.get() == (cimba.SUCCESS, "first")
+
+
+def test_priorityqueue_interrupted_get_and_put():
+    log = []
+
+    def getter(me, queue):
+        log.append(("get",) + queue.get())
+
+    def putter(me, queue):
+        sig, handle = queue.put("blocked", priority=5)
+        log.append(("put", cimba.time(), sig, handle, queue.length))
+
+    def interrupter(me, target):
+        cimba.hold(1.0)
+        target.interrupt(77)
+
+    with cimba.Simulation(seed=1) as sim:
+        queue = cimba.PriorityQueue("Priority", capacity=1)
+        target = cimba.Process("Getter", getter, queue).start()
+        cimba.Process("InterruptGetter", interrupter, target).start()
+        sim.execute()
+
+    with cimba.Simulation(seed=1) as sim:
+        queue = cimba.PriorityQueue("Priority", capacity=1)
+        assert queue.put("existing", priority=0)[0] == cimba.SUCCESS
+        target = cimba.Process("Putter", putter, queue).start()
+        cimba.Process("InterruptPutter", interrupter, target).start()
+        sim.execute()
+
+    assert log == [("get", 77, None), ("put", 1.0, 77, 0, 1)]

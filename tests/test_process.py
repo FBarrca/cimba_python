@@ -26,3 +26,32 @@ def test_process_timer_interrupt_and_wait_process():
         ("resume", 2.0, 123),
         ("waited", 2.0, cimba.SUCCESS, "timer-done"),
     ]
+
+
+def test_process_resume_and_current_process():
+    log = []
+
+    def target(me, ctx):
+        assert cimba.current_process() is me
+        sig = cimba.yield_process()
+        log.append(("target", cimba.time(), sig))
+        return "resumed"
+
+    def resumer(me, target_process):
+        cimba.hold(1.0)
+        target_process.resume(77)
+
+    def waiter(me, target_process):
+        assert target_process.wait() == cimba.SUCCESS
+        log.append(("waiter", cimba.time(), target_process.exit_value()))
+
+    with cimba.Simulation(seed=1) as sim:
+        target_process = cimba.Process("Target", target).start()
+        cimba.Process("Resumer", resumer, target_process).start()
+        cimba.Process("Waiter", waiter, target_process).start()
+        sim.execute()
+
+    assert log == [
+        ("target", 1.0, 77),
+        ("waiter", 1.0, "resumed"),
+    ]

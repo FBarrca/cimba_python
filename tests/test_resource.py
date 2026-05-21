@@ -19,9 +19,12 @@ def test_resource_preemption_wakes_lower_priority_holder():
 
     with cimba.Simulation(seed=1) as sim:
         resource = cimba.Resource("Resource")
+        resource.start_recording()
         cimba.Process("Low", low_priority, resource, priority=0).start()
         cimba.Process("High", high_priority, resource, priority=5).start()
         sim.execute()
+        resource.stop_recording()
+        history = resource.history()
 
     assert log == [
         ("low-acquired", 0.0, 1),
@@ -29,3 +32,31 @@ def test_resource_preemption_wakes_lower_priority_holder():
         ("high-released", 1.0, 0),
         ("low-resumed", 1.0, cimba.PREEMPTED, 0),
     ]
+    assert history.count >= 2
+
+
+def test_resource_interrupted_waiting_acquire_does_not_take_resource():
+    log = []
+
+    def holder(me, resource):
+        assert resource.acquire() == cimba.SUCCESS
+        cimba.hold(2.0)
+        resource.release()
+
+    def waiter(me, resource):
+        cimba.hold(0.1)
+        sig = resource.acquire()
+        log.append(("waiter", cimba.time(), sig, resource.held_by(me), resource.in_use))
+
+    def interrupter(me, target):
+        cimba.hold(1.0)
+        target.interrupt(44)
+
+    with cimba.Simulation(seed=1) as sim:
+        resource = cimba.Resource("Resource")
+        cimba.Process("Holder", holder, resource).start()
+        target = cimba.Process("Waiter", waiter, resource).start()
+        cimba.Process("Interrupter", interrupter, target).start()
+        sim.execute()
+
+    assert log == [("waiter", 1.0, 44, 0, 1)]
