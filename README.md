@@ -9,6 +9,32 @@ parallel replications, stackful coroutines for concurrent processes per thread).
 > resources, conditions, random distributions, and summary/time-series helpers.
 > Parallel experiment orchestration is still a later layer.
 
+## Benchmark
+
+The `benchmarks/` folder contains Python-binding versions of Cimba's upstream
+M/M/1 queue benchmarks, so the same workload can be compared across SimPy,
+Cimba's C API, and these Python bindings. The benchmark uses 1,000,000 objects
+per trial; the multi-core case runs 100 independent trials.
+
+On an AMD Ryzen 7 9700X under WSL Ubuntu 24.04, averaged over 10 runs:
+
+| Benchmark | SimPy | Cimba Python | Cimba C |
+| --- | ---: | ---: | ---: |
+| Single core, single trial | 3.185 s | 0.375 s | 0.095 s |
+| Multicore, 100 trials | 41.820 s | 4.698 s | 1.178 s |
+
+Headline speedups:
+
+| Benchmark | Cimba Python vs SimPy | Cimba C vs SimPy | Cimba C vs Cimba Python |
+| --- | ---: | ---: | ---: |
+| Single core, single trial | 8.5x faster | 33.7x faster | 4.0x faster |
+| Multicore, 100 trials | 8.9x faster | 35.5x faster | 4.0x faster |
+
+In throughput terms, the Python bindings process about 10.7M events/sec in the
+single-trial benchmark and 85.1M events/sec in the 100-trial benchmark. The full
+spreadsheet with samples and charts is
+[`benchmarks/AMD_Ryzen_7_9700X_WSL.ods`](benchmarks/AMD_Ryzen_7_9700X_WSL.ods).
+
 ## How it's put together
 
 | Piece | Where | Why |
