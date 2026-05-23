@@ -1,0 +1,151 @@
+name: Publish package
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Check package version
+        id: version
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import re
+          import sys
+          import tomllib
+
+          root = pathlib.Path.cwd()
+          pyproject_version = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
+          meson_text = (root / "meson.build").read_text()
+          match = re.search(r"version:\s*'([^']+)'", meson_text)
+          if not match:
+              sys.exit("Could not find project version in meson.build")
+
+          meson_version = match.group(1)
+          if meson_version != pyproject_version:
+              sys.exit(
+                  f"Version mismatch: pyproject.toml has {pyproject_version}, "
+                  f"meson.build has {meson_version}"
+              )
+
+          if os.environ.get("GITHUB_REF_TYPE") == "tag":
+              tag = os.environ["GITHUB_REF_NAME"]
+              expected = f"v{pyproject_version}"
+              if tag != expected:
+                  sys.exit(f"Release tag {tag!r} must match project version {expected!r}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"version={pyproject_version}", file=output)
+          PY
+
+  sdist:
+    name: Build source distribution
+    runs-on: ubuntu-24.04
+    needs: validate
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y nasm
+
+      - name: Install Python build dependencies
+        run: uv sync --locked --only-group build --no-install-project
+
+      - name: Build source distribution
+        run: uv build --sdist
+
+      - name: Upload source distribution
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist-sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  wheels:
+    name: Build Linux x86_64 wheel
+    runs-on: ubuntu-24.04
+    needs: validate
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v3.4.1
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist-wheels-linux-x86-64
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    runs-on: ubuntu-24.04
+    needs: [validate, sdist, wheels]
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment:
+      name: pypi
+      url: https://pypi.org/project/cimba/
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v8
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist

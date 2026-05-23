@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y nasm
+
+      - name: Install Python dependencies
+        run: uv sync --locked
+
+      - name: Run tests
+        run: uv run pytest
+
+  build:
+    name: Build distributions
+    runs-on: ubuntu-24.04
+    needs: test
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y nasm
+
+      - name: Install Python build dependencies
+        run: uv sync --locked --only-group build --no-install-project
+
+      - name: Build source and wheel distributions
+        run: uv build
+
+      - name: Smoke-test built wheel
+        run: uv run --no-project --isolated --with dist/*.whl python -c "import cimba; print(cimba.native_version())"
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: local-distributions
+          path: dist/*
+          if-no-files-found: error
