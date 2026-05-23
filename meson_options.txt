@@ -1,0 +1,6 @@
+option(
+    'enable_docs',
+    type : 'boolean',
+    value : false,
+    description : 'Build the Python documentation',
+)

@@ -1,0 +1,52 @@
+sphinx = find_program('sphinx-build', required : false)
+
+if sphinx.found()
+    custom_target(
+        'python-docs',
+        input : [
+            'index.rst',
+            'cimba_intro/index.rst',
+            'cimba_intro/installation.rst',
+            'cimba_intro/basic_concepts.rst',
+            'cimba_intro/process_interaction.rst',
+            'cimba_intro/shared_resources.rst',
+            'cimba_intro/how_to_proceed.rst',
+            'topical_guides/index.rst',
+            'topical_guides/simulations.rst',
+            'topical_guides/processes.rst',
+            'topical_guides/queues_resources.rst',
+            'topical_guides/monitoring.rst',
+            'topical_guides/random.rst',
+            'topical_guides/native_cimba.rst',
+            'examples/index.rst',
+            'examples/clocks.rst',
+            'examples/mm1_queue.rst',
+            'examples/resource_server.rst',
+            'api_reference/index.rst',
+            'api_reference/core.rst',
+            'api_reference/processes.rst',
+            'api_reference/queues_resources.rst',
+            'api_reference/data.rst',
+            'api_reference/random.rst',
+            'api_reference/logging.rst',
+            'about/index.rst',
+            'about/cimba_python.rst',
+            'about/c_library.rst',
+            'about/license.rst',
+            'conf.py',
+            'static/custom.css',
+        ],
+        output : 'html',
+        command : [
+            sphinx,
+            '-b', 'html',
+            meson.current_source_dir(),
+            join_paths(meson.project_build_root(), 'docs', 'html'),
+        ],
+        build_by_default : true,
+        install : true,
+        install_dir : join_paths(get_option('datadir'), 'doc', meson.project_name()),
+    )
+else
+    warning('Sphinx not found. Skipping Python docs')
+endif

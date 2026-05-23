@@ -91,3 +91,7 @@ cimba_ext = py.extension_module(
 # `tool.meson-python.args.compile` in pyproject.toml -- so the examples (and the
 # HDF5 lookup) are never built.
 alias_target('cimba_ext', cimba_ext)
+
+if get_option('enable_docs')
+    subdir('docs')
+endif
