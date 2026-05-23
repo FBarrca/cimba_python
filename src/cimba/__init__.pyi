@@ -2,7 +2,11 @@
 
 from typing import Final
 
-from .cimba import native_version as native_version
+from .cimba import (
+    native_version as native_version,
+    run_native_experiment as run_native_experiment,
+    set_native_thread_hooks as set_native_thread_hooks,
+)
 from .cmb_buffer import Buffer as Buffer, UNLIMITED as UNLIMITED
 from .cmb_condition import Condition as Condition
 from .cmb_datasummary import DataSummary as DataSummary

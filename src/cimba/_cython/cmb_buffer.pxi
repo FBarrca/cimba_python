@@ -41,19 +41,25 @@ cdef class Buffer:
             _raise_if_closed(self)
             return <object>cmb_buffer_space(self._ptr)
 
-    def put(self, int amount=1):
+    def put(self, object amount=1):
         """Put ``amount`` into the buffer. Returns ``(signal, remaining)``."""
-        _raise_if_closed(self)
-        cdef uint64_t n = <uint64_t>amount
+        if self._closed:
+            raise RuntimeError("Buffer is closed")
+        cdef uint64_t n = 1 if amount is _ONE else _amount_to_u64(amount)
         cdef int64_t sig = cmb_buffer_put(self._ptr, &n)
-        return sig, <object>n
+        if sig == _PROCESS_CANCEL_SIGNAL:
+            raise _ProcessCancelled()
+        return <object>sig, <object>n
 
-    def get(self, int amount=1):
+    def get(self, object amount=1):
         """Get ``amount`` from the buffer. Returns ``(signal, obtained)``."""
-        _raise_if_closed(self)
-        cdef uint64_t n = <uint64_t>amount
+        if self._closed:
+            raise RuntimeError("Buffer is closed")
+        cdef uint64_t n = 1 if amount is _ONE else _amount_to_u64(amount)
         cdef int64_t sig = cmb_buffer_get(self._ptr, &n)
-        return sig, <object>n
+        if sig == _PROCESS_CANCEL_SIGNAL:
+            raise _ProcessCancelled()
+        return <object>sig, <object>n
 
     def start_recording(self) -> None:
         _raise_if_closed(self)
@@ -74,4 +80,3 @@ cdef class Buffer:
             cmb_buffer_destroy(self._ptr)
             self._ptr = NULL
         self._closed = True
-

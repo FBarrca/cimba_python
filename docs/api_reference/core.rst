@@ -5,6 +5,16 @@ Core
 
    Return the version string reported by the bundled Cimba C library.
 
+.. py:function:: cimba.run_native_experiment(experiment_buffer, trial_struct_size, trial_func_capsule)
+
+   Run native Cimba pthread replications over a writable C-contiguous trial
+   buffer using a ``cimba.trial_func`` capsule. Python callables are rejected.
+
+.. py:function:: cimba.set_native_thread_hooks(init_capsule=None, user_arg_capsule=None, exit_capsule=None)
+
+   Set native pthread init/user-context/exit hook capsules, or clear them by
+   calling with no arguments.
+
 .. py:function:: cimba.time()
 
    Return the current simulation clock time for the active event queue.
@@ -32,7 +42,8 @@ Core
 
    .. py:method:: stop_at(when, priority=0)
 
-      Schedule the run to stop at absolute simulation time ``when``.
+      Schedule cooperative cancellation of owned Python processes, then stop
+      the run at absolute simulation time ``when``.
 
    .. py:method:: clear()
 
@@ -48,4 +59,5 @@ Core
 
    .. py:method:: close()
 
-      Stop owned processes and release Cimba's thread-local state.
+      Cooperatively cancel owned running processes and release Cimba's
+      thread-local state.

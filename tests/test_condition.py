@@ -70,3 +70,32 @@ def test_condition_predicate_can_gate_on_state_and_resources():
         sim.execute()
 
     assert log == [("docked", 2.0, 2, 1)]
+
+
+def test_condition_waiter_stop_does_not_leave_stale_native_waiter():
+    state = {"ready": False}
+    log = []
+
+    def waiter(me, condition):
+        try:
+            condition.wait(lambda process, ctx: ctx["ready"], state)
+        finally:
+            log.append(("cancelled", cimba.time()))
+
+    def stopper(me, target):
+        cimba.hold(1.0)
+        assert target.stop() == cimba.SUCCESS
+
+    def signaler(me, condition):
+        cimba.hold(2.0)
+        state["ready"] = True
+        log.append(("signalled", cimba.time(), condition.signal()))
+
+    with cimba.Simulation(seed=1) as sim:
+        condition = cimba.Condition("Ready")
+        target = cimba.Process("Waiter", waiter, condition).start()
+        cimba.Process("Stopper", stopper, target).start()
+        cimba.Process("Signaler", signaler, condition).start()
+        sim.execute()
+
+    assert log == [("cancelled", 1.0), ("signalled", 2.0, 0)]

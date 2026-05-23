@@ -82,7 +82,7 @@ class Process:
         ...
 
     def stop(self) -> _ProcessSignal:
-        """Stop a running process and return the Cimba process signal."""
+        """Request cooperative cancellation of a running Python-backed process."""
         ...
 
     def interrupt(self, signal: _ProcessSignal = INTERRUPTED, priority: _Priority = 0) -> None:

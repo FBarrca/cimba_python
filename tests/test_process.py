@@ -55,3 +55,82 @@ def test_process_resume_and_current_process():
         ("target", 1.0, 77),
         ("waiter", 1.0, "resumed"),
     ]
+
+
+def test_stop_at_cooperatively_unwinds_finally_blocks():
+    log = []
+
+    def infinite(me, ctx):
+        try:
+            while True:
+                cimba.hold(1.0)
+        finally:
+            log.append(("finally", cimba.time()))
+
+    with cimba.Simulation(seed=1) as sim:
+        cimba.Process("Infinite", infinite).start()
+        sim.stop_at(3.0)
+        sim.execute()
+
+    assert log == [("finally", 3.0)]
+
+
+def test_process_exit_unwinds_finally_and_preserves_exit_value():
+    log = []
+
+    def worker(me, ctx):
+        try:
+            cimba.process_exit("done")
+        finally:
+            log.append(("finally", cimba.time()))
+
+    with cimba.Simulation(seed=1) as sim:
+        proc = cimba.Process("Worker", worker).start()
+        sim.execute()
+        assert proc.exit_value() == "done"
+
+    assert log == [("finally", 0.0)]
+
+
+def test_simulation_close_cooperatively_cancels_running_processes():
+    log = []
+
+    def infinite(me, ctx):
+        try:
+            while True:
+                cimba.hold(1.0)
+        finally:
+            log.append(("finally", cimba.time()))
+
+    with cimba.Simulation(seed=1) as sim:
+        cimba.Process("Infinite", infinite).start()
+        assert sim.execute_next() is True
+
+    assert log == [("finally", 0.0)]
+
+
+def test_stopping_process_waiting_on_process_unwinds_cleanly():
+    log = []
+
+    def child(me, ctx):
+        while True:
+            cimba.hold(1.0)
+
+    def waiter(me, target):
+        try:
+            target.wait()
+        finally:
+            log.append(("waiter-cancelled", cimba.time()))
+
+    def stopper(me, target):
+        cimba.hold(1.0)
+        assert target.stop() == cimba.SUCCESS
+
+    with cimba.Simulation(seed=1) as sim:
+        child_proc = cimba.Process("Child", child).start()
+        waiter_proc = cimba.Process("Waiter", waiter, child_proc).start()
+        cimba.Process("Stopper", stopper, waiter_proc).start()
+        sim.stop_at(2.0)
+        sim.execute()
+
+    assert log == [("waiter-cancelled", 1.0)]

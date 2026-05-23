@@ -26,6 +26,30 @@ class TimeSeries:
         """Compute a duration-weighted summary of the time series."""
         ...
 
+    def reset(self) -> None:
+        """Reset the time series to an empty initialized state."""
+        ...
+
+    def copy(self) -> TimeSeries:
+        """Return an owned copy of the time series."""
+        ...
+
+    def sort_by_value(self) -> None:
+        """Sort rows by sample value."""
+        ...
+
+    def sort_by_time(self) -> None:
+        """Sort rows by timestamp."""
+        ...
+
+    def acf(self, lags: int) -> list[float]:
+        """Return autocorrelation coefficients from lag 0 through lags."""
+        ...
+
+    def pacf(self, lags: int) -> list[float]:
+        """Return partial autocorrelation coefficients from lag 0 through lags."""
+        ...
+
     @property
     def count(self) -> _Count:
         """Number of time-stamped rows."""

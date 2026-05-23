@@ -35,6 +35,17 @@ cdef class WeightedSummary:
         _raise_if_closed(self)
         return <object>cmb_wtdsummary_add(self._ptr, value, weight)
 
+    def reset(self) -> None:
+        _raise_if_closed(self)
+        cmb_wtdsummary_reset(self._ptr)
+
+    def merge(self, WeightedSummary other):
+        _raise_if_closed(self)
+        _raise_if_closed(other)
+        cdef WeightedSummary merged = WeightedSummary()
+        cmb_wtdsummary_merge(merged._ptr, self._ptr, other._ptr)
+        return merged
+
     property count:
         def __get__(self):
             _raise_if_closed(self)
@@ -87,4 +98,3 @@ cdef class WeightedSummary:
             cmb_wtdsummary_destroy(self._ptr)
         self._ptr = NULL
         self._closed = True
-

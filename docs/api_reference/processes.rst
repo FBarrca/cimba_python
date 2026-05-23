@@ -11,7 +11,8 @@ Processes
 
 .. py:function:: cimba.process_exit(value=None)
 
-   Exit the current process immediately with an optional Python exit value.
+   Exit the current process with an optional Python exit value while unwinding
+   Python ``finally`` blocks normally.
 
 .. py:function:: cimba.current_process()
 
@@ -42,7 +43,7 @@ Processes
 
    .. py:method:: stop()
 
-      Stop a running process and return the Cimba process signal.
+      Request cooperative cancellation of a running Python-backed process.
 
    .. py:method:: interrupt(signal=INTERRUPTED, priority=0)
 

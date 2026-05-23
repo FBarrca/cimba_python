@@ -1,8 +1,14 @@
 # This file is included by ../_cimba.pyx.
 
-cdef void _clear_event(void *subject, void *object) noexcept with gil:
-    _stop_active_processes(None)
-    cmb_event_queue_clear()
+cdef void _stop_at_event(void *subject, void *object) noexcept with gil:
+    _cancel_active_processes(None)
+    cmb_event_schedule(
+        _clear_after_cancellation_event,
+        NULL,
+        NULL,
+        cmb_time(),
+        _CLEAR_AFTER_CANCEL_PRIORITY,
+    )
 
 
 def time() -> float:
@@ -20,9 +26,16 @@ cdef class Simulation:
     cdef public object _owned
     cdef public object _exception
 
-    def __init__(self, double start_time=0.0, object seed=None, bint log_info=False):
-        global _active_simulation
-        if _active_simulation is not None:
+    def __cinit__(self):
+        self._closed = True
+        self._event_initialized = False
+        self._random_initialized = False
+        self.seed_used = None
+        self._owned = []
+        self._exception = None
+
+    def __init__(self, object start_time=0.0, object seed=None, bint log_info=False):
+        if _active_simulation_get() is not None:
             raise RuntimeError("only one active Simulation is supported per Python thread")
 
         self._closed = False
@@ -31,19 +44,19 @@ cdef class Simulation:
         self._owned = []
         self._exception = None
 
-        cdef uint64_t seed_value = cmb_random_hwseed() if seed is None else <uint64_t>seed
+        cdef uint64_t seed_value = cmb_random_hwseed() if seed is None else _seed_to_u64(seed)
         cmb_random_initialize(seed_value)
         self._random_initialized = True
         self.seed_used = <object>seed_value
 
-        cmb_event_queue_initialize(start_time)
+        cmb_event_queue_initialize(_duration_to_double(start_time, "start_time"))
         self._event_initialized = True
         if log_info:
             cmb_logger_flags_on(LOGGER_INFO)
         else:
             cmb_logger_flags_off(LOGGER_INFO)
 
-        _active_simulation = self
+        _active_simulation_set(self)
 
     def __enter__(self):
         return self
@@ -68,17 +81,33 @@ cdef class Simulation:
         def __get__(self):
             return <object>cmb_event_queue_count()
 
-    def stop_at(self, double when, int priority=0) -> int:
+    def stop_at(self, object when, object priority=0) -> int:
         """Schedule the event queue to clear at absolute simulation time ``when``."""
         _raise_if_closed(self)
-        if when < cmb_time():
+        cdef double stop_time = _duration_to_double(when, "when")
+        if stop_time < cmb_time():
             raise ValueError("stop time cannot be before the current simulation time")
-        return <object>cmb_event_schedule(_clear_event, NULL, NULL, when, priority)
+        return <object>cmb_event_schedule(
+            _stop_at_event,
+            NULL,
+            NULL,
+            stop_time,
+            _priority_to_i64(priority),
+        )
 
     def clear(self) -> None:
         """Clear all scheduled events, stopping the simulation run."""
         _raise_if_closed(self)
-        cmb_event_queue_clear()
+        if _count_cancellation_events(list(self._owned)) > 0:
+            cmb_event_schedule(
+                _clear_after_cancellation_event,
+                NULL,
+                NULL,
+                cmb_time(),
+                _CLEAR_AFTER_CANCEL_PRIORITY,
+            )
+        else:
+            cmb_event_queue_clear()
 
     def execute_next(self) -> bool:
         """Execute one scheduled event."""
@@ -87,6 +116,7 @@ cdef class Simulation:
         if self._exception is not None:
             exc = self._exception
             self._exception = None
+            _drain_cancellation_events(list(self._owned))
             raise exc
         return True if ok else False
 
@@ -101,12 +131,22 @@ cdef class Simulation:
 
     def close(self) -> None:
         """Stop owned processes and release the thread-local Cimba state."""
-        global _active_simulation
+        cdef object obj
+        cdef object owned
+        cdef Process proc
         if self._closed:
             return
 
-        cdef object obj
-        for obj in reversed(list(self._owned)):
+        owned = list(self._owned)
+        if self._event_initialized:
+            for obj in owned:
+                if isinstance(obj, Process):
+                    proc = <Process>obj
+                    if proc._ptr != NULL and cmb_process_status(proc._ptr) == PROCESS_RUNNING:
+                        proc._request_cancel()
+            _drain_cancellation_events(owned)
+
+        for obj in reversed(owned):
             close = getattr(obj, "close", None)
             if close is not None:
                 close()
@@ -119,7 +159,6 @@ cdef class Simulation:
             cmb_random_terminate()
             self._random_initialized = False
 
-        if _active_simulation is self:
-            _active_simulation = None
+        if _active_simulation_get() is self:
+            _active_simulation_set(None)
         self._closed = True
-

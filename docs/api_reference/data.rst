@@ -6,6 +6,8 @@ Data Collection
    Single-pass unweighted summary of sample moments.
 
    .. py:method:: add(value)
+   .. py:method:: reset()
+   .. py:method:: merge(other)
    .. py:attribute:: count
    .. py:attribute:: min
    .. py:attribute:: max
@@ -21,6 +23,8 @@ Data Collection
    Single-pass weighted summary of sample moments.
 
    .. py:method:: add(value, weight=1.0)
+   .. py:method:: reset()
+   .. py:method:: merge(other)
    .. py:attribute:: count
    .. py:attribute:: weight_sum
    .. py:attribute:: min
@@ -39,6 +43,12 @@ Data Collection
    .. py:method:: add(value)
    .. py:method:: values()
    .. py:method:: summary()
+   .. py:method:: reset()
+   .. py:method:: copy()
+   .. py:method:: merge(other)
+   .. py:method:: sort()
+   .. py:method:: acf(lags)
+   .. py:method:: pacf(lags)
    .. py:attribute:: count
    .. py:attribute:: min
    .. py:attribute:: max
@@ -53,6 +63,12 @@ Data Collection
    .. py:method:: finalize(time)
    .. py:method:: values()
    .. py:method:: summary()
+   .. py:method:: reset()
+   .. py:method:: copy()
+   .. py:method:: sort_by_value()
+   .. py:method:: sort_by_time()
+   .. py:method:: acf(lags)
+   .. py:method:: pacf(lags)
    .. py:attribute:: count
    .. py:attribute:: min
    .. py:attribute:: max

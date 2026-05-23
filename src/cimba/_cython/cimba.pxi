@@ -1,8 +1,30 @@
 # This file is included by ../_cimba.pyx.
 
+import operator
+import threading
+import builtins
+
+cimport cython
+from cpython.mem cimport PyMem_Free, PyMem_Malloc
+from cpython.pycapsule cimport (
+    PyCapsule_CheckExact,
+    PyCapsule_GetPointer,
+    PyCapsule_IsValid,
+    PyCapsule_New,
+)
 from cpython.ref cimport PyObject, Py_INCREF, Py_DECREF
+from libc.math cimport isfinite
 from libc.stddef cimport size_t
-from libc.stdint cimport int64_t, uint16_t, uint32_t, uint64_t, uintptr_t
+from libc.stdint cimport (
+    INT64_MAX,
+    INT64_MIN,
+    UINT64_MAX,
+    int64_t,
+    uint16_t,
+    uint32_t,
+    uint64_t,
+    uintptr_t,
+)
 
 
 cdef extern from "stdbool.h":
@@ -62,6 +84,9 @@ cdef extern from "cimba.h":
 
     ctypedef void *(*cmb_process_func)(cmb_process *cp, void *context)
     ctypedef void (*cmb_event_func)(void *subject, void *object)
+    ctypedef void cimba_trial_func(void *trial_struct) noexcept nogil
+    ctypedef void *cimba_thread_init_func(void *usrarg, uint64_t tid) noexcept nogil
+    ctypedef void cimba_thread_exit_func(void *thrctx) noexcept nogil
     ctypedef bool (*cmb_condition_demand_func)(
         const cmb_condition *cnd,
         const cmb_process *prc,
@@ -69,6 +94,18 @@ cdef extern from "cimba.h":
     )
 
     const char *cimba_version()
+    void cimba_run_experiment(
+        void *your_experiment_array,
+        uint64_t num_trials,
+        size_t trial_struct_size,
+        cimba_trial_func *your_trial_func,
+    ) noexcept nogil
+    void cimba_set_thread_hooks(
+        cimba_thread_init_func *initfunc,
+        void *usrarg,
+        cimba_thread_exit_func *exitfunc,
+    ) noexcept nogil
+    void *cimba_thread_context() noexcept nogil
 
     void cmb_logger_flags_on(uint32_t flags)
     void cmb_logger_flags_off(uint32_t flags)
@@ -116,6 +153,11 @@ cdef extern from "cimba.h":
     bool cmb_event_reprioritize(uint64_t handle, int64_t priority)
     cmb_event_func CMB_ANY_ACTION
     void *CMB_ANY_OBJECT
+    uint64_t cmb_event_pattern_count(
+        cmb_event_func action,
+        const void *subject,
+        const void *object,
+    )
     uint64_t cmb_event_pattern_cancel(
         cmb_event_func action,
         const void *subject,
@@ -241,15 +283,22 @@ cdef extern from "cimba.h":
     uint64_t cmb_condition_signal(cmb_condition *cvp)
 
     cmb_dataset *cmb_dataset_create()
+    void cmb_dataset_reset(cmb_dataset *dsp)
+    uint64_t cmb_dataset_copy(cmb_dataset *tgt, const cmb_dataset *src)
     void cmb_dataset_destroy(cmb_dataset *dsp)
+    void cmb_dataset_sort(const cmb_dataset *dsp)
     uint64_t cmb_dataset_add(cmb_dataset *dsp, double x)
     uint64_t cmb_dataset_summarize(const cmb_dataset *dsp, cmb_datasummary *dsump)
     uint64_t cmb_dataset_count(const cmb_dataset *dsp)
     double cmb_dataset_min(const cmb_dataset *dsp)
     double cmb_dataset_max(const cmb_dataset *dsp)
     double cmb_dataset_median(const cmb_dataset *dsp)
+    void cmb_dataset_ACF(const cmb_dataset *dsp, unsigned n, double *acf)
+    void cmb_dataset_PACF(const cmb_dataset *dsp, unsigned n, double *pacf, double *acf)
 
     cmb_datasummary *cmb_datasummary_create()
+    void cmb_datasummary_reset(cmb_datasummary *dsp)
+    uint64_t cmb_datasummary_merge(cmb_datasummary *tgt, const cmb_datasummary *dsp1, const cmb_datasummary *dsp2)
     void cmb_datasummary_destroy(cmb_datasummary *dsp)
     uint64_t cmb_datasummary_add(cmb_datasummary *dsp, double y)
     uint64_t cmb_datasummary_count(const cmb_datasummary *dsp)
@@ -262,6 +311,8 @@ cdef extern from "cimba.h":
     double cmb_datasummary_kurtosis(const cmb_datasummary *dsp)
 
     cmb_wtdsummary *cmb_wtdsummary_create()
+    void cmb_wtdsummary_reset(cmb_wtdsummary *wsp)
+    uint64_t cmb_wtdsummary_merge(cmb_wtdsummary *tgt, const cmb_wtdsummary *ws1, const cmb_wtdsummary *ws2)
     void cmb_wtdsummary_destroy(cmb_wtdsummary *wsp)
     uint64_t cmb_wtdsummary_add(cmb_wtdsummary *wsp, double x, double w)
     uint64_t cmb_wtdsummary_count(const cmb_wtdsummary *wsp)
@@ -274,18 +325,27 @@ cdef extern from "cimba.h":
     double cmb_wtdsummary_kurtosis(const cmb_wtdsummary *wsp)
 
     cmb_timeseries *cmb_timeseries_create()
+    void cmb_timeseries_reset(cmb_timeseries *tsp)
     void cmb_timeseries_destroy(cmb_timeseries *tsp)
     uint64_t cmb_timeseries_copy(cmb_timeseries *tgt, const cmb_timeseries *src)
     uint64_t cmb_timeseries_add(cmb_timeseries *tsp, double x, double t)
     uint64_t cmb_timeseries_finalize(cmb_timeseries *tsp, double t)
+    void cmb_timeseries_sort_x(cmb_timeseries *tsp)
+    void cmb_timeseries_sort_t(cmb_timeseries *tsp)
     uint64_t cmb_timeseries_summarize(const cmb_timeseries *tsp, cmb_wtdsummary *wsp)
     uint64_t cmb_timeseries_count(const cmb_timeseries *tsp)
     double cmb_timeseries_min(const cmb_timeseries *tsp)
     double cmb_timeseries_max(const cmb_timeseries *tsp)
     double cmb_timeseries_median(const cmb_timeseries *tsp)
+    void cmb_timeseries_ACF(const cmb_timeseries *tsp, uint16_t n, double *acf)
+    void cmb_timeseries_PACF(const cmb_timeseries *tsp, uint16_t n, double *pacf, double *acf)
 
 
-UNLIMITED = (1 << 64) - 1
+cdef object _UINT64_MAX_OBJ = (1 << 64) - 1
+cdef object _INT64_MIN_OBJ = -(1 << 63)
+cdef object _INT64_MAX_OBJ = (1 << 63) - 1
+
+UNLIMITED = _UINT64_MAX_OBJ
 
 SUCCESS = 0
 PREEMPTED = -1
@@ -304,9 +364,46 @@ LOGGER_WARNING = 0x20000000
 LOGGER_INFO = 0x10000000
 
 cdef uint64_t _UNLIMITED_U64 = <uint64_t>-1
-cdef object _active_simulation = None
-cdef dict _process_registry = {}
+cdef int64_t _PROCESS_CANCEL_SIGNAL = INT64_MIN
+cdef int64_t _PROCESS_CANCEL_PRIORITY = INT64_MAX
+cdef int64_t _CLEAR_AFTER_CANCEL_PRIORITY = INT64_MIN
+cdef object _thread_state = threading.local()
 cdef object _MISSING = object()
+cdef object _ZERO = 0
+cdef object _ONE = 1
+cdef bytes _TRIAL_FUNC_CAPSULE_NAME = b"cimba.trial_func"
+cdef bytes _THREAD_INIT_CAPSULE_NAME = b"cimba.thread_init_func"
+cdef bytes _THREAD_EXIT_CAPSULE_NAME = b"cimba.thread_exit_func"
+cdef bytes _USER_CONTEXT_CAPSULE_NAME = b"cimba.user_context"
+
+
+class _ProcessCancelled(BaseException):
+    pass
+
+
+class _ProcessExit(BaseException):
+    def __init__(self, object value=None):
+        self.value = value
+
+
+cdef object _active_simulation_get():
+    return getattr(_thread_state, "active_simulation", None)
+
+
+cdef void _active_simulation_set(object sim):
+    if sim is None:
+        if hasattr(_thread_state, "active_simulation"):
+            delattr(_thread_state, "active_simulation")
+    else:
+        _thread_state.active_simulation = sim
+
+
+cdef dict _process_registry_get():
+    cdef object registry = getattr(_thread_state, "process_registry", None)
+    if registry is None:
+        registry = {}
+        _thread_state.process_registry = registry
+    return <dict>registry
 
 
 cdef void _raise_if_closed(object obj):
@@ -314,11 +411,81 @@ cdef void _raise_if_closed(object obj):
         raise RuntimeError(f"{obj.__class__.__name__} is closed")
 
 
+cdef object _index_value(object value, str name):
+    if isinstance(value, builtins.bool):
+        raise TypeError(f"{name} must be an integer")
+    try:
+        return operator.index(value)
+    except TypeError:
+        raise TypeError(f"{name} must be an integer") from None
+
+
+cdef uint64_t _u64_value(object value, str name, uint64_t min_value) except *:
+    cdef object ivalue = _index_value(value, name)
+    if ivalue < <object>min_value:
+        raise ValueError(f"{name} must be at least {min_value}")
+    if ivalue > _UINT64_MAX_OBJ:
+        raise OverflowError(f"{name} must fit in uint64")
+    return <uint64_t>ivalue
+
+
+cdef int64_t _i64_value(object value, str name) except *:
+    cdef object ivalue = _index_value(value, name)
+    if ivalue < _INT64_MIN_OBJ or ivalue > _INT64_MAX_OBJ:
+        raise OverflowError(f"{name} must fit in int64")
+    return <int64_t>ivalue
+
+
 cdef uint64_t _capacity_to_u64(object capacity):
     cdef object value = UNLIMITED if capacity is None else capacity
-    if value < 1 or value > UNLIMITED:
-        raise ValueError("capacity must be in the range [1, UNLIMITED]")
-    return <uint64_t>value
+    return _u64_value(value, "capacity", 1)
+
+
+cdef uint64_t _amount_to_u64(object amount):
+    return _u64_value(amount, "amount", 1)
+
+
+cdef uint64_t _handle_to_u64(object handle, str name="handle"):
+    return _u64_value(handle, name, 1)
+
+
+cdef uint64_t _seed_to_u64(object seed):
+    return _u64_value(seed, "seed", 0)
+
+
+cdef int64_t _priority_to_i64(object priority):
+    return _i64_value(priority, "priority")
+
+
+cdef int64_t _signal_to_i64(object signal, bint allow_cancel=False):
+    cdef int64_t sig = _i64_value(signal, "signal")
+    if sig == _PROCESS_CANCEL_SIGNAL and not allow_cancel:
+        raise ValueError("signal value is reserved for internal process cancellation")
+    return sig
+
+
+cdef double _duration_to_double(object duration, str name, bint allow_zero=True) except *:
+    cdef double value
+    try:
+        value = float(duration)
+    except (TypeError, ValueError):
+        raise TypeError(f"{name} must be a real number") from None
+    if not isfinite(value):
+        raise ValueError(f"{name} must be finite")
+    if value < 0.0 or (not allow_zero and value == 0.0):
+        if allow_zero:
+            raise ValueError(f"{name} must be non-negative")
+        raise ValueError(f"{name} must be positive")
+    return value
+
+
+cdef uint16_t _lags_to_u16(object lags) except *:
+    cdef object ivalue = _index_value(lags, "lags")
+    if ivalue < 0:
+        raise ValueError("lags must be non-negative")
+    if ivalue > 65535:
+        raise OverflowError("lags must fit in uint16")
+    return <uint16_t>ivalue
 
 
 cdef bytes _name_bytes(str name):
@@ -331,16 +498,18 @@ cdef bytes _name_bytes(str name):
 
 
 cdef void _register_with_active_simulation(object obj):
-    if _active_simulation is not None:
-        _active_simulation._owned.append(obj)
+    cdef object sim = _active_simulation_get()
+    if sim is not None:
+        sim._owned.append(obj)
 
 
-cdef void _stop_active_processes(object skip):
+cdef void _cancel_active_processes(object skip):
     cdef object obj
     cdef object stop
-    if _active_simulation is None:
+    cdef object sim = _active_simulation_get()
+    if sim is None:
         return
-    for obj in list(_active_simulation._owned):
+    for obj in list(sim._owned):
         if obj is skip:
             continue
         stop = getattr(obj, "stop", None)
@@ -348,15 +517,26 @@ cdef void _stop_active_processes(object skip):
             stop()
 
 
+cdef void _clear_after_cancellation_event(void *subject, void *object) noexcept with gil:
+    cmb_event_queue_clear()
+
+
 cdef void _record_exception(BaseException exc):
     cdef cmb_process *pp = cmb_process_current()
     cdef object skip = None
+    cdef object sim = _active_simulation_get()
     if pp != NULL:
-        skip = _process_registry.get(<uintptr_t>pp)
-    if _active_simulation is not None:
-        _active_simulation._exception = exc
-    _stop_active_processes(skip)
-    cmb_event_queue_clear()
+        skip = _process_registry_get().get(<uintptr_t>pp)
+    if sim is not None:
+        sim._exception = exc
+    _cancel_active_processes(skip)
+    cmb_event_schedule(
+        _clear_after_cancellation_event,
+        NULL,
+        NULL,
+        cmb_time(),
+        _CLEAR_AFTER_CANCEL_PRIORITY,
+    )
 
 
 cdef object _object_from_owned_pointer(void *ptr):
@@ -373,3 +553,108 @@ def native_version() -> str:
     """Return the version of the underlying Cimba C library."""
     cdef const char *v = cimba_version()
     return v.decode("utf-8")
+
+
+cdef void *_capsule_pointer(object capsule, const char *name, str arg_name) except *:
+    cdef str expected = (<bytes>name).decode("ascii")
+    if callable(capsule):
+        raise TypeError(f"{arg_name} must be a native PyCapsule, not a Python callable")
+    if not PyCapsule_CheckExact(capsule):
+        raise TypeError(f"{arg_name} must be a PyCapsule named {expected}")
+    if not PyCapsule_IsValid(capsule, name):
+        raise TypeError(f"{arg_name} must be a PyCapsule named {expected}")
+    return PyCapsule_GetPointer(capsule, name)
+
+
+def run_native_experiment(object experiment_buffer, object trial_struct_size, object trial_func_capsule) -> None:
+    """Run a native Cimba experiment using a writable C-contiguous trial buffer."""
+    cdef uint64_t struct_size = _u64_value(trial_struct_size, "trial_struct_size", 1)
+    cdef cimba_trial_func *trial_func = <cimba_trial_func *>_capsule_pointer(
+        trial_func_capsule,
+        _TRIAL_FUNC_CAPSULE_NAME,
+        "trial_func_capsule",
+    )
+    cdef object mv
+    cdef object byte_mv
+    cdef unsigned char[::1] view
+    cdef uint64_t nbytes
+    cdef uint64_t num_trials
+
+    try:
+        mv = memoryview(experiment_buffer)
+    except TypeError:
+        raise TypeError("experiment_buffer must support the buffer protocol") from None
+    if mv.readonly:
+        raise TypeError("experiment_buffer must be writable")
+    if not mv.c_contiguous:
+        raise TypeError("experiment_buffer must be C-contiguous")
+    nbytes = <uint64_t>mv.nbytes
+    if nbytes == 0:
+        raise ValueError("experiment_buffer must not be empty")
+    if nbytes % struct_size != 0:
+        raise ValueError("experiment_buffer byte length must be an exact multiple of trial_struct_size")
+    num_trials = nbytes // struct_size
+    byte_mv = mv.cast("B")
+    view = byte_mv
+    with cython.boundscheck(False):
+        with nogil:
+            cimba_run_experiment(<void *>&view[0], num_trials, <size_t>struct_size, trial_func)
+
+
+def set_native_thread_hooks(object init_capsule=None, object user_arg_capsule=None, object exit_capsule=None) -> None:
+    """Set native Cimba pthread hooks from fixed-name PyCapsules."""
+    cdef cimba_thread_init_func *initfunc = NULL
+    cdef cimba_thread_exit_func *exitfunc = NULL
+    cdef void *usrarg = NULL
+    if init_capsule is not None:
+        initfunc = <cimba_thread_init_func *>_capsule_pointer(
+            init_capsule,
+            _THREAD_INIT_CAPSULE_NAME,
+            "init_capsule",
+        )
+    if user_arg_capsule is not None:
+        usrarg = _capsule_pointer(
+            user_arg_capsule,
+            _USER_CONTEXT_CAPSULE_NAME,
+            "user_arg_capsule",
+        )
+    if exit_capsule is not None:
+        exitfunc = <cimba_thread_exit_func *>_capsule_pointer(
+            exit_capsule,
+            _THREAD_EXIT_CAPSULE_NAME,
+            "exit_capsule",
+        )
+    with nogil:
+        cimba_set_thread_hooks(initfunc, usrarg, exitfunc)
+
+
+cdef void _test_trial_increment_u64(void *trial_struct) noexcept nogil:
+    cdef uint64_t *fields = <uint64_t *>trial_struct
+    fields[0] += 1
+
+
+cdef void *_test_thread_init(void *usrarg, uint64_t tid) noexcept nogil:
+    return usrarg
+
+
+cdef void _test_thread_exit(void *thrctx) noexcept nogil:
+    return
+
+
+cdef uint64_t _test_user_context = 0
+
+
+def _test_trial_func_capsule():
+    return PyCapsule_New(<void *>_test_trial_increment_u64, _TRIAL_FUNC_CAPSULE_NAME, NULL)
+
+
+def _test_thread_init_capsule():
+    return PyCapsule_New(<void *>_test_thread_init, _THREAD_INIT_CAPSULE_NAME, NULL)
+
+
+def _test_thread_exit_capsule():
+    return PyCapsule_New(<void *>_test_thread_exit, _THREAD_EXIT_CAPSULE_NAME, NULL)
+
+
+def _test_user_context_capsule():
+    return PyCapsule_New(<void *>&_test_user_context, _USER_CONTEXT_CAPSULE_NAME, NULL)

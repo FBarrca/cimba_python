@@ -8,7 +8,7 @@ cdef bool _condition_demand_trampoline(
     cdef object demand_ctx = <object><PyObject *>ctx
     cdef object predicate = demand_ctx[0]
     cdef object user_ctx = demand_ctx[1]
-    cdef Process proc = _process_registry.get(<uintptr_t>prc)
+    cdef Process proc = _process_registry_get().get(<uintptr_t>prc)
 
     try:
         return True if predicate(proc, user_ctx) else False
@@ -40,15 +40,19 @@ cdef class Condition:
 
     def wait(self, object predicate, object context=None) -> int:
         """Wait until ``predicate(process, context)`` returns true."""
-        _raise_if_closed(self)
+        if self._closed:
+            raise RuntimeError("Condition is closed")
         if not callable(predicate):
             raise TypeError("predicate must be callable")
         cdef object demand_ctx = (predicate, context)
-        return cmb_condition_wait(
+        cdef int64_t sig = cmb_condition_wait(
             self._ptr,
             _condition_demand_trampoline,
             <const void *><PyObject *>demand_ctx,
         )
+        if sig == _PROCESS_CANCEL_SIGNAL:
+            raise _ProcessCancelled()
+        return <object>sig
 
     def signal(self) -> int:
         _raise_if_closed(self)
@@ -61,4 +65,3 @@ cdef class Condition:
             cmb_condition_destroy(self._ptr)
             self._ptr = NULL
         self._closed = True
-

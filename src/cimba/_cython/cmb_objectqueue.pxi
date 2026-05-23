@@ -42,20 +42,26 @@ cdef class ObjectQueue:
             return <object>cmb_objectqueue_space(self._ptr)
 
     def put(self, object obj) -> int:
-        _raise_if_closed(self)
+        if self._closed:
+            raise RuntimeError("ObjectQueue is closed")
         cdef PyObject *op = <PyObject *>obj
         Py_INCREF(<object>op)
         cdef int64_t sig = cmb_objectqueue_put(self._ptr, <void *>op)
         if sig != SUCCESS:
             Py_DECREF(<object>op)
-        return sig
+            if sig == _PROCESS_CANCEL_SIGNAL:
+                raise _ProcessCancelled()
+        return <object>sig
 
     def get(self):
         """Get one object. Returns ``(signal, object)``."""
-        _raise_if_closed(self)
+        if self._closed:
+            raise RuntimeError("ObjectQueue is closed")
         cdef void *ptr = NULL
         cdef int64_t sig = cmb_objectqueue_get(self._ptr, &ptr)
         if sig != SUCCESS:
+            if sig == _PROCESS_CANCEL_SIGNAL:
+                raise _ProcessCancelled()
             return sig, None
         return sig, _object_from_owned_pointer(ptr)
 
@@ -90,4 +96,3 @@ cdef class ObjectQueue:
             cmb_objectqueue_destroy(self._ptr)
             self._ptr = NULL
         self._closed = True
-

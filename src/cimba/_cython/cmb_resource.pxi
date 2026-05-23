@@ -37,12 +37,20 @@ cdef class Resource:
             return <object>cmb_resource_available(self._ptr)
 
     def acquire(self) -> int:
-        _raise_if_closed(self)
-        return cmb_resource_acquire(self._ptr)
+        if self._closed:
+            raise RuntimeError("Resource is closed")
+        cdef int64_t sig = cmb_resource_acquire(self._ptr)
+        if sig == _PROCESS_CANCEL_SIGNAL:
+            raise _ProcessCancelled()
+        return <object>sig
 
     def preempt(self) -> int:
-        _raise_if_closed(self)
-        return cmb_resource_preempt(self._ptr)
+        if self._closed:
+            raise RuntimeError("Resource is closed")
+        cdef int64_t sig = cmb_resource_preempt(self._ptr)
+        if sig == _PROCESS_CANCEL_SIGNAL:
+            raise _ProcessCancelled()
+        return <object>sig
 
     def release(self) -> None:
         _raise_if_closed(self)
@@ -72,4 +80,3 @@ cdef class Resource:
             cmb_resource_destroy(self._ptr)
             self._ptr = NULL
         self._closed = True
-

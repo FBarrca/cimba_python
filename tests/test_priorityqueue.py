@@ -76,3 +76,21 @@ def test_priorityqueue_interrupted_get_and_put():
         sim.execute()
 
     assert log == [("get", 77, None), ("put", 1.0, 77, 0, 1)]
+
+
+def test_priorityqueue_duplicate_object_handles_are_exact():
+    with cimba.Simulation(seed=1):
+        queue = cimba.PriorityQueue("Priority")
+        obj = object()
+        assert queue.put(obj, priority=1)[0] == cimba.SUCCESS
+        sig, middle = queue.put(obj, priority=3)
+        assert sig == cimba.SUCCESS
+        sig, last = queue.put(obj, priority=2)
+        assert sig == cimba.SUCCESS
+
+        assert queue.cancel(middle) is True
+        assert queue.position(middle) == 0
+        assert queue.position(last) == 1
+        assert queue.get() == (cimba.SUCCESS, obj)
+        assert queue.get() == (cimba.SUCCESS, obj)
+        assert queue.length == 0

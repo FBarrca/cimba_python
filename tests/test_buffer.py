@@ -77,3 +77,31 @@ def test_buffer_interrupted_put_returns_remaining_amount():
         sim.execute()
 
     assert log == [("put", 2.0, 88, 2, 5)]
+
+
+def test_buffer_waiter_stop_does_not_leave_stale_native_waiter():
+    log = []
+
+    def getter(me, queue):
+        try:
+            queue.get()
+        finally:
+            log.append(("cancelled", cimba.time()))
+
+    def stopper(me, target):
+        cimba.hold(1.0)
+        assert target.stop() == cimba.SUCCESS
+
+    def putter(me, queue):
+        cimba.hold(2.0)
+        assert queue.put(1) == (cimba.SUCCESS, 0)
+        log.append(("put", cimba.time(), queue.level))
+
+    with cimba.Simulation(seed=1) as sim:
+        queue = cimba.Buffer("Buf", capacity=1)
+        target = cimba.Process("Getter", getter, queue).start()
+        cimba.Process("Stopper", stopper, target).start()
+        cimba.Process("Putter", putter, queue).start()
+        sim.execute()
+
+    assert log == [("cancelled", 1.0), ("put", 2.0, 1)]

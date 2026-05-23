@@ -7,7 +7,7 @@ def hwseed() -> int:
 
 def seed(object value=None) -> int:
     """Initialize the thread-local random generator and return the seed used."""
-    cdef uint64_t seed_value = cmb_random_hwseed() if value is None else <uint64_t>value
+    cdef uint64_t seed_value = cmb_random_hwseed() if value is None else _seed_to_u64(value)
     cmb_random_initialize(seed_value)
     return <object>seed_value
 
@@ -25,8 +25,8 @@ def random_u64() -> int:
     return <object>cmb_random_sfc64()
 
 
-def fmix64(int seed, int nonce) -> int:
-    return <object>cmb_random_fmix64(<uint64_t>seed, <uint64_t>nonce)
+def fmix64(object seed, object nonce) -> int:
+    return <object>cmb_random_fmix64(_seed_to_u64(seed), _u64_value(nonce, "nonce", 0))
 
 
 def uniform(double min, double max) -> float:
@@ -61,8 +61,8 @@ def pert_mod(double min, double mode, double max, double lambda_) -> float:
     return cmb_random_PERT_mod(min, mode, max, lambda_)
 
 
-def dice(int min, int max) -> int:
-    return cmb_random_dice(min, max)
+def dice(object min, object max) -> int:
+    return cmb_random_dice(_i64_value(min, "min"), _i64_value(max, "max"))
 
 
 def flip() -> bool:

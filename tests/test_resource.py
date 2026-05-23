@@ -60,3 +60,33 @@ def test_resource_interrupted_waiting_acquire_does_not_take_resource():
         sim.execute()
 
     assert log == [("waiter", 1.0, 44, 0, 1)]
+
+
+def test_resource_waiter_stop_does_not_leave_stale_native_waiter():
+    log = []
+
+    def holder(me, resource):
+        assert resource.acquire() == cimba.SUCCESS
+        cimba.hold(2.0)
+        resource.release()
+        log.append(("released", cimba.time(), resource.in_use))
+
+    def waiter(me, resource):
+        try:
+            cimba.hold(0.1)
+            resource.acquire()
+        finally:
+            log.append(("cancelled", cimba.time(), resource.held_by(me)))
+
+    def stopper(me, target):
+        cimba.hold(1.0)
+        assert target.stop() == cimba.SUCCESS
+
+    with cimba.Simulation(seed=1) as sim:
+        resource = cimba.Resource("Resource")
+        cimba.Process("Holder", holder, resource).start()
+        target = cimba.Process("Waiter", waiter, resource).start()
+        cimba.Process("Stopper", stopper, target).start()
+        sim.execute()
+
+    assert log == [("cancelled", 1.0, 0), ("released", 2.0, 0)]

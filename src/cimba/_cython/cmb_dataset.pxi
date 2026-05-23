@@ -32,6 +32,80 @@ cdef class Dataset:
         cmb_dataset_summarize(self._ptr, summary)
         return _datasummary_owner(summary)
 
+    def reset(self) -> None:
+        _raise_if_closed(self)
+        cmb_dataset_reset(self._ptr)
+
+    def copy(self):
+        _raise_if_closed(self)
+        cdef Dataset copied = Dataset()
+        cmb_dataset_copy(copied._ptr, self._ptr)
+        return copied
+
+    def merge(self, Dataset other):
+        _raise_if_closed(self)
+        _raise_if_closed(other)
+        cdef Dataset merged = Dataset()
+        cdef uint64_t i
+        cmb_dataset_copy(merged._ptr, self._ptr)
+        for i in range(other._ptr.count):
+            cmb_dataset_add(merged._ptr, other._ptr.xa[i])
+        return merged
+
+    def sort(self) -> None:
+        _raise_if_closed(self)
+        cmb_dataset_sort(self._ptr)
+
+    def acf(self, object lags):
+        _raise_if_closed(self)
+        cdef uint16_t n = _lags_to_u16(lags)
+        cdef double *values
+        cdef list result
+        cdef uint16_t i
+        if self._ptr.count < 2:
+            raise ValueError("at least two samples are required")
+        if n == 0:
+            return [1.0]
+        if n >= self._ptr.count:
+            raise ValueError("lags must be smaller than sample count")
+        values = <double *>PyMem_Malloc((<size_t>n + 1) * sizeof(double))
+        if values == NULL:
+            raise MemoryError()
+        try:
+            cmb_dataset_ACF(self._ptr, <unsigned int>n, values)
+            result = [0.0] * (n + 1)
+            with cython.boundscheck(False):
+                for i in range(n + 1):
+                    result[i] = values[i]
+            return result
+        finally:
+            PyMem_Free(values)
+
+    def pacf(self, object lags):
+        _raise_if_closed(self)
+        cdef uint16_t n = _lags_to_u16(lags)
+        cdef double *values
+        cdef list result
+        cdef uint16_t i
+        if self._ptr.count < 3:
+            raise ValueError("at least three samples are required")
+        if n == 0:
+            return [1.0]
+        if n >= self._ptr.count - 1:
+            raise ValueError("lags must be smaller than sample count minus one")
+        values = <double *>PyMem_Malloc((<size_t>n + 1) * sizeof(double))
+        if values == NULL:
+            raise MemoryError()
+        try:
+            cmb_dataset_PACF(self._ptr, <unsigned int>n, values, NULL)
+            result = [0.0] * (n + 1)
+            with cython.boundscheck(False):
+                for i in range(n + 1):
+                    result[i] = values[i]
+            return result
+        finally:
+            PyMem_Free(values)
+
     property count:
         def __get__(self):
             _raise_if_closed(self)
@@ -59,4 +133,3 @@ cdef class Dataset:
             cmb_dataset_destroy(self._ptr)
             self._ptr = NULL
         self._closed = True
-

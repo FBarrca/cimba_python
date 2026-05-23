@@ -13,6 +13,14 @@ class DataSummary:
         """Add one sample value and return the new sample count."""
         ...
 
+    def reset(self) -> None:
+        """Reset the summary to an empty initialized state."""
+        ...
+
+    def merge(self, other: DataSummary) -> DataSummary:
+        """Return a new summary containing this summary and other."""
+        ...
+
     @property
     def count(self) -> _Count:
         """Number of samples summarized."""

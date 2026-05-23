@@ -35,6 +35,17 @@ cdef class DataSummary:
         _raise_if_closed(self)
         return <object>cmb_datasummary_add(self._ptr, value)
 
+    def reset(self) -> None:
+        _raise_if_closed(self)
+        cmb_datasummary_reset(self._ptr)
+
+    def merge(self, DataSummary other):
+        _raise_if_closed(self)
+        _raise_if_closed(other)
+        cdef DataSummary merged = DataSummary()
+        cmb_datasummary_merge(merged._ptr, self._ptr, other._ptr)
+        return merged
+
     property count:
         def __get__(self):
             _raise_if_closed(self)
@@ -82,4 +93,3 @@ cdef class DataSummary:
             cmb_datasummary_destroy(self._ptr)
         self._ptr = NULL
         self._closed = True
-

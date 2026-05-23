@@ -1,5 +1,13 @@
 # This file is included by ../_cimba.pyx.
 
+class _PriorityQueueEntry:
+    __slots__ = ("handle", "obj")
+
+    def __init__(self, object obj):
+        self.handle = 0
+        self.obj = obj
+
+
 cdef class PriorityQueue:
     """Priority queue for Python objects."""
 
@@ -44,52 +52,63 @@ cdef class PriorityQueue:
             _raise_if_closed(self)
             return <object>cmb_priorityqueue_space(self._ptr)
 
-    def put(self, object obj, int priority=0):
+    def put(self, object obj, object priority=0):
         """Put an object and return ``(signal, handle)``."""
-        _raise_if_closed(self)
-        cdef PyObject *op = <PyObject *>obj
+        if self._closed:
+            raise RuntimeError("PriorityQueue is closed")
+        cdef object entry = _PriorityQueueEntry(obj)
+        cdef PyObject *op = <PyObject *>entry
         cdef uint64_t handle = 0
+        cdef int64_t pri = 0 if priority is _ZERO else _priority_to_i64(priority)
         Py_INCREF(<object>op)
-        cdef int64_t sig = cmb_priorityqueue_put(self._ptr, <void *>op, priority, &handle)
+        cdef int64_t sig = cmb_priorityqueue_put(
+            self._ptr,
+            <void *>op,
+            pri,
+            &handle,
+        )
         if sig != SUCCESS:
             Py_DECREF(<object>op)
         else:
-            self._objects[<object>handle] = obj
-        return sig, <object>handle
+            entry.handle = <object>handle
+            self._objects[<object>handle] = entry
+        if sig == _PROCESS_CANCEL_SIGNAL:
+            raise _ProcessCancelled()
+        return <object>sig, <object>handle
 
     def get(self):
         """Get the highest-priority object. Returns ``(signal, object)``."""
-        _raise_if_closed(self)
+        if self._closed:
+            raise RuntimeError("PriorityQueue is closed")
         cdef void *ptr = NULL
         cdef int64_t sig = cmb_priorityqueue_get(self._ptr, &ptr)
-        cdef object obj
-        cdef object key
+        cdef object entry
         if sig != SUCCESS:
+            if sig == _PROCESS_CANCEL_SIGNAL:
+                raise _ProcessCancelled()
             return sig, None
-        obj = _object_from_owned_pointer(ptr)
-        for key in list(self._objects):
-            if self._objects[key] is obj:
-                del self._objects[key]
-                break
-        return sig, obj
+        entry = _object_from_owned_pointer(ptr)
+        self._objects.pop(entry.handle, None)
+        return sig, entry.obj
 
-    def position(self, int handle) -> int:
+    def position(self, object handle) -> int:
         _raise_if_closed(self)
-        return <object>cmb_priorityqueue_position(self._ptr, <uint64_t>handle)
+        return <object>cmb_priorityqueue_position(self._ptr, _handle_to_u64(handle))
 
-    def cancel(self, int handle) -> bool:
+    def cancel(self, object handle) -> bool:
         _raise_if_closed(self)
-        cdef bint found = cmb_priorityqueue_cancel(self._ptr, <uint64_t>handle)
-        cdef object obj
+        cdef uint64_t h = _handle_to_u64(handle)
+        cdef bint found = cmb_priorityqueue_cancel(self._ptr, h)
+        cdef object entry
         if found:
-            obj = self._objects.pop(handle, _MISSING)
-            if obj is not _MISSING:
-                Py_DECREF(<object>obj)
+            entry = self._objects.pop(<object>h, _MISSING)
+            if entry is not _MISSING:
+                Py_DECREF(<object>entry)
         return True if found else False
 
-    def reprioritize(self, int handle, int priority) -> None:
+    def reprioritize(self, object handle, object priority) -> None:
         _raise_if_closed(self)
-        cmb_priorityqueue_reprioritize(self._ptr, <uint64_t>handle, priority)
+        cmb_priorityqueue_reprioritize(self._ptr, _handle_to_u64(handle), _priority_to_i64(priority))
 
     def start_recording(self) -> None:
         _raise_if_closed(self)
@@ -105,10 +124,12 @@ cdef class PriorityQueue:
 
     cdef void _decref_queued_objects(self):
         cdef void *ptr = NULL
+        cdef object entry
         while self._ptr != NULL and cmb_priorityqueue_length(self._ptr) > 0:
             ptr = NULL
             if cmb_priorityqueue_get(self._ptr, &ptr) == SUCCESS and ptr != NULL:
-                Py_DECREF(<object><PyObject *>ptr)
+                entry = _object_from_owned_pointer(ptr)
+                self._objects.pop(entry.handle, None)
 
     def close(self) -> None:
         if self._closed:
@@ -119,4 +140,3 @@ cdef class PriorityQueue:
             cmb_priorityqueue_destroy(self._ptr)
             self._ptr = NULL
         self._closed = True
-

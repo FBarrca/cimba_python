@@ -1,6 +1,6 @@
 """Python bindings for Cimba, a discrete-event-simulation library."""
 
-from .cimba import native_version
+from .cimba import native_version, run_native_experiment, set_native_thread_hooks
 from .cmb_buffer import Buffer, UNLIMITED
 from .cmb_condition import Condition
 from .cmb_datasummary import DataSummary
@@ -103,7 +103,9 @@ __all__ = [
     "process_exit",
     "random",
     "random_u64",
+    "run_native_experiment",
     "seed",
+    "set_native_thread_hooks",
     "time",
     "triangular",
     "uniform",

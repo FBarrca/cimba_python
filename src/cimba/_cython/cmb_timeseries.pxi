@@ -53,6 +53,74 @@ cdef class TimeSeries:
         cmb_timeseries_summarize(self._ptr, summary)
         return _wtdsummary_owner(summary)
 
+    def reset(self) -> None:
+        _raise_if_closed(self)
+        cmb_timeseries_reset(self._ptr)
+
+    def copy(self):
+        _raise_if_closed(self)
+        cdef TimeSeries copied = TimeSeries()
+        cmb_timeseries_copy(copied._ptr, self._ptr)
+        return copied
+
+    def sort_by_value(self) -> None:
+        _raise_if_closed(self)
+        cmb_timeseries_sort_x(self._ptr)
+
+    def sort_by_time(self) -> None:
+        _raise_if_closed(self)
+        cmb_timeseries_sort_t(self._ptr)
+
+    def acf(self, object lags):
+        _raise_if_closed(self)
+        cdef uint16_t n = _lags_to_u16(lags)
+        cdef double *values
+        cdef list result
+        cdef uint16_t i
+        if self._ptr.ds.count < 2:
+            raise ValueError("at least two samples are required")
+        if n == 0:
+            return [1.0]
+        if n >= self._ptr.ds.count:
+            raise ValueError("lags must be smaller than sample count")
+        values = <double *>PyMem_Malloc((<size_t>n + 1) * sizeof(double))
+        if values == NULL:
+            raise MemoryError()
+        try:
+            cmb_timeseries_ACF(self._ptr, n, values)
+            result = [0.0] * (n + 1)
+            with cython.boundscheck(False):
+                for i in range(n + 1):
+                    result[i] = values[i]
+            return result
+        finally:
+            PyMem_Free(values)
+
+    def pacf(self, object lags):
+        _raise_if_closed(self)
+        cdef uint16_t n = _lags_to_u16(lags)
+        cdef double *values
+        cdef list result
+        cdef uint16_t i
+        if self._ptr.ds.count < 3:
+            raise ValueError("at least three samples are required")
+        if n == 0:
+            return [1.0]
+        if n >= self._ptr.ds.count - 1:
+            raise ValueError("lags must be smaller than sample count minus one")
+        values = <double *>PyMem_Malloc((<size_t>n + 1) * sizeof(double))
+        if values == NULL:
+            raise MemoryError()
+        try:
+            cmb_timeseries_PACF(self._ptr, n, values, NULL)
+            result = [0.0] * (n + 1)
+            with cython.boundscheck(False):
+                for i in range(n + 1):
+                    result[i] = values[i]
+            return result
+        finally:
+            PyMem_Free(values)
+
     property count:
         def __get__(self):
             _raise_if_closed(self)
