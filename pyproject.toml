@@ -15,14 +15,20 @@ keywords = ["simulation", "discrete-event-simulation", "cimba", "cython"]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Cython",
     "Programming Language :: C",
+    "Operating System :: POSIX :: Linux",
     "Topic :: Scientific/Engineering",
+    "Typing :: Typed",
 ]
 dependencies = []
 
 [project.urls]
 Homepage = "https://github.com/FBarrca/cimba_python"
+Repository = "https://github.com/FBarrca/cimba_python"
+Issues = "https://github.com/FBarrca/cimba_python/issues"
 "Upstream C library" = "https://github.com/ambonvik/cimba"
 
 [dependency-groups]
@@ -55,3 +61,13 @@ compile = ["cimba_ext"]
 # artifacts (libcimba.a + upstream headers, marked install:true upstream) must
 # not be copied into the wheel. Skip subproject installs.
 install = ["--skip-subprojects"]
+
+[tool.cibuildwheel]
+# The vendored Cimba C library currently ships x86-64 assembly ports. Start
+# publishing with the Linux x86_64 wheel we can test end-to-end in CI.
+build = "cp313-manylinux_x86_64"
+test-requires = "pytest>=8"
+test-command = "pytest {project}/tests"
+
+[tool.cibuildwheel.linux]
+before-all = "command -v nasm || (dnf install -y nasm || yum install -y nasm || microdnf install -y nasm)"

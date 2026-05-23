@@ -132,6 +132,35 @@ uv run --no-project --isolated \
   python -c "import cimba; print(cimba.native_version())"   # -> 3.0.0-beta
 ```
 
+## Publishing from GitHub
+
+GitHub Actions owns the release path:
+
+| Workflow | Trigger | What it does |
+| --- | --- | --- |
+| `.github/workflows/ci.yml` | pushes to `master`/`main`, pull requests, manual dispatch | runs tests on pushes/PRs; manual runs also build local wheel + sdist and smoke-test the wheel |
+| `.github/workflows/release.yml` | `vX.Y.Z` tags, manual dispatch | validates version consistency, builds the sdist and Linux x86_64 wheel, publishes tagged releases to PyPI |
+
+Before the first PyPI release, configure a PyPI Trusted Publisher for the
+`cimba` project. If the project does not exist yet, create a pending publisher
+from your PyPI account's publishing settings; it will create the project on
+first successful upload.
+
+| Field | Value |
+| --- | --- |
+| Owner | `FBarrca` |
+| Repository name | `cimba_python` |
+| Workflow filename | `release.yml` |
+| Environment name | `pypi` |
+
+Then publish by bumping the version in both `pyproject.toml` and `meson.build`,
+tagging the same version, and pushing the tag:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
 ## Troubleshooting
 
 **`FileNotFoundError: .../build/cp313` on import.** `build/cp313/` is the
