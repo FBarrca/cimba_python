@@ -54,12 +54,12 @@ Positive integer signals are available to the application:
 
 .. code-block:: python
 
-   def cat(me, target):
+   def cat(target):
        cimba.hold(0.5)
        target.interrupt(77)
 
 
-   def waiting_mouse(me, cheese):
+   def waiting_mouse(cheese):
        sig = cheese.acquire(1)
        if sig == 77:
            print("the cat interrupted this wait")
@@ -81,6 +81,9 @@ Preemption uses process priorities. A higher-priority process can call
        me.priority = 10
        assert resource.preempt() == cimba.SUCCESS
        resource.release()
+
+Targets like ``mouse`` and ``rat`` need ``pass_process=True`` when started
+because they inspect or update the :class:`cimba.Process` object.
 
 Buffers and Object Queues, Interrupted
 --------------------------------------

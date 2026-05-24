@@ -57,9 +57,12 @@ its ship data:
        "min_depth": 8.0,
        "unloading_time": 2.0,
    }
-   proc = cimba.Process("Ship_000001_small", ship_proc, ctx)
+   proc = cimba.Process("Ship_000001_small", ship_proc, ctx, pass_process=True)
    ctx["ship_by_process"][proc] = ship
    proc.start()
+
+``pass_process=True`` is used here because the ship target needs the
+:class:`cimba.Process` object as a key into ``ship_by_process``.
 
 Weather and Tides
 -----------------
@@ -71,7 +74,7 @@ version uses the current Python distribution functions directly:
 
 .. code-block:: python
 
-   def weather_and_tide(me, ctx):
+   def weather_and_tide(ctx):
        while True:
            old_wind = ctx["env"]["wind_magnitude"]
            ctx["env"]["wind_magnitude"] = 0.5 * cimba.rayleigh(5.0) + 0.5 * old_wind
@@ -197,3 +200,14 @@ a small scenario comparison:
 
 A larger Python version would put each scenario/replication in a trial grid and
 call :func:`cimba.run_experiment`, exactly like the M/M/1 tutorial.
+
+The upstream C tutorial uses that larger sweep to produce a scenario chart. The
+same Python statistics path is: collect each ship's time in system in
+:class:`cimba.Dataset`, summarize replications with :class:`cimba.DataSummary`,
+then plot the resulting rows:
+
+.. figure:: ../../subprojects/cimba/images/tut_4_2.png
+   :alt: Harbor scenario chart comparing small and large ship time in system.
+
+   Average time in system for the harbor scenarios, with confidence intervals
+   across replications.

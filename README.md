@@ -49,13 +49,13 @@ conditions, random distributions, time series, and summary statistics.
 import cimba
 
 
-def arrival(me, queue):
+def arrival(queue):
     while True:
         cimba.hold(cimba.exponential(1.0 / 0.75))
         queue.put(1)
 
 
-def service(me, queue):
+def service(queue):
     while True:
         queue.get(1)
         cimba.hold(cimba.exponential(1.0))

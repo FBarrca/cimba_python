@@ -54,18 +54,23 @@ def current_process() -> Process | None:
 class Process:
     """Named stackful Cimba process executing a Python callable.
 
-    The callable receives the Process itself and the context object. It may call
-    hold(), yield_process(), queue/resource operations, or return an exit value.
+    The callable receives the supplied positional and keyword arguments. It may
+    call hold(), yield_process(), queue/resource operations, or return an exit
+    value. Pass ``pass_process=True`` to receive the Process as the first
+    callable argument.
     """
 
     def __init__(
         self,
         name: str,
-        func: _ProcessFunc,
-        context: object | None = None,
+        target: _ProcessFunc,
+        /,
+        *args: object,
         priority: _Priority = 0,
+        pass_process: bool = False,
+        **kwargs: object,
     ) -> None:
-        """Create a process with a name, function, context, and initial priority."""
+        """Create a process with a name, target callable, arguments, and priority."""
         ...
 
     @property

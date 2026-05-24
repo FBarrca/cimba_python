@@ -19,8 +19,8 @@ def test_resourcepool_acquire_release_and_wait_order():
     with cimba.Simulation(seed=1) as sim:
         pool = cimba.ResourcePool("Pool", capacity=5)
         pool.start_recording()
-        cimba.Process("Holder", holder, pool).start()
-        cimba.Process("Waiter", waiter, pool).start()
+        cimba.Process("Holder", holder, pool, pass_process=True).start()
+        cimba.Process("Waiter", waiter, pool, pass_process=True).start()
         sim.execute()
         pool.stop_recording()
         history = pool.history()
@@ -36,7 +36,7 @@ def test_resourcepool_acquire_release_and_wait_order():
 def test_resourcepool_interrupted_waiting_acquire_keeps_original_holdings():
     log = []
 
-    def holder(me, pool):
+    def holder(pool):
         assert pool.acquire(5) == cimba.SUCCESS
         cimba.hold(2.0)
         pool.release(5)
@@ -46,14 +46,14 @@ def test_resourcepool_interrupted_waiting_acquire_keeps_original_holdings():
         sig = pool.acquire(3)
         log.append(("waiter", cimba.time(), sig, pool.held_by(me), pool.in_use))
 
-    def interrupter(me, target):
+    def interrupter(target):
         cimba.hold(1.0)
         target.interrupt(45)
 
     with cimba.Simulation(seed=1) as sim:
         pool = cimba.ResourcePool("Pool", capacity=5)
         cimba.Process("Holder", holder, pool).start()
-        target = cimba.Process("Waiter", waiter, pool).start()
+        target = cimba.Process("Waiter", waiter, pool, pass_process=True).start()
         cimba.Process("Interrupter", interrupter, target).start()
         sim.execute()
 
@@ -63,7 +63,7 @@ def test_resourcepool_interrupted_waiting_acquire_keeps_original_holdings():
 def test_resourcepool_waiter_stop_does_not_leave_stale_native_waiter():
     log = []
 
-    def holder(me, pool):
+    def holder(pool):
         assert pool.acquire(5) == cimba.SUCCESS
         cimba.hold(2.0)
         pool.release(5)
@@ -76,14 +76,14 @@ def test_resourcepool_waiter_stop_does_not_leave_stale_native_waiter():
         finally:
             log.append(("cancelled", cimba.time(), pool.held_by(me)))
 
-    def stopper(me, target):
+    def stopper(target):
         cimba.hold(1.0)
         assert target.stop() == cimba.SUCCESS
 
     with cimba.Simulation(seed=1) as sim:
         pool = cimba.ResourcePool("Pool", capacity=5)
         cimba.Process("Holder", holder, pool).start()
-        target = cimba.Process("Waiter", waiter, pool).start()
+        target = cimba.Process("Waiter", waiter, pool, pass_process=True).start()
         cimba.Process("Stopper", stopper, target).start()
         sim.execute()
 

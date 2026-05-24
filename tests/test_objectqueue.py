@@ -4,11 +4,11 @@ import cimba
 def test_objectqueue_blocking_order_and_identity():
     log = []
 
-    def getter(me, queue):
+    def getter(queue):
         sig, got = queue.get()
         log.append((cimba.time(), sig, got))
 
-    def putter(me, queue):
+    def putter(queue):
         cimba.hold(1.0)
         assert queue.put("fifo-item") == cimba.SUCCESS
 
@@ -28,10 +28,10 @@ def test_objectqueue_blocking_order_and_identity():
 def test_objectqueue_position_and_interrupted_get():
     log = []
 
-    def getter(me, queue):
+    def getter(queue):
         log.append(queue.get())
 
-    def interrupter(me, target):
+    def interrupter(target):
         cimba.hold(1.0)
         target.interrupt(55)
 
@@ -52,11 +52,11 @@ def test_objectqueue_position_and_interrupted_get():
 def test_objectqueue_interrupted_put_on_full_queue_leaves_existing_item():
     log = []
 
-    def putter(me, queue):
+    def putter(queue):
         sig = queue.put("second")
         log.append(("put", cimba.time(), sig, queue.length))
 
-    def interrupter(me, target):
+    def interrupter(target):
         cimba.hold(1.0)
         target.interrupt(66)
 

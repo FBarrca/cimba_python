@@ -4,7 +4,7 @@ import cimba
 def run(stop_time: float = 3.5, seed: int = 12) -> dict[str, object]:
     ticks = []
 
-    def ticker(me, ctx):
+    def ticker():
         while True:
             cimba.hold(1.0)
             ticks.append(cimba.time())

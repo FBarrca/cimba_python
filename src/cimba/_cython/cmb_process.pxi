@@ -19,7 +19,10 @@ cdef void *_process_trampoline(cmb_process *me, void *ctx) noexcept with gil:
     _cimba_corostate_enter_fresh()
 
     try:
-        result = proc._func(proc, proc._context)
+        if proc._pass_process:
+            result = proc._target(proc, *proc._args, **proc._kwargs)
+        else:
+            result = proc._target(*proc._args, **proc._kwargs)
         return _process_result_pointer(proc, result)
     except _ProcessExit as exc:
         return _process_result_pointer(proc, exc.value)
@@ -92,9 +95,11 @@ cdef class Process:
     cdef bint _keepalive
     cdef bint _owns_exit_value
     cdef bint _cancelling
-    cdef object _func
-    cdef object _context
+    cdef object _target
+    cdef object _args
+    cdef object _kwargs
     cdef object _name
+    cdef bint _pass_process
 
     def __cinit__(self):
         self._ptr = NULL
@@ -103,19 +108,32 @@ cdef class Process:
         self._keepalive = False
         self._owns_exit_value = False
         self._cancelling = False
-        self._func = None
-        self._context = None
+        self._target = None
+        self._args = ()
+        self._kwargs = {}
         self._name = None
+        self._pass_process = False
 
-    def __init__(self, str name, object func, object context=None, object priority=0):
-        if not callable(func):
-            raise TypeError("func must be callable")
+    def __init__(
+        self,
+        str name,
+        object target,
+        /,
+        *args,
+        object priority=0,
+        object pass_process=False,
+        **kwargs,
+    ):
+        if not callable(target):
+            raise TypeError("target must be callable")
         cdef bytes bname = _name_bytes(name)
         cdef int64_t pri = _priority_to_i64(priority)
         self._ptr = cmb_process_create()
-        self._func = func
-        self._context = context
+        self._target = target
+        self._args = args
+        self._kwargs = kwargs
         self._name = name
+        self._pass_process = True if pass_process else False
         cmb_process_initialize(
             self._ptr,
             bname,

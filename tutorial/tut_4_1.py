@@ -48,7 +48,7 @@ def ship_proc(me, ctx):
     return system_time
 
 
-def departure_proc(me, ctx):
+def departure_proc(ctx):
     while True:
         sig, departed = ctx["departed"].get()
         assert sig == cimba.SUCCESS
@@ -57,7 +57,7 @@ def departure_proc(me, ctx):
 
 
 def run_harbor_trial(seed: int = 41) -> dict[str, object]:
-    def weather_and_tide(me, ctx):
+    def weather_and_tide(ctx):
         cimba.hold(1.0)
         ctx["env"]["wind_magnitude"] = 4.0
         ctx["env"]["water_depth"] = 12.0
@@ -82,7 +82,7 @@ def run_harbor_trial(seed: int = 41) -> dict[str, object]:
             "min_depth": 8.0,
             "unloading_time": 2.0,
         }
-        proc = cimba.Process("Ship_000001_small", ship_proc, ctx)
+        proc = cimba.Process("Ship_000001_small", ship_proc, ctx, pass_process=True)
         ctx["ship_by_process"][proc] = ship
         proc.start()
         cimba.Process("Departures", departure_proc, ctx).start()

@@ -20,13 +20,13 @@ def test_versions_are_available():
 def test_processes_can_block_on_buffer_and_resume():
     events = []
 
-    def producer(me, queue):
+    def producer(queue):
         cimba.hold(1.0)
         queue.put(2)
         cimba.hold(1.0)
         queue.put(1)
 
-    def consumer(me, queue):
+    def consumer(queue):
         sig, got = queue.get(1)
         events.append((cimba.time(), sig, got, queue.level))
         sig, got = queue.get(2)
@@ -59,12 +59,12 @@ def test_python_object_queues_preserve_objects_and_priority():
 
 
 def test_mm1_buffer_history_summary_runs_to_stop_time():
-    def arrival(me, queue):
+    def arrival(queue):
         while True:
             cimba.hold(cimba.exponential(1.0 / 0.75))
             queue.put(1)
 
-    def service(me, queue):
+    def service(queue):
         while True:
             queue.get(1)
             cimba.hold(cimba.exponential(1.0))

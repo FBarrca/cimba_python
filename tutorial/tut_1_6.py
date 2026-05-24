@@ -15,7 +15,7 @@ class MM1Trial:
     services: int = 0
 
 
-def arrival(me, ctx: MM1Trial):
+def arrival(ctx: MM1Trial):
     mean = 1.0 / ctx.arr_rate
     while True:
         cimba.hold(cimba.exponential(mean))
@@ -23,7 +23,7 @@ def arrival(me, ctx: MM1Trial):
         ctx.queue.put(1)
 
 
-def service(me, ctx: MM1Trial):
+def service(ctx: MM1Trial):
     mean = 1.0 / ctx.srv_rate
     while True:
         ctx.queue.get(1)
@@ -31,7 +31,7 @@ def service(me, ctx: MM1Trial):
         ctx.services += 1
 
 
-def recorder(me, ctx: MM1Trial):
+def recorder(ctx: MM1Trial):
     ctx.queue.start_recording()
     cimba.hold(ctx.duration)
     ctx.queue.stop_recording()

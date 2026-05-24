@@ -22,7 +22,7 @@ def log_user(ctx: MM1Trial, message: str, *args: object) -> None:
         ctx.trace.append(message % args)
 
 
-def arrival(me, ctx: MM1Trial):
+def arrival(ctx: MM1Trial):
     mean = 1.0 / ctx.arr_rate
     while True:
         t_ia = cimba.exponential(mean)
@@ -33,7 +33,7 @@ def arrival(me, ctx: MM1Trial):
         ctx.queue.put(1)
 
 
-def service(me, ctx: MM1Trial):
+def service(ctx: MM1Trial):
     mean = 1.0 / ctx.srv_rate
     while True:
         log_user(ctx, "Gets one from the queue")
@@ -44,7 +44,7 @@ def service(me, ctx: MM1Trial):
         ctx.services += 1
 
 
-def end_sim(me, ctx: MM1Trial):
+def end_sim(ctx: MM1Trial):
     cimba.hold(ctx.duration)
     log_user(ctx, "--- Game Over ---")
     ctx.arrival_process.stop()

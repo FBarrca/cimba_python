@@ -4,11 +4,11 @@ import cimba
 def test_buffer_partial_get_put_and_recorded_history():
     log = []
 
-    def getter(me, queue):
+    def getter(queue):
         sig, got = queue.get(5)
         log.append(("got", cimba.time(), sig, got, queue.level))
 
-    def putter(me, queue):
+    def putter(queue):
         cimba.hold(1.0)
         assert queue.put(3) == (cimba.SUCCESS, 0)
         cimba.hold(1.0)
@@ -31,15 +31,15 @@ def test_buffer_partial_get_put_and_recorded_history():
 def test_buffer_interrupted_get_returns_partial_amount():
     log = []
 
-    def getter(me, queue):
+    def getter(queue):
         sig, got = queue.get(5)
         log.append(("get", cimba.time(), sig, got, queue.level))
 
-    def putter(me, queue):
+    def putter(queue):
         cimba.hold(1.0)
         assert queue.put(3) == (cimba.SUCCESS, 0)
 
-    def interrupter(me, target):
+    def interrupter(target):
         cimba.hold(2.0)
         target.interrupt(42)
 
@@ -56,16 +56,16 @@ def test_buffer_interrupted_get_returns_partial_amount():
 def test_buffer_interrupted_put_returns_remaining_amount():
     log = []
 
-    def putter(me, queue):
+    def putter(queue):
         assert queue.put(5) == (cimba.SUCCESS, 0)
         sig, remaining = queue.put(4)
         log.append(("put", cimba.time(), sig, remaining, queue.level))
 
-    def getter(me, queue):
+    def getter(queue):
         cimba.hold(1.0)
         assert queue.get(2) == (cimba.SUCCESS, 2)
 
-    def interrupter(me, target):
+    def interrupter(target):
         cimba.hold(2.0)
         target.interrupt(88)
 
@@ -82,17 +82,17 @@ def test_buffer_interrupted_put_returns_remaining_amount():
 def test_buffer_waiter_stop_does_not_leave_stale_native_waiter():
     log = []
 
-    def getter(me, queue):
+    def getter(queue):
         try:
             queue.get()
         finally:
             log.append(("cancelled", cimba.time()))
 
-    def stopper(me, target):
+    def stopper(target):
         cimba.hold(1.0)
         assert target.stop() == cimba.SUCCESS
 
-    def putter(me, queue):
+    def putter(queue):
         cimba.hold(2.0)
         assert queue.put(1) == (cimba.SUCCESS, 0)
         log.append(("put", cimba.time(), queue.level))

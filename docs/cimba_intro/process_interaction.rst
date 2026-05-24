@@ -11,11 +11,11 @@ One process can wait for another to finish:
 
 .. code-block:: python
 
-   def child(me, ctx):
+   def child():
        cimba.hold(2.0)
        return "done"
 
-   def parent(me, ctx):
+   def parent(ctx):
        proc = cimba.Process("Child", child).start()
        signal = proc.wait()
        ctx["signal"] = signal
@@ -34,7 +34,7 @@ signal, or given timers:
 
 .. code-block:: python
 
-   def sleeper(me, ctx):
+   def sleeper(ctx):
        signal = cimba.yield_process()
        ctx.append(signal)
 
@@ -55,7 +55,7 @@ shutdown logic, use a normal process:
 
 .. code-block:: python
 
-   def stop_model(me, ctx):
+   def stop_model(ctx):
        cimba.hold(ctx.duration)
        ctx.arrivals.stop()
        ctx.service.stop()

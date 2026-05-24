@@ -35,7 +35,8 @@ reference to the process running it:
 
 This gives the same modeling freedom: the process is an active coroutine while
 running, and the visitor object can also be placed into a queue and handled as a
-passive object by a server.
+passive object by a server. Start this target with ``pass_process=True`` because
+it stores the process object on the visitor.
 
 Servers and Priority Queues
 ---------------------------
@@ -45,7 +46,7 @@ ride, and resumes them. The Python version is nearly the same:
 
 .. code-block:: python
 
-   def server(me, ctx):
+   def server(ctx):
        while True:
            sig, visitor = ctx["queue"].get()
            assert sig == cimba.SUCCESS
@@ -130,6 +131,22 @@ The Python API has the pieces needed for the same model: processes, priority
 queues, timers, object queues, datasets, :func:`cimba.pert` random variates,
 and alias sampling. The checked-in Python tutorial intentionally keeps the
 model small so the queue/timer/resume mechanics remain visible.
+
+For the full model, collect visitor metrics in :class:`cimba.DataSummary`
+objects and queue histories with :func:`cimba.reporting.resource_report`, matching
+the C tutorial's summary lines and detailed queue reports:
+
+.. code-block:: python
+
+   num_rides = cimba.DataSummary()
+   time_in_park = cimba.DataSummary()
+
+   # In the departure process:
+   num_rides.add(visitor.num_attractions_visited)
+   time_in_park.add(cimba.time() - visitor.arrival_time)
+
+   print(cimba.reporting.summarize(num_rides))
+   print(cimba.reporting.format_report(cimba.reporting.resource_report(queue)))
 
 Parallelizing the full park model would follow the same pattern as
 :ref:`py_tut_1`: write one function that builds and runs a complete park day,

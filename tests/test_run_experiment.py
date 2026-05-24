@@ -21,12 +21,12 @@ def _mm1_mean_queue(i, seed):
         queue = cimba.Buffer("Queue")
         queue.start_recording()
 
-        def arrival(me, q):
+        def arrival(q):
             while True:
                 cimba.hold(cimba.exponential(1.0 / 0.75))
                 q.put(1)
 
-        def service(me, q):
+        def service(q):
             while True:
                 q.get(1)
                 cimba.hold(cimba.exponential(1.0))

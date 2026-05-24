@@ -23,9 +23,10 @@ Arrival, Service, and the Queue
 -------------------------------
 
 The C tutorial starts by passing a ``cmb_buffer`` pointer to two process
-functions. In Python, a process function receives ``(me, ctx)`` where ``ctx``
-can be any Python object. A dataclass is a convenient replacement for the C
-``struct`` used later in the original tutorial:
+functions. In Python, a process target is a normal callable; any positional or
+keyword arguments passed to :class:`cimba.Process` are forwarded to it. A
+dataclass is a convenient replacement for the C ``struct`` used later in the
+original tutorial:
 
 .. code-block:: python
 
@@ -45,7 +46,7 @@ can be any Python object. A dataclass is a convenient replacement for the C
        services: int = 0
 
 
-   def arrival(me, ctx: MM1Trial):
+   def arrival(ctx: MM1Trial):
        mean = 1.0 / ctx.arr_rate
        while True:
            cimba.hold(cimba.exponential(mean))
@@ -53,7 +54,7 @@ can be any Python object. A dataclass is a convenient replacement for the C
            ctx.queue.put(1)
 
 
-   def service(me, ctx: MM1Trial):
+   def service(ctx: MM1Trial):
        mean = 1.0 / ctx.srv_rate
        while True:
            ctx.queue.get(1)
@@ -153,7 +154,7 @@ state for model-level traces:
            ctx.trace.append(message % args)
 
 
-   def arrival(me, ctx: MM1Trial):
+   def arrival(ctx: MM1Trial):
        mean = 1.0 / ctx.arr_rate
        while True:
            t_ia = cimba.exponential(mean)
@@ -219,7 +220,7 @@ Python version uses the same idea:
        services: int = 0
 
 
-   def recorder(me, ctx: MM1Trial):
+   def recorder(ctx: MM1Trial):
        if ctx.warmup_time > 0.0:
            cimba.hold(ctx.warmup_time)
        ctx.queue.start_recording()

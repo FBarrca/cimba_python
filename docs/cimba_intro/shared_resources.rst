@@ -9,12 +9,12 @@ A :class:`cimba.Buffer` stores numeric amounts and supports blocking ``put`` and
 
 .. code-block:: python
 
-   def producer(me, queue):
+   def producer(queue):
        while True:
            cimba.hold(1.0)
            queue.put(1)
 
-   def consumer(me, queue):
+   def consumer(queue):
        while True:
            queue.get(1)
            cimba.hold(0.8)
@@ -37,7 +37,7 @@ counting semaphore.
 
 .. code-block:: python
 
-   def job(me, server):
+   def job(server):
        server.acquire()
        try:
            cimba.hold(3.0)
@@ -62,10 +62,10 @@ processes whose predicates are true.
    def enough_items(process, ctx):
        return ctx["items"] >= 3
 
-   def waiter(me, ctx):
+   def waiter(ctx):
        ctx["condition"].wait(enough_items, ctx)
 
-   def supplier(me, ctx):
+   def supplier(ctx):
        while ctx["items"] < 3:
            cimba.hold(1.0)
            ctx["items"] += 1

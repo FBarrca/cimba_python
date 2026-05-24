@@ -20,8 +20,8 @@ def test_resource_preemption_wakes_lower_priority_holder():
     with cimba.Simulation(seed=1) as sim:
         resource = cimba.Resource("Resource")
         resource.start_recording()
-        cimba.Process("Low", low_priority, resource, priority=0).start()
-        cimba.Process("High", high_priority, resource, priority=5).start()
+        cimba.Process("Low", low_priority, resource, priority=0, pass_process=True).start()
+        cimba.Process("High", high_priority, resource, priority=5, pass_process=True).start()
         sim.execute()
         resource.stop_recording()
         history = resource.history()
@@ -38,7 +38,7 @@ def test_resource_preemption_wakes_lower_priority_holder():
 def test_resource_interrupted_waiting_acquire_does_not_take_resource():
     log = []
 
-    def holder(me, resource):
+    def holder(resource):
         assert resource.acquire() == cimba.SUCCESS
         cimba.hold(2.0)
         resource.release()
@@ -48,14 +48,14 @@ def test_resource_interrupted_waiting_acquire_does_not_take_resource():
         sig = resource.acquire()
         log.append(("waiter", cimba.time(), sig, resource.held_by(me), resource.in_use))
 
-    def interrupter(me, target):
+    def interrupter(target):
         cimba.hold(1.0)
         target.interrupt(44)
 
     with cimba.Simulation(seed=1) as sim:
         resource = cimba.Resource("Resource")
         cimba.Process("Holder", holder, resource).start()
-        target = cimba.Process("Waiter", waiter, resource).start()
+        target = cimba.Process("Waiter", waiter, resource, pass_process=True).start()
         cimba.Process("Interrupter", interrupter, target).start()
         sim.execute()
 
@@ -65,7 +65,7 @@ def test_resource_interrupted_waiting_acquire_does_not_take_resource():
 def test_resource_waiter_stop_does_not_leave_stale_native_waiter():
     log = []
 
-    def holder(me, resource):
+    def holder(resource):
         assert resource.acquire() == cimba.SUCCESS
         cimba.hold(2.0)
         resource.release()
@@ -78,14 +78,14 @@ def test_resource_waiter_stop_does_not_leave_stale_native_waiter():
         finally:
             log.append(("cancelled", cimba.time(), resource.held_by(me)))
 
-    def stopper(me, target):
+    def stopper(target):
         cimba.hold(1.0)
         assert target.stop() == cimba.SUCCESS
 
     with cimba.Simulation(seed=1) as sim:
         resource = cimba.Resource("Resource")
         cimba.Process("Holder", holder, resource).start()
-        target = cimba.Process("Waiter", waiter, resource).start()
+        target = cimba.Process("Waiter", waiter, resource, pass_process=True).start()
         cimba.Process("Stopper", stopper, target).start()
         sim.execute()
 

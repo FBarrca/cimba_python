@@ -4,11 +4,11 @@ import cimba
 def test_priorityqueue_returns_highest_priority_first():
     log = []
 
-    def getter(me, queue):
+    def getter(queue):
         log.append(queue.get())
         log.append(queue.get())
 
-    def putter(me, queue):
+    def putter(queue):
         assert queue.put("low", priority=0)[0] == cimba.SUCCESS
         assert queue.put("high", priority=10)[0] == cimba.SUCCESS
 
@@ -51,14 +51,14 @@ def test_priorityqueue_reprioritize_changes_get_order():
 def test_priorityqueue_interrupted_get_and_put():
     log = []
 
-    def getter(me, queue):
+    def getter(queue):
         log.append(("get",) + queue.get())
 
-    def putter(me, queue):
+    def putter(queue):
         sig, handle = queue.put("blocked", priority=5)
         log.append(("put", cimba.time(), sig, handle, queue.length))
 
-    def interrupter(me, target):
+    def interrupter(target):
         cimba.hold(1.0)
         target.interrupt(77)
 

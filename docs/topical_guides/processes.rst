@@ -4,15 +4,35 @@ Processes
 Process functions
 -----------------
 
-A process function receives ``(process, context)``. The context can be any
-Python object: a dataclass, dictionary, queue, resource, or model object.
+A process target is a normal Python callable. Positional and keyword arguments
+passed to :class:`cimba.Process` are forwarded to the target.
 
 .. code-block:: python
 
-   def customer(me, model):
+   def customer(model):
        model.server.acquire()
        cimba.hold(model.service_time())
        model.server.release()
+
+   cimba.Process("Customer", customer, model).start()
+
+Bound methods are often the cleanest way to keep model state close to model
+behavior:
+
+.. code-block:: python
+
+   cimba.Process("Customer", model.customer).start()
+
+Use ``pass_process=True`` only when the target needs the
+:class:`cimba.Process` object itself:
+
+.. code-block:: python
+
+   def sleeper(me, log):
+       me.timer_set(5.0)
+       log.append(cimba.yield_process())
+
+   cimba.Process("Sleeper", sleeper, log, pass_process=True).start()
 
 The process can return a value. Another process can retrieve it with
 ``exit_value()`` after waiting for the process.

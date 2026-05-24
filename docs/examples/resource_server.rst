@@ -9,7 +9,7 @@ continuing.
    import cimba
 
 
-   def job(me, model):
+   def job(model):
        arrived = cimba.time()
        model["server"].acquire()
        try:
@@ -19,7 +19,7 @@ continuing.
            model["server"].release()
 
 
-   def source(me, model):
+   def source(model):
        for i in range(model["jobs"]):
            cimba.Process(f"Job {i}", job, model).start()
            cimba.hold(model["interarrival_time"])

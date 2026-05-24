@@ -15,7 +15,7 @@ class Visitor:
         self.status = "new"
 
 
-def _server(me, ctx):
+def _server(ctx):
     while True:
         sig, visitor = ctx["queue"].get()
         assert sig == cimba.SUCCESS
@@ -71,7 +71,7 @@ def run_jockeying_demo() -> Visitor:
             "ride_duration": 2.0,
         }
         cimba.Process("Server_01", _server, {"queue": ctx["queues"][1], "ride_duration": 2.0}).start()
-        cimba.Process(visitor.name, _visitor_proc, ctx).start()
+        cimba.Process(visitor.name, _visitor_proc, ctx, pass_process=True).start()
         sim.execute()
 
         sig, departed = ctx["departed"].get()
@@ -101,7 +101,7 @@ def run_reneging_demo() -> tuple[Visitor, int]:
             "queue": cimba.PriorityQueue("Queue_00"),
             "departed": cimba.ObjectQueue("Departed"),
         }
-        cimba.Process(visitor.name, visitor_proc, ctx).start()
+        cimba.Process(visitor.name, visitor_proc, ctx, pass_process=True).start()
         sim.execute()
 
         sig, departed = ctx["departed"].get()

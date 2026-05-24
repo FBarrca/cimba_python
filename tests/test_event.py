@@ -12,7 +12,7 @@ _native = importlib.import_module("cimba._cimba")
 def test_event_queue_start_time_execute_next_and_stop_at():
     log = []
 
-    def worker(me, ctx):
+    def worker(ctx):
         log.append(("start", cimba.time(), ctx.now))
         cimba.hold(2.0)
         log.append(("after-hold", cimba.time()))
@@ -154,7 +154,7 @@ def test_wait_event_success_and_cancelled_signals():
     def event_callback(subject, obj):
         log.append(("event", cimba.time()))
 
-    def waiter(me, handle):
+    def waiter(handle):
         sig = cimba.wait_event(handle)
         log.append(("waiter", cimba.time(), sig))
 
@@ -170,11 +170,11 @@ def test_wait_event_success_and_cancelled_signals():
 
     log.clear()
 
-    def cancel_waiter(me, handle):
+    def cancel_waiter(handle):
         sig = cimba.wait_event(handle)
         log.append(("cancel-waiter", cimba.time(), sig))
 
-    def canceller(me, ctx):
+    def canceller(ctx):
         cimba.hold(1.0)
         assert ctx["sim"].cancel_event(ctx["handle"]) is True
 

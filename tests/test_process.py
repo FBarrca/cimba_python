@@ -1,22 +1,83 @@
+from dataclasses import dataclass
+
 import cimba
+
+
+def test_process_target_accepts_normal_python_arguments():
+    log = []
+
+    def zero_arg():
+        log.append(("zero", cimba.time()))
+
+    def positional(name, delay):
+        cimba.hold(delay)
+        log.append(("positional", name, cimba.time()))
+
+    def keyword(*, name, delay):
+        cimba.hold(delay)
+        log.append(("keyword", name, cimba.time()))
+
+    with cimba.Simulation(seed=1) as sim:
+        cimba.Process("Zero", zero_arg).start()
+        cimba.Process("Positional", positional, "alpha", 1.0).start()
+        cimba.Process("Keyword", keyword, name="bravo", delay=2.0).start()
+        sim.execute()
+
+    assert log == [
+        ("zero", 0.0),
+        ("positional", "alpha", 1.0),
+        ("keyword", "bravo", 2.0),
+    ]
+
+
+def test_process_target_can_be_bound_method():
+    @dataclass
+    class Counter:
+        value: int = 0
+
+        def increment_after_hold(self, amount):
+            cimba.hold(1.0)
+            self.value += amount
+
+    counter = Counter()
+
+    with cimba.Simulation(seed=1) as sim:
+        cimba.Process("Increment", counter.increment_after_hold, 3).start()
+        sim.execute()
+
+    assert counter.value == 3
+
+
+def test_process_pass_process_opt_in_receives_running_process():
+    log = []
+
+    def worker(me, message):
+        assert cimba.current_process() is me
+        log.append((me.name, message))
+
+    with cimba.Simulation(seed=1) as sim:
+        cimba.Process("Worker", worker, "hello", pass_process=True).start()
+        sim.execute()
+
+    assert log == [("Worker", "hello")]
 
 
 def test_process_timer_interrupt_and_wait_process():
     log = []
 
-    def timed(me, ctx):
+    def timed(me):
         me.timer_set(2.0, 123)
         log.append(("yield", cimba.time()))
         sig = cimba.yield_process()
         log.append(("resume", cimba.time(), sig))
         return "timer-done"
 
-    def waiter(me, target):
+    def waiter(target):
         sig = target.wait()
         log.append(("waited", cimba.time(), sig, target.exit_value()))
 
     with cimba.Simulation(seed=1) as sim:
-        target = cimba.Process("Timed", timed).start()
+        target = cimba.Process("Timed", timed, pass_process=True).start()
         cimba.Process("Waiter", waiter, target).start()
         sim.execute()
         assert target.status == cimba.PROCESS_FINISHED
@@ -31,22 +92,22 @@ def test_process_timer_interrupt_and_wait_process():
 def test_process_resume_and_current_process():
     log = []
 
-    def target(me, ctx):
+    def target(me):
         assert cimba.current_process() is me
         sig = cimba.yield_process()
         log.append(("target", cimba.time(), sig))
         return "resumed"
 
-    def resumer(me, target_process):
+    def resumer(target_process):
         cimba.hold(1.0)
         target_process.resume(77)
 
-    def waiter(me, target_process):
+    def waiter(target_process):
         assert target_process.wait() == cimba.SUCCESS
         log.append(("waiter", cimba.time(), target_process.exit_value()))
 
     with cimba.Simulation(seed=1) as sim:
-        target_process = cimba.Process("Target", target).start()
+        target_process = cimba.Process("Target", target, pass_process=True).start()
         cimba.Process("Resumer", resumer, target_process).start()
         cimba.Process("Waiter", waiter, target_process).start()
         sim.execute()
@@ -60,7 +121,7 @@ def test_process_resume_and_current_process():
 def test_stop_at_cooperatively_unwinds_finally_blocks():
     log = []
 
-    def infinite(me, ctx):
+    def infinite():
         try:
             while True:
                 cimba.hold(1.0)
@@ -78,7 +139,7 @@ def test_stop_at_cooperatively_unwinds_finally_blocks():
 def test_process_exit_unwinds_finally_and_preserves_exit_value():
     log = []
 
-    def worker(me, ctx):
+    def worker():
         try:
             cimba.process_exit("done")
         finally:
@@ -95,7 +156,7 @@ def test_process_exit_unwinds_finally_and_preserves_exit_value():
 def test_simulation_close_cooperatively_cancels_running_processes():
     log = []
 
-    def infinite(me, ctx):
+    def infinite():
         try:
             while True:
                 cimba.hold(1.0)
@@ -112,17 +173,17 @@ def test_simulation_close_cooperatively_cancels_running_processes():
 def test_stopping_process_waiting_on_process_unwinds_cleanly():
     log = []
 
-    def child(me, ctx):
+    def child():
         while True:
             cimba.hold(1.0)
 
-    def waiter(me, target):
+    def waiter(target):
         try:
             target.wait()
         finally:
             log.append(("waiter-cancelled", cimba.time()))
 
-    def stopper(me, target):
+    def stopper(target):
         cimba.hold(1.0)
         assert target.stop() == cimba.SUCCESS
 

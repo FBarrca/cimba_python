@@ -26,14 +26,14 @@ class Trial:
         return self.sum_wait / self.obj_cnt
 
 
-def arrival_process(me, ctx: Trial) -> None:
+def arrival_process(ctx: Trial) -> None:
     queue = ctx.queue
     for _ in range(ctx.num_objects):
         cimba.hold(cimba.exponential(ctx.arr_mean))
         queue.put(cimba.time())
 
 
-def service_process(me, ctx: Trial) -> None:
+def service_process(ctx: Trial) -> None:
     queue = ctx.queue
     while True:
         sig, arrival_time = queue.get()

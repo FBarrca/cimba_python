@@ -25,10 +25,11 @@ Processes
    Return the currently running :class:`cimba.Process`, or ``None`` outside
    process execution.
 
-.. py:class:: cimba.Process(name, func, context=None, priority=0)
+.. py:class:: cimba.Process(name, target, /, *args, priority=0, pass_process=False, **kwargs)
 
    Named stackful Cimba process executing a Python callable. The callable is
-   called as ``func(process, context)``.
+   called as ``target(*args, **kwargs)``. When ``pass_process`` is true, it is
+   called as ``target(process, *args, **kwargs)``.
 
    .. py:attribute:: name
 

@@ -28,7 +28,7 @@ def run_two_large_ship_scenario(num_large_berths: int, seed: int = 42) -> float:
                 "min_depth": 13.0,
                 "unloading_time": 2.0,
             }
-            proc = cimba.Process(f"Ship_{idx:06d}_large", ship_proc, ctx)
+            proc = cimba.Process(f"Ship_{idx:06d}_large", ship_proc, ctx, pass_process=True)
             ctx["ship_by_process"][proc] = ship
             proc.start()
 

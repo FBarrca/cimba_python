@@ -8,7 +8,7 @@ This is the smallest useful Cimba model: a process that periodically wakes up.
    import cimba
 
 
-   def ticker(me, ticks):
+   def ticker(ticks):
        while True:
            cimba.hold(1.0)
            ticks.append(cimba.time())

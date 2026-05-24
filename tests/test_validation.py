@@ -15,7 +15,7 @@ def test_amount_capacity_handle_seed_and_priority_validation():
     with pytest.raises(OverflowError):
         cimba.seed(1 << 64)
     with pytest.raises(OverflowError):
-        cimba.Process("Bad", lambda me, ctx: None, priority=1 << 63)
+        cimba.Process("Bad", lambda: None, priority=1 << 63)
 
     with cimba.Simulation(seed=1):
         buf = cimba.Buffer("Buf", capacity=1)
@@ -33,7 +33,7 @@ def test_amount_capacity_handle_seed_and_priority_validation():
 
 def test_duration_and_signal_validation():
     with cimba.Simulation(seed=1):
-        proc = cimba.Process("Proc", lambda me, ctx: None).start()
+        proc = cimba.Process("Proc", lambda: None).start()
         with pytest.raises(ValueError):
             proc.timer_add(-1.0)
         with pytest.raises(ValueError):

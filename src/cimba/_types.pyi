@@ -13,7 +13,7 @@ _ProcessStatus: TypeAlias = int
 _QueueHandle: TypeAlias = int
 _TimerHandle: TypeAlias = int
 
-_ProcessFunc: TypeAlias = Callable[["Process", Any], object]
+_ProcessFunc: TypeAlias = Callable[..., object]
 _ConditionPredicate: TypeAlias = Callable[["Process | None", Any], bool]
 
 _BufferPutResult: TypeAlias = tuple[_ProcessSignal, _Amount]

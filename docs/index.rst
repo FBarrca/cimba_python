@@ -21,7 +21,7 @@ A small example
     import cimba
 
 
-    def clock(me, name):
+    def clock(name):
         while True:
             cimba.hold(1.0)
             print(f"{cimba.time():.0f}: {name}")

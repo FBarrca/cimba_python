@@ -21,7 +21,7 @@ This model has one arrival process, one service process, and one
        average_queue_length: float = 0.0
 
 
-   def arrival(me, trial):
+   def arrival(trial):
        mean = 1.0 / trial.arrival_rate
        while True:
            cimba.hold(cimba.exponential(mean))
@@ -29,7 +29,7 @@ This model has one arrival process, one service process, and one
            trial.queue.put(1)
 
 
-   def service(me, trial):
+   def service(trial):
        mean = 1.0 / trial.service_rate
        while True:
            trial.queue.get(1)
@@ -37,7 +37,7 @@ This model has one arrival process, one service process, and one
            trial.services += 1
 
 
-   def recorder(me, trial):
+   def recorder(trial):
        trial.queue.start_recording()
        cimba.hold(trial.duration)
        trial.queue.stop_recording()

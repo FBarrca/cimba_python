@@ -22,11 +22,12 @@ Processes
 ---------
 
 A :class:`cimba.Process` is an active simulated entity. It runs a Python
-callable with two arguments: the process object and a context object.
+callable with the positional and keyword arguments you pass to
+:class:`cimba.Process`.
 
 .. code-block:: python
 
-   def worker(me, context):
+   def worker(context):
        cimba.hold(5.0)
        context.append(cimba.time())
 
