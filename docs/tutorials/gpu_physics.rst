@@ -14,6 +14,14 @@ summary object collects detections.
 The AWACS Scenario on a Single CPU
 ----------------------------------
 
+The C tutorial visualizes the full scenario in ParaView:
+
+.. figure:: ../../subprojects/cimba/images/tut_5_1.png
+   :alt: AWACS aircraft, terrain, and detected ground targets.
+
+   A snapshot of the AWACS scenario used to motivate GPU-backed simulation
+   physics.
+
 .. literalinclude:: ../../tutorial/tut_5_1.py
    :language: python
 

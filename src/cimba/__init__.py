@@ -81,6 +81,7 @@ from .cmb_resource import Resource
 from .cmb_resourcepool import ResourcePool
 from .cmb_timeseries import TimeSeries
 from .cmb_wtdsummary import WeightedSummary
+from . import reporting
 
 __all__ = [
     "CANCELLED",
@@ -152,6 +153,7 @@ __all__ = [
     "seed",
     "set_native_thread_hooks",
     "student_t",
+    "reporting",
     "time",
     "triangular",
     "uniform",

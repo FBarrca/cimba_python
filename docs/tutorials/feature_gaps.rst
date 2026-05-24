@@ -11,9 +11,16 @@ as Python bindings:
 * User-level native logger calls such as ``cmb_logger_user()``. Python exposes
   logger flag controls, but not formatted user log records with native
   timestamp/process/function prefixes.
-* Text report helpers such as buffer reports, histograms, and correlogram
-  printers. Python exposes ``values()``, ``summary()``, ``acf()``, and
-  ``pacf()`` so applications can format or plot the results themselves.
+* Native ``FILE *`` text report printers are intentionally not exposed. Use the
+  structured :mod:`cimba.reporting` helpers instead:
+
+  .. code-block:: python
+
+     report = cimba.reporting.history_report(history, lags=20)
+     print(cimba.reporting.format_report(report))
+
+  Install ``cimba[plot]`` to use helpers such as
+  :func:`cimba.reporting.plot_report`.
 * Internal C containers such as ``cmi_hashheap`` and ``cmi_slist``. Python code
   should normally use dictionaries, lists, sets, :class:`cimba.ObjectQueue`, or
   :class:`cimba.PriorityQueue`.

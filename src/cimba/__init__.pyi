@@ -83,5 +83,6 @@ from .cmb_resource import Resource as Resource
 from .cmb_resourcepool import ResourcePool as ResourcePool
 from .cmb_timeseries import TimeSeries as TimeSeries
 from .cmb_wtdsummary import WeightedSummary as WeightedSummary
+from . import reporting as reporting
 
 __version__: Final[str]

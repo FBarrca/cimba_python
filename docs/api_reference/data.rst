@@ -74,3 +74,6 @@ Data Collection
    .. py:attribute:: max
    .. py:attribute:: median
    .. py:method:: close()
+
+See :mod:`cimba.reporting` for structured summaries, histograms,
+correlograms, and optional Matplotlib plots built from these data objects.

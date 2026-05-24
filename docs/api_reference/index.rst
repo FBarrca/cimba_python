@@ -12,5 +12,6 @@ package.
    processes
    queues_resources
    data
+   reporting
    random
    logging

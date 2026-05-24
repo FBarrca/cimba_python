@@ -27,6 +27,9 @@ classifiers = [
 ]
 dependencies = []
 
+[project.optional-dependencies]
+plot = ["matplotlib>=3.8"]
+
 [project.urls]
 Homepage = "https://github.com/FBarrca/cimba_python"
 Repository = "https://github.com/FBarrca/cimba_python"

@@ -68,6 +68,7 @@ py.install_sources(
         'src/cimba/cmb_timeseries.pyi',
         'src/cimba/cmb_wtdsummary.py',
         'src/cimba/cmb_wtdsummary.pyi',
+        'src/cimba/reporting.py',
         'src/cimba/_types.pyi',
         'src/cimba/_cimba.pyi',  # type stub so editors get hover/autocomplete
     ),
