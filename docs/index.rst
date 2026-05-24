@@ -9,9 +9,9 @@ resources, random distributions, and time-weighted statistics while keeping the
 model code in Python.
 
 If you are new to Cimba, start with :doc:`cimba_intro/index`. If you already
-know the basics, the :doc:`topical_guides/index`, :doc:`examples/index`, and
-:doc:`api_reference/index` sections are usually the shortest route to an
-answer.
+know the basics, the :doc:`tutorials/index`, :doc:`topical_guides/index`,
+:doc:`examples/index`, and :doc:`api_reference/index` sections are usually the
+shortest route to an answer.
 
 A small example
 ---------------
@@ -40,6 +40,7 @@ This creates a simulation, starts a process, advances simulated time with
     :caption: Contents:
 
     cimba_intro/index
+    tutorials/index
     topical_guides/index
     examples/index
     api_reference/index

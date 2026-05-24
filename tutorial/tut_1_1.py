@@ -30,8 +30,7 @@ def service(me, ctx: MM1Trial):
         ctx.services += 1
 
 
-def end_sim(me, ctx: MM1Trial):
-    cimba.hold(ctx.duration)
+def end_sim(subject, ctx: MM1Trial):
     ctx.arrival_process.stop()
     ctx.service_process.stop()
     ctx.queue.stop_recording()
@@ -46,7 +45,7 @@ def run(seed: int = 11, stop_time: float = 25.0) -> MM1Trial:
         trial.queue.start_recording()
         trial.arrival_process = cimba.Process("Arrival", arrival, trial).start()
         trial.service_process = cimba.Process("Service", service, trial).start()
-        cimba.Process("EndSimulation", end_sim, trial).start()
+        sim.schedule(end_sim, trial.duration, obj=trial)
         sim.execute()
 
         trial.avg_queue_length = trial.queue.history().summary().mean

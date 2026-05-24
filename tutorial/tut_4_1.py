@@ -42,7 +42,6 @@ def ship_proc(me, ctx):
     cimba.hold(0.5)
     berth.release(1)
     ctx["tugs"].release(ship["tugs_needed"])
-    ctx["harbormaster"].signal()
 
     system_time = cimba.time() - t_arrival
     ctx["departed"].put((me.name, ship["size"], system_time))
@@ -75,6 +74,7 @@ def run_harbor_trial(seed: int = 41) -> dict[str, object]:
             "time_in_system": [cimba.Dataset(), cimba.Dataset()],
             "ship_by_process": {},
         }
+        ctx["harbormaster"].subscribe(ctx["tugs"], *ctx["berths"])
         ship = {
             "size": SMALL,
             "tugs_needed": 1,

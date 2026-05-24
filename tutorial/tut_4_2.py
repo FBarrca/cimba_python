@@ -18,6 +18,7 @@ def run_two_large_ship_scenario(num_large_berths: int, seed: int = 42) -> float:
             "time_in_system": [cimba.Dataset(), cimba.Dataset()],
             "ship_by_process": {},
         }
+        ctx["harbormaster"].subscribe(ctx["tugs"], *ctx["berths"])
 
         for idx in range(2):
             ship = {

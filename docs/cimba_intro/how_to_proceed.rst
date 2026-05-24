@@ -4,6 +4,7 @@ How to Proceed
 After the 10-minute introduction, the usual next steps are:
 
 * Read :doc:`../examples/index` for complete runnable models.
+* Work through :doc:`../tutorials/index` for the migrated tutorial sequence.
 * Use :doc:`../topical_guides/index` when you want a deeper explanation of one
   part of the system.
 * Keep :doc:`../api_reference/index` open while writing model code.

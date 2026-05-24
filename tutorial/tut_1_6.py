@@ -62,16 +62,36 @@ def run_experiment(
     rhos: Iterable[float] = (0.25, 0.50, 0.75),
     replications: int = 2,
     duration: float = 2500.0,
+    seed: int = 1600,
+    processes: int | None = 2,
 ) -> list[dict[str, float]]:
+    rhos = tuple(rhos)
+    grid = [(rho, rep) for rho in rhos for rep in range(replications)]
+
+    def trial_fn(index, trial_seed):
+        rho, rep = grid[index]
+        trial = run_mm1_trial(
+            MM1Trial(
+                arr_rate=rho,
+                srv_rate=1.0,
+                duration=duration,
+                seed=trial_seed,
+            )
+        )
+        return {
+            "rho": rho,
+            "replication": rep,
+            "avg_queue_length": trial.avg_queue_length,
+        }
+
+    samples = cimba.run_experiment(trial_fn, n=len(grid), seed=seed, processes=processes)
     rows = []
     for rho in rhos:
-        samples = []
-        for rep in range(replications):
-            trial = run_mm1_trial(
-                MM1Trial(arr_rate=rho, srv_rate=1.0, duration=duration, seed=1600 + rep + int(rho * 1000))
-            )
-            samples.append(trial.avg_queue_length)
-        rows.append({"rho": rho, "avg_queue_length": sum(samples) / len(samples)})
+        summary = cimba.DataSummary()
+        for sample in samples:
+            if sample["rho"] == rho:
+                summary.add(sample["avg_queue_length"])
+        rows.append({"rho": rho, "avg_queue_length": summary.mean})
     return rows
 
 
