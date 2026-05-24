@@ -5,6 +5,21 @@ Core
 
    Return the version string reported by the bundled Cimba C library.
 
+.. py:function:: cimba.run_experiment(trial_fn, n=None, *, seed=None, seeds=None, backend="process", processes=None)
+
+   Run independent replications of ``trial_fn(index, seed)`` and return results
+   indexed by replication.
+
+   The default ``backend="process"`` uses forked worker processes and is
+   recommended for Python-defined simulations. Return pickleable values such as
+   floats, tuples, or dictionaries. ``processes`` controls the worker count and
+   defaults to :class:`multiprocessing.Pool` behavior.
+
+   ``backend="thread"`` uses Cimba's native pthread worker pool inside one
+   Python process. It can return in-process native Cimba objects and only
+   parallelizes on free-threaded Python builds; GIL-enabled interpreters run the
+   trials serially with a warning.
+
 .. py:function:: cimba.run_native_experiment(experiment_buffer, trial_struct_size, trial_func_capsule)
 
    Run native Cimba pthread replications over a writable C-contiguous trial

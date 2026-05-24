@@ -4,10 +4,11 @@ Python bindings for [**Cimba**](https://github.com/ambonvik/cimba) — a
 multithreaded discrete-event-simulation library written in C (POSIX pthreads for
 parallel replications, stackful coroutines for concurrent processes per thread).
 
-> **Status: early bindings.** The package wraps the core single-thread Cimba
-> simulation API: `Simulation`, `Process`, buffers, object/priority queues,
-> resources, conditions, random distributions, and summary/time-series helpers.
-> Parallel experiment orchestration is still a later layer.
+> **Status: early bindings.** The package wraps the core Cimba simulation API:
+> `Simulation`, `Process`, buffers, object/priority queues, resources,
+> conditions, random distributions, and summary/time-series helpers. It also
+> provides `run_experiment` for parallel replications — see
+> [Parallel experiments](#parallel-experiments).
 
 ## Benchmark
 
@@ -115,6 +116,53 @@ with cimba.Simulation(seed=123) as sim:
 created while a simulation is active are kept alive by the simulation and closed
 in reverse creation order, so `Process(...).start()` is safe even if you do not
 store the process in a local variable.
+
+## Parallel experiments
+
+`cimba.run_experiment` runs independent replications. Your
+`trial_fn(index, seed)` builds and runs a `Simulation` and returns a result;
+results come back as a list indexed by replication.
+
+The default `backend="process"` is recommended for Python-defined simulations.
+It uses forked worker processes, so it parallelizes on standard GIL builds and
+on free-threaded builds. Return plain pickleable metrics such as floats, tuples,
+or dictionaries from each trial, then aggregate those results in the parent
+process.
+
+```python
+import cimba
+
+
+def trial(index, seed):
+    with cimba.Simulation(seed=seed) as sim:
+        queue = cimba.Buffer("Queue")
+        queue.start_recording()
+        cimba.Process("Arrival", arrival, queue).start()
+        cimba.Process("Service", service, queue).start()
+        sim.stop_at(2000.0)
+        sim.execute()
+        queue.stop_recording()
+        return queue.history().summary().mean
+
+
+means = cimba.run_experiment(trial, n=100, seed=12345)  # backend="process"
+```
+
+Per-trial seeds are derived from `seed` for independent streams (or pass an
+explicit `seeds=` sequence). Set `processes=` to control the process pool size;
+`None` delegates to `multiprocessing.Pool`.
+
+The advanced `backend="thread"` path runs replications inside one Python
+process using Cimba's native pthread worker pool. It can return in-process native
+Cimba objects such as `DataSummary`, `WeightedSummary`, and `TimeSeries`, and it
+does not require pickling the trial function or result. It only runs trials in
+parallel on a free-threaded (no-GIL) build, `python3.13t` or `python3.14t`; on a
+standard interpreter it runs serially and warns once. Use `cimba.gil_enabled()`
+to detect which interpreter you have.
+
+```bash
+uv run --python 3.13t python -c "import cimba; print(cimba.gil_enabled())"  # -> False
+```
 
 ## Build a wheel
 

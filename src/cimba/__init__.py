@@ -1,6 +1,12 @@
 """Python bindings for Cimba, a discrete-event-simulation library."""
 
-from .cimba import native_version, run_native_experiment, set_native_thread_hooks
+from .cimba import (
+    gil_enabled,
+    native_version,
+    run_experiment,
+    run_native_experiment,
+    set_native_thread_hooks,
+)
 from .cmb_buffer import Buffer, UNLIMITED
 from .cmb_condition import Condition
 from .cmb_datasummary import DataSummary
@@ -117,6 +123,7 @@ __all__ = [
     "flip",
     "fmix64",
     "gamma",
+    "gil_enabled",
     "geometric",
     "hold",
     "hwseed",
@@ -139,6 +146,7 @@ __all__ = [
     "random",
     "random_u64",
     "rayleigh",
+    "run_experiment",
     "run_native_experiment",
     "seed",
     "set_native_thread_hooks",

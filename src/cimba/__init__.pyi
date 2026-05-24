@@ -3,7 +3,9 @@
 from typing import Final
 
 from .cimba import (
+    gil_enabled as gil_enabled,
     native_version as native_version,
+    run_experiment as run_experiment,
     run_native_experiment as run_native_experiment,
     set_native_thread_hooks as set_native_thread_hooks,
 )
