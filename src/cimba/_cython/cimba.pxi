@@ -17,6 +17,7 @@ from cpython.long cimport (
 from cpython.mem cimport PyMem_Free, PyMem_Malloc
 from cpython.pycapsule cimport (
     PyCapsule_CheckExact,
+    PyCapsule_GetName,
     PyCapsule_GetPointer,
     PyCapsule_IsValid,
     PyCapsule_New,
@@ -118,7 +119,7 @@ cdef extern from "cimba.h":
         double *wa
 
     ctypedef void *(*cmb_process_func)(cmb_process *cp, void *context)
-    ctypedef void (*cmb_event_func)(void *subject, void *object)
+    ctypedef void cmb_event_func(void *subject, void *object) noexcept
     ctypedef void cimba_trial_func(void *trial_struct) noexcept nogil
     ctypedef void *cimba_thread_init_func(void *usrarg, uint64_t tid) noexcept nogil
     ctypedef void cimba_thread_exit_func(void *thrctx) noexcept nogil
@@ -192,7 +193,7 @@ cdef extern from "cimba.h":
     bool cmb_event_queue_is_empty()
     uint64_t cmb_event_queue_count()
     uint64_t cmb_event_schedule(
-        cmb_event_func action,
+        cmb_event_func *action,
         void *subject,
         void *object,
         double time,
@@ -207,15 +208,15 @@ cdef extern from "cimba.h":
     bool cmb_event_cancel(uint64_t handle)
     bool cmb_event_reschedule(uint64_t handle, double time)
     bool cmb_event_reprioritize(uint64_t handle, int64_t priority)
-    cmb_event_func CMB_ANY_ACTION
+    cmb_event_func *CMB_ANY_ACTION
     void *CMB_ANY_OBJECT
     uint64_t cmb_event_pattern_count(
-        cmb_event_func action,
+        cmb_event_func *action,
         const void *subject,
         const void *object,
     )
     uint64_t cmb_event_pattern_cancel(
-        cmb_event_func action,
+        cmb_event_func *action,
         const void *subject,
         const void *object,
     )
@@ -435,6 +436,7 @@ cdef object _MISSING = object()
 cdef object _ZERO = 0
 cdef object _ONE = 1
 cdef bytes _TRIAL_FUNC_CAPSULE_NAME = b"cimba.trial_func"
+cdef bytes _EVENT_FUNC_CAPSULE_NAME = b"cimba.event_func"
 cdef bytes _THREAD_INIT_CAPSULE_NAME = b"cimba.thread_init_func"
 cdef bytes _THREAD_EXIT_CAPSULE_NAME = b"cimba.thread_exit_func"
 cdef bytes _USER_CONTEXT_CAPSULE_NAME = b"cimba.user_context"
@@ -595,6 +597,12 @@ cdef void _cancel_active_processes(object skip):
 
 
 cdef void _clear_after_cancellation_event(void *subject, void *object) noexcept with gil:
+    cdef object sim = _active_simulation_get()
+    cdef object release
+    if sim is not None:
+        release = getattr(sim, "_release_python_events", None)
+        if release is not None:
+            release()
     cmb_event_queue_clear()
 
 
@@ -640,6 +648,18 @@ cdef void *_capsule_pointer(object capsule, const char *name, str arg_name) exce
         raise TypeError(f"{arg_name} must be a PyCapsule named {expected}")
     if not PyCapsule_IsValid(capsule, name):
         raise TypeError(f"{arg_name} must be a PyCapsule named {expected}")
+    return PyCapsule_GetPointer(capsule, name)
+
+
+cdef void *_capsule_payload_pointer(object capsule, str arg_name) except *:
+    cdef const char *name
+    if capsule is None:
+        return NULL
+    if callable(capsule):
+        raise TypeError(f"{arg_name} must be a native PyCapsule, not a Python callable")
+    if not PyCapsule_CheckExact(capsule):
+        raise TypeError(f"{arg_name} must be a PyCapsule")
+    name = PyCapsule_GetName(capsule)
     return PyCapsule_GetPointer(capsule, name)
 
 
@@ -705,9 +725,18 @@ def set_native_thread_hooks(object init_capsule=None, object user_arg_capsule=No
         cimba_set_thread_hooks(initfunc, usrarg, exitfunc)
 
 
+cdef uint64_t _test_user_context = 0
+cdef uint64_t _test_event_hits = 0
+
+
 cdef void _test_trial_increment_u64(void *trial_struct) noexcept nogil:
     cdef uint64_t *fields = <uint64_t *>trial_struct
     fields[0] += 1
+
+
+cdef void _test_event_increment(void *subject, void *object) noexcept nogil:
+    global _test_event_hits
+    _test_event_hits += 1
 
 
 cdef void *_test_thread_init(void *usrarg, uint64_t tid) noexcept nogil:
@@ -718,11 +747,21 @@ cdef void _test_thread_exit(void *thrctx) noexcept nogil:
     return
 
 
-cdef uint64_t _test_user_context = 0
-
-
 def _test_trial_func_capsule():
     return PyCapsule_New(<void *>_test_trial_increment_u64, _TRIAL_FUNC_CAPSULE_NAME, NULL)
+
+
+def _test_event_func_capsule():
+    return PyCapsule_New(<void *>_test_event_increment, _EVENT_FUNC_CAPSULE_NAME, NULL)
+
+
+def _test_event_count_reset():
+    global _test_event_hits
+    _test_event_hits = 0
+
+
+def _test_event_count():
+    return <object>_test_event_hits
 
 
 def _test_thread_init_capsule():

@@ -31,6 +31,23 @@ runs one event and returns ``False`` if there is nothing left to execute.
 
 Most models use ``execute()`` and an explicit stop condition.
 
+Direct events
+-------------
+
+``schedule(callback, when, subject=None, obj=None, priority=0)`` schedules a
+Python callback at an absolute simulation time and returns the native event
+handle. The callback is called as ``callback(subject, obj)``.
+
+The returned handle can be used with ``cancel_event()``, ``reschedule_event()``,
+``reprioritize_event()``, ``is_event_scheduled()``, ``event_time()``, and
+``event_priority()``. These handle operations map directly to Cimba's native
+event queue.
+
+``schedule_native()`` is the advanced path for Cython/native extensions that
+already have a ``cmb_event_func`` pointer in a ``cimba.event_func`` capsule. It
+keeps callback dispatch entirely native; callers are responsible for native
+pointer lifetimes.
+
 Stopping
 --------
 

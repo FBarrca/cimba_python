@@ -36,6 +36,7 @@ from .cmb_process import (
     current_process,
     hold,
     process_exit,
+    wait_event,
     yield_process,
 )
 from .cmb_random import (
@@ -154,6 +155,7 @@ __all__ = [
     "time",
     "triangular",
     "uniform",
+    "wait_event",
     "weibull",
     "yield_process",
     "__version__",

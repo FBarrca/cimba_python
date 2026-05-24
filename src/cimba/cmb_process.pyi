@@ -2,7 +2,14 @@
 
 from typing import Final, NoReturn, Self
 
-from ._types import _Priority, _ProcessFunc, _ProcessSignal, _ProcessStatus, _TimerHandle
+from ._types import (
+    _EventHandle,
+    _Priority,
+    _ProcessFunc,
+    _ProcessSignal,
+    _ProcessStatus,
+    _TimerHandle,
+)
 
 SUCCESS: Final[int]
 """Process call returned normally."""
@@ -30,6 +37,10 @@ def hold(duration: float) -> _ProcessSignal:
 
 def yield_process() -> _ProcessSignal:
     """Yield the current process until another process, timer, or event resumes it."""
+    ...
+
+def wait_event(handle: _EventHandle) -> _ProcessSignal:
+    """Yield the current process until a scheduled event fires or is canceled."""
     ...
 
 def process_exit(value: object | None = None) -> NoReturn:

@@ -48,6 +48,24 @@ def yield_process() -> int:
     return <object>sig
 
 
+def wait_event(object handle) -> int:
+    """Yield the current process until a scheduled event fires or is canceled."""
+    cdef object sim = _active_simulation_get()
+    cdef uint64_t h
+    cdef int64_t sig
+    if sim is None or sim._closed:
+        raise RuntimeError("wait_event requires an active Simulation")
+    if cmb_process_current() == NULL:
+        raise RuntimeError("wait_event must be called from a running process")
+    h = _handle_to_u64(handle)
+    if not cmb_event_is_scheduled(h):
+        raise ValueError("event is not scheduled")
+    sig = cmb_process_wait_event(h)
+    if sig == _PROCESS_CANCEL_SIGNAL:
+        raise _ProcessCancelled()
+    return <object>sig
+
+
 def process_exit(object value=None):
     """Exit the current process with an optional Python exit value."""
     raise _ProcessExit(value)

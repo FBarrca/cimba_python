@@ -36,6 +36,7 @@ from .cmb_process import (
     current_process as current_process,
     hold as hold,
     process_exit as process_exit,
+    wait_event as wait_event,
     yield_process as yield_process,
 )
 from .cmb_random import (

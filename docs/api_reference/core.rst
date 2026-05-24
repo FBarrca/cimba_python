@@ -55,10 +55,49 @@ Core
 
       Number of scheduled future events.
 
+   .. py:attribute:: current_event
+
+      Handle of the currently or most recently executed event.
+
    .. py:method:: stop_at(when, priority=0)
 
       Schedule cooperative cancellation of owned Python processes, then stop
       the run at absolute simulation time ``when``.
+
+   .. py:method:: schedule(callback, when, subject=None, obj=None, priority=0)
+
+      Schedule ``callback(subject, obj)`` at absolute simulation time ``when``.
+      This is a Python-dispatch event; native queue ordering and handle lookup
+      still stay in C.
+
+   .. py:method:: schedule_native(action_capsule, when, subject_capsule=None, object_capsule=None, priority=0)
+
+      Schedule a native ``cmb_event_func`` from a ``cimba.event_func`` capsule.
+      The caller owns any native subject/object pointer lifetimes.
+
+   .. py:method:: cancel_event(handle)
+
+      Cancel a scheduled event by handle and return whether it was found.
+
+   .. py:method:: reschedule_event(handle, when)
+
+      Move a scheduled event to another absolute simulation time.
+
+   .. py:method:: reprioritize_event(handle, priority)
+
+      Change a scheduled event's priority.
+
+   .. py:method:: is_event_scheduled(handle)
+
+      Return whether the event handle is still scheduled.
+
+   .. py:method:: event_time(handle)
+
+      Return the scheduled absolute time for an event.
+
+   .. py:method:: event_priority(handle)
+
+      Return the scheduled priority for an event.
 
    .. py:method:: clear()
 

@@ -9,6 +9,12 @@ Processes
 
    Yield the current process until another process, timer, or event resumes it.
 
+.. py:function:: cimba.wait_event(handle)
+
+   Yield the current process until the scheduled event fires or is canceled.
+   Returns ``SUCCESS`` when the event fires and ``CANCELLED`` when it is
+   canceled.
+
 .. py:function:: cimba.process_exit(value=None)
 
    Exit the current process with an optional Python exit value while unwinding

@@ -14,6 +14,7 @@ from ._cimba import (
     current_process,
     hold,
     process_exit,
+    wait_event,
     yield_process,
 )
 
@@ -31,5 +32,6 @@ __all__ = [
     "current_process",
     "hold",
     "process_exit",
+    "wait_event",
     "yield_process",
 ]
