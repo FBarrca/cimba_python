@@ -24,7 +24,12 @@ cdef class Dataset:
 
     def values(self):
         _raise_if_closed(self)
-        return [self._ptr.xa[i] for i in range(self._ptr.count)]
+        cdef Py_ssize_t count = <Py_ssize_t>self._ptr.count
+        cdef Py_ssize_t i
+        cdef list result = [None] * count
+        for i in range(count):
+            result[i] = self._ptr.xa[i]
+        return result
 
     def summary(self):
         _raise_if_closed(self)

@@ -1,7 +1,8 @@
 # This file is included by ../_cimba.pyx.
 
-class _PriorityQueueEntry:
-    __slots__ = ("handle", "obj")
+cdef class _PriorityQueueEntry:
+    cdef uint64_t handle
+    cdef object obj
 
     def __init__(self, object obj):
         self.handle = 0
@@ -56,7 +57,7 @@ cdef class PriorityQueue:
         """Put an object and return ``(signal, handle)``."""
         if self._closed:
             raise RuntimeError("PriorityQueue is closed")
-        cdef object entry = _PriorityQueueEntry(obj)
+        cdef _PriorityQueueEntry entry = _PriorityQueueEntry(obj)
         cdef PyObject *op = <PyObject *>entry
         cdef uint64_t handle = 0
         cdef int64_t pri = 0 if priority is _ZERO else _priority_to_i64(priority)
@@ -70,7 +71,7 @@ cdef class PriorityQueue:
         if sig != SUCCESS:
             Py_DECREF(<object>op)
         else:
-            entry.handle = <object>handle
+            entry.handle = handle
             self._objects[<object>handle] = entry
         if sig == _PROCESS_CANCEL_SIGNAL:
             raise _ProcessCancelled()
@@ -82,13 +83,13 @@ cdef class PriorityQueue:
             raise RuntimeError("PriorityQueue is closed")
         cdef void *ptr = NULL
         cdef int64_t sig = cmb_priorityqueue_get(self._ptr, &ptr)
-        cdef object entry
+        cdef _PriorityQueueEntry entry
         if sig != SUCCESS:
             if sig == _PROCESS_CANCEL_SIGNAL:
                 raise _ProcessCancelled()
             return sig, None
-        entry = _object_from_owned_pointer(ptr)
-        self._objects.pop(entry.handle, None)
+        entry = <_PriorityQueueEntry>_object_from_owned_pointer(ptr)
+        self._objects.pop(<object>entry.handle, None)
         return sig, entry.obj
 
     def position(self, object handle) -> int:
@@ -124,12 +125,12 @@ cdef class PriorityQueue:
 
     cdef void _decref_queued_objects(self):
         cdef void *ptr = NULL
-        cdef object entry
+        cdef _PriorityQueueEntry entry
         while self._ptr != NULL and cmb_priorityqueue_length(self._ptr) > 0:
             ptr = NULL
             if cmb_priorityqueue_get(self._ptr, &ptr) == SUCCESS and ptr != NULL:
-                entry = _object_from_owned_pointer(ptr)
-                self._objects.pop(entry.handle, None)
+                entry = <_PriorityQueueEntry>_object_from_owned_pointer(ptr)
+                self._objects.pop(<object>entry.handle, None)
 
     def close(self) -> None:
         if self._closed:

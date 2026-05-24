@@ -42,10 +42,12 @@ cdef class TimeSeries:
     def values(self):
         """Return ``(time, value, weight)`` tuples."""
         _raise_if_closed(self)
-        return [
-            (self._ptr.ta[i], self._ptr.ds.xa[i], self._ptr.wa[i])
-            for i in range(self._ptr.ds.count)
-        ]
+        cdef Py_ssize_t count = <Py_ssize_t>self._ptr.ds.count
+        cdef Py_ssize_t i
+        cdef list result = [None] * count
+        for i in range(count):
+            result[i] = (self._ptr.ta[i], self._ptr.ds.xa[i], self._ptr.wa[i])
+        return result
 
     def summary(self):
         _raise_if_closed(self)

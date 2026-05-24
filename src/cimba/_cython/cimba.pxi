@@ -2,9 +2,18 @@
 
 import operator
 import threading
-import builtins
 
 cimport cython
+from cpython.bool cimport PyBool_Check
+from cpython.float cimport PyFloat_AS_DOUBLE, PyFloat_CheckExact
+from cpython.long cimport (
+    PY_LONG_LONG,
+    PyLong_AsDouble,
+    PyLong_AsLongLong,
+    PyLong_AsUnsignedLongLong,
+    PyLong_CheckExact,
+    uPY_LONG_LONG,
+)
 from cpython.mem cimport PyMem_Free, PyMem_Malloc
 from cpython.pycapsule cimport (
     PyCapsule_CheckExact,
@@ -411,8 +420,8 @@ cdef void _raise_if_closed(object obj):
         raise RuntimeError(f"{obj.__class__.__name__} is closed")
 
 
-cdef object _index_value(object value, str name):
-    if isinstance(value, builtins.bool):
+cdef inline object _index_value(object value, str name):
+    if PyBool_Check(value):
         raise TypeError(f"{name} must be an integer")
     try:
         return operator.index(value)
@@ -420,8 +429,14 @@ cdef object _index_value(object value, str name):
         raise TypeError(f"{name} must be an integer") from None
 
 
-cdef uint64_t _u64_value(object value, str name, uint64_t min_value) except *:
+cdef inline uint64_t _u64_value(object value, str name, uint64_t min_value) except *:
+    cdef uPY_LONG_LONG exact_value
     cdef object ivalue = _index_value(value, name)
+    if PyLong_CheckExact(ivalue):
+        if ivalue < <object>min_value:
+            raise ValueError(f"{name} must be at least {min_value}")
+        exact_value = PyLong_AsUnsignedLongLong(ivalue)
+        return <uint64_t>exact_value
     if ivalue < <object>min_value:
         raise ValueError(f"{name} must be at least {min_value}")
     if ivalue > _UINT64_MAX_OBJ:
@@ -429,47 +444,57 @@ cdef uint64_t _u64_value(object value, str name, uint64_t min_value) except *:
     return <uint64_t>ivalue
 
 
-cdef int64_t _i64_value(object value, str name) except *:
+cdef inline int64_t _i64_value(object value, str name) except *:
+    cdef PY_LONG_LONG exact_value
     cdef object ivalue = _index_value(value, name)
+    if PyLong_CheckExact(ivalue):
+        exact_value = PyLong_AsLongLong(ivalue)
+        return <int64_t>exact_value
     if ivalue < _INT64_MIN_OBJ or ivalue > _INT64_MAX_OBJ:
         raise OverflowError(f"{name} must fit in int64")
     return <int64_t>ivalue
 
 
-cdef uint64_t _capacity_to_u64(object capacity):
-    cdef object value = UNLIMITED if capacity is None else capacity
-    return _u64_value(value, "capacity", 1)
+cdef inline uint64_t _capacity_to_u64(object capacity) except *:
+    if capacity is None:
+        return _UNLIMITED_U64
+    return _u64_value(capacity, "capacity", 1)
 
 
-cdef uint64_t _amount_to_u64(object amount):
+cdef inline uint64_t _amount_to_u64(object amount) except *:
     return _u64_value(amount, "amount", 1)
 
 
-cdef uint64_t _handle_to_u64(object handle, str name="handle"):
+cdef inline uint64_t _handle_to_u64(object handle, str name="handle") except *:
     return _u64_value(handle, name, 1)
 
 
-cdef uint64_t _seed_to_u64(object seed):
+cdef inline uint64_t _seed_to_u64(object seed) except *:
     return _u64_value(seed, "seed", 0)
 
 
-cdef int64_t _priority_to_i64(object priority):
+cdef inline int64_t _priority_to_i64(object priority) except *:
     return _i64_value(priority, "priority")
 
 
-cdef int64_t _signal_to_i64(object signal, bint allow_cancel=False):
+cdef inline int64_t _signal_to_i64(object signal, bint allow_cancel=False) except *:
     cdef int64_t sig = _i64_value(signal, "signal")
     if sig == _PROCESS_CANCEL_SIGNAL and not allow_cancel:
         raise ValueError("signal value is reserved for internal process cancellation")
     return sig
 
 
-cdef double _duration_to_double(object duration, str name, bint allow_zero=True) except *:
+cdef inline double _duration_to_double(object duration, str name, bint allow_zero=True) except *:
     cdef double value
-    try:
-        value = float(duration)
-    except (TypeError, ValueError):
-        raise TypeError(f"{name} must be a real number") from None
+    if PyFloat_CheckExact(duration):
+        value = PyFloat_AS_DOUBLE(duration)
+    elif PyLong_CheckExact(duration):
+        value = PyLong_AsDouble(duration)
+    else:
+        try:
+            value = float(duration)
+        except (TypeError, ValueError):
+            raise TypeError(f"{name} must be a real number") from None
     if not isfinite(value):
         raise ValueError(f"{name} must be finite")
     if value < 0.0 or (not allow_zero and value == 0.0):
@@ -479,13 +504,11 @@ cdef double _duration_to_double(object duration, str name, bint allow_zero=True)
     return value
 
 
-cdef uint16_t _lags_to_u16(object lags) except *:
-    cdef object ivalue = _index_value(lags, "lags")
-    if ivalue < 0:
-        raise ValueError("lags must be non-negative")
-    if ivalue > 65535:
+cdef inline uint16_t _lags_to_u16(object lags) except *:
+    cdef uint64_t value = _u64_value(lags, "lags", 0)
+    if value > 65535:
         raise OverflowError("lags must fit in uint16")
-    return <uint16_t>ivalue
+    return <uint16_t>value
 
 
 cdef bytes _name_bytes(str name):
