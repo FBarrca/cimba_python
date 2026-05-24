@@ -1,21 +1,16 @@
-# cimba (Python)
+![Cimba logo](subprojects/cimba/images/logo_large.jpg)
 
-Python bindings for [**Cimba**](https://github.com/ambonvik/cimba) — a
-multithreaded discrete-event-simulation library written in C (POSIX pthreads for
-parallel replications, stackful coroutines for concurrent processes per thread).
+# Cimba Python
 
-> **Status: early bindings.** The package wraps the core Cimba simulation API:
-> `Simulation`, `Process`, buffers, object/priority queues, resources,
-> conditions, random distributions, and summary/time-series helpers. It also
-> provides `run_experiment` for parallel replications — see
-> [Parallel experiments](#parallel-experiments).
+## Fast discrete event simulation for Python
 
-## Benchmark
+Cimba Python is a Python interface to [Cimba](https://github.com/ambonvik/cimba),
+a multithreaded discrete event simulation engine written in C and assembly.
 
-The `benchmarks/` folder contains Python-binding versions of Cimba's upstream
-M/M/1 queue benchmarks, so the same workload can be compared across SimPy,
-Cimba's C API, and these Python bindings. The benchmark uses 1,000,000 objects
-per trial; the multi-core case runs 100 independent trials.
+It is designed for Python simulation models that need more speed than pure
+Python event scheduling can usually provide. In the included M/M/1 benchmark,
+Cimba Python runs about **8.5-8.9x faster than SimPy**, while keeping model code
+in Python.
 
 On an AMD Ryzen 7 9700X under WSL Ubuntu 24.04, averaged over 10 runs:
 
@@ -24,63 +19,31 @@ On an AMD Ryzen 7 9700X under WSL Ubuntu 24.04, averaged over 10 runs:
 | Single core, single trial | 3.185 s | 0.375 s | 0.095 s |
 | Multicore, 100 trials | 41.820 s | 4.698 s | 1.178 s |
 
-Headline speedups:
-
-| Benchmark | Cimba Python vs SimPy | Cimba C vs SimPy | Cimba C vs Cimba Python |
-| --- | ---: | ---: | ---: |
-| Single core, single trial | 8.5x faster | 33.7x faster | 4.0x faster |
-| Multicore, 100 trials | 8.9x faster | 35.5x faster | 4.0x faster |
-
-In throughput terms, the Python bindings process about 10.7M events/sec in the
-single-trial benchmark and 85.1M events/sec in the 100-trial benchmark. The full
-spreadsheet with samples and charts is
+The benchmark data and charts are in
 [`benchmarks/AMD_Ryzen_7_9700X_WSL.ods`](benchmarks/AMD_Ryzen_7_9700X_WSL.ods).
 
-## How it's put together
-
-| Piece | Where | Why |
-| --- | --- | --- |
-| Native C library | `subprojects/cimba/` (git submodule) | Lives where Meson expects subprojects; pinned to a commit; updated via git |
-| Build backend | `meson-python` (`pyproject.toml`) | Upstream already uses Meson; reuses its NASM/C23/pthreads build for free |
-| Build wiring | `meson.build` | Pulls the subproject (`my_lib_dep`), builds it **static**, links the extension against it |
-| Python package | `src/cimba/` | `src`-layout; `_cimba.pyx` is the Cython extension |
-| Tests | `tests/` | Smoke test that the extension imports and calls into C |
-
-The C library is built as a **static** archive and embedded into the
-`_cimba` extension, so a built wheel is self-contained (one `.so`, nothing to
-ship alongside it).
-
-## Prerequisites
-
-`uv` provides Python 3.13, `meson`, `ninja`, `cython`, and `meson-python`. You
-only need these on the system itself:
-
-| Tool | Why | Check |
-| --- | --- | --- |
-| **uv** | drives the build/test/run workflow | `uv --version` |
-| **git** | the C library is a submodule | `git --version` |
-| **C compiler** (gcc/clang) | compiles Cimba + the extension | `cc --version` |
-| **NASM** | Cimba's ziggurat RNG is in assembly | `nasm --version` |
-
-Cimba also links `pthreads` and `libm`, which are part of the C runtime. On
-Ubuntu/WSL the compiler + NASM come from: `sudo apt install build-essential nasm`.
-
-## Quick start (from a fresh clone)
+## Install
 
 ```bash
-git clone <repo-url> cimba_python
-cd cimba_python
-git submodule update --init --recursive    # pulls subprojects/cimba
-
-uv sync                       # creates .venv, installs deps, compiles cimba (~15s first run)
-uv run python -c "import cimba; print(cimba.native_version())"   # -> 3.0.0-beta
-uv run pytest                 # runs the wrapper smoke/behavior tests
+pip install cimba
 ```
 
-No manual `.venv` activation needed — `uv run` handles it. The first `uv sync`
-compiles the C library + Cython extension; later runs are incremental.
+or with `uv`:
 
-## Minimal simulation
+```bash
+uv add cimba
+```
+
+Python 3.13 or newer is required. The PyPI wheels embed the Cimba C library, so
+you do not need to install Cimba separately.
+
+## What is it?
+
+Cimba Python gives Python models access to Cimba's native simulation engine:
+processes, event queues, buffers, object queues, priority queues, resources,
+conditions, random distributions, time series, and summary statistics.
+
+## What does the code look like?
 
 ```python
 import cimba
@@ -112,129 +75,13 @@ with cimba.Simulation(seed=123) as sim:
     print(queue.history().summary().mean)
 ```
 
-`Simulation` owns Cimba's thread-local event queue and random generator. Objects
-created while a simulation is active are kept alive by the simulation and closed
-in reverse creation order, so `Process(...).start()` is safe even if you do not
-store the process in a local variable.
-
-## Parallel experiments
-
-`cimba.run_experiment` runs independent replications. Your
-`trial_fn(index, seed)` builds and runs a `Simulation` and returns a result;
-results come back as a list indexed by replication.
-
-The default `backend="process"` is recommended for Python-defined simulations.
-It uses forked worker processes, so it parallelizes on standard GIL builds and
-on free-threaded builds. Return plain pickleable metrics such as floats, tuples,
-or dictionaries from each trial, then aggregate those results in the parent
-process.
-
-```python
-import cimba
-
-
-def trial(index, seed):
-    with cimba.Simulation(seed=seed) as sim:
-        queue = cimba.Buffer("Queue")
-        queue.start_recording()
-        cimba.Process("Arrival", arrival, queue).start()
-        cimba.Process("Service", service, queue).start()
-        sim.stop_at(2000.0)
-        sim.execute()
-        queue.stop_recording()
-        return queue.history().summary().mean
-
-
-means = cimba.run_experiment(trial, n=100, seed=12345)  # backend="process"
-```
-
-Per-trial seeds are derived from `seed` for independent streams (or pass an
-explicit `seeds=` sequence). Set `processes=` to control the process pool size;
-`None` delegates to `multiprocessing.Pool`.
-
-The advanced `backend="thread"` path runs replications inside one Python
-process using Cimba's native pthread worker pool. It can return in-process native
-Cimba objects such as `DataSummary`, `WeightedSummary`, and `TimeSeries`, and it
-does not require pickling the trial function or result. It only runs trials in
-parallel on a free-threaded (no-GIL) build, `python3.13t` or `python3.14t`; on a
-standard interpreter it runs serially and warns once. Use `cimba.gil_enabled()`
-to detect which interpreter you have.
-
-```bash
-uv run --python 3.13t python -c "import cimba; print(cimba.gil_enabled())"  # -> False
-```
-
-## Build a wheel
-
-```bash
-uv build --wheel              # -> dist/cimba-<ver>-cp313-cp313-<platform>.whl
-# or `uv build` for wheel + sdist
-```
-
-The wheel statically embeds Cimba, so it needs no system Cimba at runtime. Verify
-that in a throwaway environment (no project, no build tools):
-
-```bash
-uv run --no-project --isolated \
-  --with dist/cimba-*.whl \
-  python -c "import cimba; print(cimba.native_version())"   # -> 3.0.0-beta
-```
-
-## Publishing from GitHub
-
-GitHub Actions owns the release path:
-
-| Workflow | Trigger | What it does |
-| --- | --- | --- |
-| `.github/workflows/ci.yml` | pushes to `master`/`main`, pull requests, manual dispatch | runs tests on pushes/PRs; manual runs also build local wheel + sdist and smoke-test the wheel |
-| `.github/workflows/release.yml` | `vX.Y.Z` tags, manual dispatch | validates version consistency, builds the sdist and Linux x86_64 wheel, publishes tagged releases to PyPI |
-
-Before the first PyPI release, configure a PyPI Trusted Publisher for the
-`cimba` project. If the project does not exist yet, create a pending publisher
-from your PyPI account's publishing settings; it will create the project on
-first successful upload.
-
-| Field | Value |
-| --- | --- |
-| Owner | `FBarrca` |
-| Repository name | `cimba_python` |
-| Workflow filename | `release.yml` |
-| Environment name | `pypi` |
-
-Then publish by bumping the version in both `pyproject.toml` and `meson.build`,
-tagging the same version, and pushing the tag:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-## Troubleshooting
-
-**`FileNotFoundError: .../build/cp313` on import.** `build/cp313/` is the
-editable dev install's build directory. If it's deleted, `uv sync` won't
-recompile (it reinstalls cimba from uv's cache), so the import breaks. Force a
-real rebuild:
-
-```bash
-uv sync --reinstall-package cimba
-```
-
-Use the same command if a plain `uv sync` doesn't pick up changes to
-`meson.build` or `pyproject.toml`. (A genuine fresh clone with a cold uv cache
-builds correctly with plain `uv sync`; `uv build` wheels are unaffected.)
-
-## Updating the bundled C library
-
-```bash
-cd subprojects/cimba
-git fetch && git checkout <commit-or-tag>
-cd ../..
-git add subprojects/cimba && git commit -m "Bump Cimba to <ref>"
-```
+More examples, tutorials, topical guides, and the API reference are in the
+[documentation](https://fbarrca.github.io/cimba_python/).
 
 ## License
 
-This wrapper is licensed under Apache-2.0 (see [`LICENSE`](LICENSE)). It bundles
-the Apache-2.0 licensed Cimba library in compiled form; see [`NOTICE`](NOTICE)
-and `subprojects/cimba/NOTICE` for attribution.
+Cimba Python is licensed under Apache-2.0. See [`LICENSE`](LICENSE) and
+[`NOTICE`](NOTICE).
+
+The bundled Cimba C library is also Apache-2.0 licensed. See
+`subprojects/cimba/NOTICE` for attribution.
