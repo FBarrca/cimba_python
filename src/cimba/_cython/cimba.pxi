@@ -22,6 +22,7 @@ from cpython.pycapsule cimport (
     PyCapsule_New,
 )
 from cpython.ref cimport PyObject, Py_INCREF, Py_DECREF
+from libc.limits cimport UINT_MAX
 from libc.math cimport isfinite
 from libc.stddef cimport size_t
 from libc.stdint cimport (
@@ -65,6 +66,9 @@ cdef extern from "cimba.h":
         uint64_t in_use
 
     cdef struct cmb_condition:
+        pass
+
+    cdef struct cmb_random_alias:
         pass
 
     cdef struct cmb_dataset:
@@ -129,14 +133,35 @@ cdef extern from "cimba.h":
     double cmb_random_uniform(double min, double max)
     double cmb_random_triangular(double min, double mode, double max)
     double cmb_random_normal(double mu, double sigma)
+    double cmb_random_lognormal(double m, double s)
+    double cmb_random_logistic(double m, double s)
+    double cmb_random_cauchy(double mode, double scale)
     double cmb_random_exponential(double mean)
+    double cmb_random_erlang(unsigned k, double mean)
+    double cmb_random_hypoexponential(unsigned n, const double *means)
+    double cmb_random_hyperexponential(unsigned n, const double *means, const double *probabilities)
     double cmb_random_gamma(double shape, double scale)
     double cmb_random_beta(double a, double b, double min, double max)
     double cmb_random_PERT(double min, double mode, double max)
     double cmb_random_PERT_mod(double min, double mode, double max, double lambd)
+    double cmb_random_weibull(double shape, double scale)
+    double cmb_random_pareto(double shape, double mode)
+    double cmb_random_chisquared(double k)
+    double cmb_random_F_dist(double a, double b)
+    double cmb_random_t_dist(double m, double s, double v)
+    double cmb_random_rayleigh(double s)
     long cmb_random_dice(long min, long max)
     bool cmb_random_flip()
     bool cmb_random_bernoulli(double p)
+    unsigned cmb_random_geometric(double p)
+    unsigned cmb_random_binomial(unsigned n, double p)
+    unsigned cmb_random_negative_binomial(unsigned m, double p)
+    unsigned cmb_random_pascal(unsigned m, double p)
+    unsigned cmb_random_poisson(double r)
+    unsigned cmb_random_loaded_dice(unsigned n, const double *probabilities)
+    cmb_random_alias *cmb_random_alias_create(unsigned n, const double *probabilities)
+    unsigned cmb_random_alias_sample(const cmb_random_alias *alias)
+    void cmb_random_alias_destroy(cmb_random_alias *alias)
 
     double cmb_time()
     void cmb_event_queue_initialize(double start_time)
