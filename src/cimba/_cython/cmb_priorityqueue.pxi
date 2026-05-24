@@ -1,5 +1,6 @@
 # This file is included by ../_cimba.pyx.
 
+@cython.freelist(1024)
 cdef class _PriorityQueueEntry:
     cdef uint64_t handle
     cdef object obj

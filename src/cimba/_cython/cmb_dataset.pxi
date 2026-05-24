@@ -34,7 +34,9 @@ cdef class Dataset:
     def summary(self):
         _raise_if_closed(self)
         cdef cmb_datasummary *summary = cmb_datasummary_create()
-        cmb_dataset_summarize(self._ptr, summary)
+        cdef cmb_dataset *src = self._ptr
+        with nogil:
+            cmb_dataset_summarize(src, summary)
         return _datasummary_owner(summary)
 
     def reset(self) -> None:
@@ -44,22 +46,31 @@ cdef class Dataset:
     def copy(self):
         _raise_if_closed(self)
         cdef Dataset copied = Dataset()
-        cmb_dataset_copy(copied._ptr, self._ptr)
+        cdef cmb_dataset *src = self._ptr
+        cdef cmb_dataset *tgt = copied._ptr
+        with nogil:
+            cmb_dataset_copy(tgt, src)
         return copied
 
     def merge(self, Dataset other):
         _raise_if_closed(self)
         _raise_if_closed(other)
         cdef Dataset merged = Dataset()
+        cdef cmb_dataset *left = self._ptr
+        cdef cmb_dataset *right = other._ptr
+        cdef cmb_dataset *tgt = merged._ptr
         cdef uint64_t i
-        cmb_dataset_copy(merged._ptr, self._ptr)
-        for i in range(other._ptr.count):
-            cmb_dataset_add(merged._ptr, other._ptr.xa[i])
+        with nogil:
+            cmb_dataset_copy(tgt, left)
+            for i in range(right.count):
+                cmb_dataset_add(tgt, right.xa[i])
         return merged
 
     def sort(self) -> None:
         _raise_if_closed(self)
-        cmb_dataset_sort(self._ptr)
+        cdef cmb_dataset *src = self._ptr
+        with nogil:
+            cmb_dataset_sort(src)
 
     def acf(self, object lags):
         _raise_if_closed(self)
@@ -67,6 +78,7 @@ cdef class Dataset:
         cdef double *values
         cdef list result
         cdef uint16_t i
+        cdef cmb_dataset *src = self._ptr
         if self._ptr.count < 2:
             raise ValueError("at least two samples are required")
         if n == 0:
@@ -77,7 +89,8 @@ cdef class Dataset:
         if values == NULL:
             raise MemoryError()
         try:
-            cmb_dataset_ACF(self._ptr, <unsigned int>n, values)
+            with nogil:
+                cmb_dataset_ACF(src, <unsigned int>n, values)
             result = [0.0] * (n + 1)
             with cython.boundscheck(False):
                 for i in range(n + 1):
@@ -92,6 +105,7 @@ cdef class Dataset:
         cdef double *values
         cdef list result
         cdef uint16_t i
+        cdef cmb_dataset *src = self._ptr
         if self._ptr.count < 3:
             raise ValueError("at least three samples are required")
         if n == 0:
@@ -102,7 +116,8 @@ cdef class Dataset:
         if values == NULL:
             raise MemoryError()
         try:
-            cmb_dataset_PACF(self._ptr, <unsigned int>n, values, NULL)
+            with nogil:
+                cmb_dataset_PACF(src, <unsigned int>n, values, NULL)
             result = [0.0] * (n + 1)
             with cython.boundscheck(False):
                 for i in range(n + 1):

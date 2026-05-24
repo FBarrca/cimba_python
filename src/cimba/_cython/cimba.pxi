@@ -348,21 +348,21 @@ cdef extern from "cimba.h":
 
     cmb_dataset *cmb_dataset_create()
     void cmb_dataset_reset(cmb_dataset *dsp)
-    uint64_t cmb_dataset_copy(cmb_dataset *tgt, const cmb_dataset *src)
+    uint64_t cmb_dataset_copy(cmb_dataset *tgt, const cmb_dataset *src) noexcept nogil
     void cmb_dataset_destroy(cmb_dataset *dsp)
-    void cmb_dataset_sort(const cmb_dataset *dsp)
-    uint64_t cmb_dataset_add(cmb_dataset *dsp, double x)
-    uint64_t cmb_dataset_summarize(const cmb_dataset *dsp, cmb_datasummary *dsump)
+    void cmb_dataset_sort(const cmb_dataset *dsp) noexcept nogil
+    uint64_t cmb_dataset_add(cmb_dataset *dsp, double x) noexcept nogil
+    uint64_t cmb_dataset_summarize(const cmb_dataset *dsp, cmb_datasummary *dsump) noexcept nogil
     uint64_t cmb_dataset_count(const cmb_dataset *dsp)
     double cmb_dataset_min(const cmb_dataset *dsp)
     double cmb_dataset_max(const cmb_dataset *dsp)
     double cmb_dataset_median(const cmb_dataset *dsp)
-    void cmb_dataset_ACF(const cmb_dataset *dsp, unsigned n, double *acf)
-    void cmb_dataset_PACF(const cmb_dataset *dsp, unsigned n, double *pacf, double *acf)
+    void cmb_dataset_ACF(const cmb_dataset *dsp, unsigned n, double *acf) noexcept nogil
+    void cmb_dataset_PACF(const cmb_dataset *dsp, unsigned n, double *pacf, double *acf) noexcept nogil
 
     cmb_datasummary *cmb_datasummary_create()
     void cmb_datasummary_reset(cmb_datasummary *dsp)
-    uint64_t cmb_datasummary_merge(cmb_datasummary *tgt, const cmb_datasummary *dsp1, const cmb_datasummary *dsp2)
+    uint64_t cmb_datasummary_merge(cmb_datasummary *tgt, const cmb_datasummary *dsp1, const cmb_datasummary *dsp2) noexcept nogil
     void cmb_datasummary_destroy(cmb_datasummary *dsp)
     uint64_t cmb_datasummary_add(cmb_datasummary *dsp, double y)
     uint64_t cmb_datasummary_count(const cmb_datasummary *dsp)
@@ -376,7 +376,7 @@ cdef extern from "cimba.h":
 
     cmb_wtdsummary *cmb_wtdsummary_create()
     void cmb_wtdsummary_reset(cmb_wtdsummary *wsp)
-    uint64_t cmb_wtdsummary_merge(cmb_wtdsummary *tgt, const cmb_wtdsummary *ws1, const cmb_wtdsummary *ws2)
+    uint64_t cmb_wtdsummary_merge(cmb_wtdsummary *tgt, const cmb_wtdsummary *ws1, const cmb_wtdsummary *ws2) noexcept nogil
     void cmb_wtdsummary_destroy(cmb_wtdsummary *wsp)
     uint64_t cmb_wtdsummary_add(cmb_wtdsummary *wsp, double x, double w)
     uint64_t cmb_wtdsummary_count(const cmb_wtdsummary *wsp)
@@ -391,18 +391,18 @@ cdef extern from "cimba.h":
     cmb_timeseries *cmb_timeseries_create()
     void cmb_timeseries_reset(cmb_timeseries *tsp)
     void cmb_timeseries_destroy(cmb_timeseries *tsp)
-    uint64_t cmb_timeseries_copy(cmb_timeseries *tgt, const cmb_timeseries *src)
+    uint64_t cmb_timeseries_copy(cmb_timeseries *tgt, const cmb_timeseries *src) noexcept nogil
     uint64_t cmb_timeseries_add(cmb_timeseries *tsp, double x, double t)
     uint64_t cmb_timeseries_finalize(cmb_timeseries *tsp, double t)
-    void cmb_timeseries_sort_x(cmb_timeseries *tsp)
-    void cmb_timeseries_sort_t(cmb_timeseries *tsp)
-    uint64_t cmb_timeseries_summarize(const cmb_timeseries *tsp, cmb_wtdsummary *wsp)
+    void cmb_timeseries_sort_x(cmb_timeseries *tsp) noexcept nogil
+    void cmb_timeseries_sort_t(cmb_timeseries *tsp) noexcept nogil
+    uint64_t cmb_timeseries_summarize(const cmb_timeseries *tsp, cmb_wtdsummary *wsp) noexcept nogil
     uint64_t cmb_timeseries_count(const cmb_timeseries *tsp)
     double cmb_timeseries_min(const cmb_timeseries *tsp)
     double cmb_timeseries_max(const cmb_timeseries *tsp)
     double cmb_timeseries_median(const cmb_timeseries *tsp)
-    void cmb_timeseries_ACF(const cmb_timeseries *tsp, uint16_t n, double *acf)
-    void cmb_timeseries_PACF(const cmb_timeseries *tsp, uint16_t n, double *pacf, double *acf)
+    void cmb_timeseries_ACF(const cmb_timeseries *tsp, uint16_t n, double *acf) noexcept nogil
+    void cmb_timeseries_PACF(const cmb_timeseries *tsp, uint16_t n, double *pacf, double *acf) noexcept nogil
 
 
 cdef object _UINT64_MAX_OBJ = (1 << 64) - 1

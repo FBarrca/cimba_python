@@ -13,6 +13,10 @@ cdef void *_process_result_pointer(Process proc, object result):
 cdef void *_process_trampoline(cmb_process *me, void *ctx) noexcept with gil:
     cdef Process proc = <Process><object><PyObject *>ctx
     cdef object result
+    # Python 3.14+: give this coroutine its own CPython frame datastack so
+    # interleaved processes don't corrupt each other's frame state on the shared
+    # thread state. No-op on 3.13 and earlier. See cmb_corostate.pxi.
+    _cimba_corostate_enter_fresh()
 
     try:
         result = proc._func(proc, proc._context)

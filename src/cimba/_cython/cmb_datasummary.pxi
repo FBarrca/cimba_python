@@ -43,7 +43,11 @@ cdef class DataSummary:
         _raise_if_closed(self)
         _raise_if_closed(other)
         cdef DataSummary merged = DataSummary()
-        cmb_datasummary_merge(merged._ptr, self._ptr, other._ptr)
+        cdef cmb_datasummary *left = self._ptr
+        cdef cmb_datasummary *right = other._ptr
+        cdef cmb_datasummary *tgt = merged._ptr
+        with nogil:
+            cmb_datasummary_merge(tgt, left, right)
         return merged
 
     property count:

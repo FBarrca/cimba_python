@@ -43,7 +43,11 @@ cdef class WeightedSummary:
         _raise_if_closed(self)
         _raise_if_closed(other)
         cdef WeightedSummary merged = WeightedSummary()
-        cmb_wtdsummary_merge(merged._ptr, self._ptr, other._ptr)
+        cdef cmb_wtdsummary *left = self._ptr
+        cdef cmb_wtdsummary *right = other._ptr
+        cdef cmb_wtdsummary *tgt = merged._ptr
+        with nogil:
+            cmb_wtdsummary_merge(tgt, left, right)
         return merged
 
     property count:

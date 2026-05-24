@@ -3,7 +3,9 @@
 cdef TimeSeries _timeseries_copy(cmb_timeseries *ptr):
     cdef TimeSeries ts = TimeSeries.__new__(TimeSeries)
     ts._ptr = cmb_timeseries_create()
-    cmb_timeseries_copy(ts._ptr, ptr)
+    cdef cmb_timeseries *tgt = ts._ptr
+    with nogil:
+        cmb_timeseries_copy(tgt, ptr)
     ts._owner = True
     ts._closed = False
     return ts
@@ -52,7 +54,9 @@ cdef class TimeSeries:
     def summary(self):
         _raise_if_closed(self)
         cdef cmb_wtdsummary *summary = cmb_wtdsummary_create()
-        cmb_timeseries_summarize(self._ptr, summary)
+        cdef cmb_timeseries *src = self._ptr
+        with nogil:
+            cmb_timeseries_summarize(src, summary)
         return _wtdsummary_owner(summary)
 
     def reset(self) -> None:
@@ -62,16 +66,23 @@ cdef class TimeSeries:
     def copy(self):
         _raise_if_closed(self)
         cdef TimeSeries copied = TimeSeries()
-        cmb_timeseries_copy(copied._ptr, self._ptr)
+        cdef cmb_timeseries *src = self._ptr
+        cdef cmb_timeseries *tgt = copied._ptr
+        with nogil:
+            cmb_timeseries_copy(tgt, src)
         return copied
 
     def sort_by_value(self) -> None:
         _raise_if_closed(self)
-        cmb_timeseries_sort_x(self._ptr)
+        cdef cmb_timeseries *src = self._ptr
+        with nogil:
+            cmb_timeseries_sort_x(src)
 
     def sort_by_time(self) -> None:
         _raise_if_closed(self)
-        cmb_timeseries_sort_t(self._ptr)
+        cdef cmb_timeseries *src = self._ptr
+        with nogil:
+            cmb_timeseries_sort_t(src)
 
     def acf(self, object lags):
         _raise_if_closed(self)
@@ -79,6 +90,7 @@ cdef class TimeSeries:
         cdef double *values
         cdef list result
         cdef uint16_t i
+        cdef cmb_timeseries *src = self._ptr
         if self._ptr.ds.count < 2:
             raise ValueError("at least two samples are required")
         if n == 0:
@@ -89,7 +101,8 @@ cdef class TimeSeries:
         if values == NULL:
             raise MemoryError()
         try:
-            cmb_timeseries_ACF(self._ptr, n, values)
+            with nogil:
+                cmb_timeseries_ACF(src, n, values)
             result = [0.0] * (n + 1)
             with cython.boundscheck(False):
                 for i in range(n + 1):
@@ -104,6 +117,7 @@ cdef class TimeSeries:
         cdef double *values
         cdef list result
         cdef uint16_t i
+        cdef cmb_timeseries *src = self._ptr
         if self._ptr.ds.count < 3:
             raise ValueError("at least three samples are required")
         if n == 0:
@@ -114,7 +128,8 @@ cdef class TimeSeries:
         if values == NULL:
             raise MemoryError()
         try:
-            cmb_timeseries_PACF(self._ptr, n, values, NULL)
+            with nogil:
+                cmb_timeseries_PACF(src, n, values, NULL)
             result = [0.0] * (n + 1)
             with cython.boundscheck(False):
                 for i in range(n + 1):

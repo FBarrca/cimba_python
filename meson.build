@@ -76,10 +76,15 @@ py.install_sources(
 
 # The Cython extension. Meson runs cython -> cc -> link automatically; the
 # dependency provides cimba.h's include dir and the static archive to link.
+# -Wl,--wrap=cmi_coroutine_context_switch interposes the vendored coroutine
+# context switch at link time (no submodule changes) so the binding can save and
+# restore CPython per-thread frame/exception state across switches on Python
+# 3.14+. See src/cimba/_cython/cmb_corostate.pxi.
 cimba_ext = py.extension_module(
     '_cimba',
     'src/cimba/_cimba.pyx',
     dependencies: [cimba_dep],
+    link_args: ['-Wl,--wrap=cmi_coroutine_context_switch'],
     install: true,
     subdir: 'cimba',
 )

@@ -1,4 +1,5 @@
 # cython: language_level=3
+# cython: freethreading_compatible=True
 """Cython bindings for the Cimba simulation library.
 
 The binding layer follows Cimba's create/initialize/terminate/destroy model.
@@ -7,6 +8,7 @@ Cimba C modules in subprojects/cimba/include and subprojects/cimba/src.
 """
 
 include "_cython/cimba.pxi"
+include "_cython/cmb_corostate.pxi"
 include "_cython/cmb_logger.pxi"
 include "_cython/cmb_random.pxi"
 include "_cython/cmb_process.pxi"
