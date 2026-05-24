@@ -45,28 +45,50 @@ cdef extern from "cmb_priorityqueue.h":
     pass
 
 
+cdef extern from "cmi_hashheap.h":
+    cdef struct cmi_hashheap:
+        pass
+
+    void *CMI_ANY_ITEM
+    uint64_t cmi_hashheap_pattern_cancel(
+        cmi_hashheap *hp,
+        const void *val1,
+        const void *val2,
+        const void *val3,
+        const void *val4,
+    )
+
+
 cdef extern from "cimba.h":
     cdef struct cmb_process:
         int64_t priority
         char name[32]
 
+    cdef struct cmb_resourceguard:
+        pass
+
     cdef struct cmb_buffer:
+        cmb_resourceguard front_guard
+        cmb_resourceguard rear_guard
         uint64_t capacity
         uint64_t level
 
     cdef struct cmb_objectqueue:
+        cmb_resourceguard front_guard
+        cmb_resourceguard rear_guard
         uint64_t capacity
         uint64_t length
 
     cdef struct cmb_resource:
-        pass
+        cmb_resourceguard guard
 
     cdef struct cmb_resourcepool:
+        cmb_resourceguard guard
         uint64_t capacity
         uint64_t in_use
 
     cdef struct cmb_condition:
-        pass
+        cmb_resourceguard guard
 
     cdef struct cmb_random_alias:
         pass
@@ -256,6 +278,8 @@ cdef extern from "cimba.h":
     cmb_timeseries *cmb_objectqueue_history(cmb_objectqueue *oqp)
 
     cdef struct cmb_priorityqueue:
+        cmb_resourceguard front_guard
+        cmb_resourceguard rear_guard
         uint64_t capacity
 
     cmb_priorityqueue *cmb_priorityqueue_create()
@@ -315,6 +339,11 @@ cdef extern from "cimba.h":
         const void *ctx,
     )
     uint64_t cmb_condition_signal(cmb_condition *cvp)
+
+    bool cmb_resourceguard_cancel(cmb_resourceguard *rgp, cmb_process *pp)
+    bool cmb_resourceguard_remove(cmb_resourceguard *rgp, const cmb_process *pp)
+    void cmb_resourceguard_register(cmb_resourceguard *rgp, cmb_resourceguard *obs)
+    bool cmb_resourceguard_unregister(cmb_resourceguard *rgp, const cmb_resourceguard *obs)
 
     cmb_dataset *cmb_dataset_create()
     void cmb_dataset_reset(cmb_dataset *dsp)

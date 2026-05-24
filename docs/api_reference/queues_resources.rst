@@ -112,4 +112,26 @@ Queues and Resources
 
       Evaluate waiting predicates and reactivate those that are true.
 
+   .. py:method:: subscribe(*sources, on=None)
+
+      Forward native resource-guard signals from resources, buffers, or queues
+      to this condition. ``on=None`` observes the single guard for
+      :class:`Resource` and :class:`ResourcePool`, and both ``"front"`` and
+      ``"rear"`` guards for :class:`Buffer`, :class:`ObjectQueue`, and
+      :class:`PriorityQueue`.
+
+   .. py:method:: unsubscribe(*sources, on=None)
+
+      Stop forwarding native signals from the given sources. Returns the number
+      of subscriptions removed.
+
+   .. py:method:: cancel(process)
+
+      Remove ``process`` from this condition and wake it with
+      :data:`cimba.CANCELLED`.
+
+   .. py:method:: remove(process)
+
+      Remove ``process`` from this condition without waking it.
+
    .. py:method:: close()

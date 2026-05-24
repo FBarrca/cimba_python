@@ -50,3 +50,7 @@ cannot be expressed as a queue or resource operation.
 
 Because the predicate is Python code, keep it side-effect free. A predicate
 should inspect state and return ``True`` or ``False``.
+
+Use ``condition.signal()`` when ordinary model state changes. Use
+``condition.subscribe(resource)`` when a resource, buffer, or queue signal should
+automatically make the condition recheck its waiting predicates.

@@ -99,3 +99,170 @@ def test_condition_waiter_stop_does_not_leave_stale_native_waiter():
         sim.execute()
 
     assert log == [("cancelled", 1.0), ("signalled", 2.0, 0)]
+
+
+def test_condition_subscribe_resource_release_wakes_waiter_without_explicit_signal():
+    log = []
+
+    def is_available(process, ctx):
+        return ctx["resource"].available == 1
+
+    def holder(me, ctx):
+        assert ctx["resource"].acquire() == cimba.SUCCESS
+        cimba.hold(1.0)
+        ctx["resource"].release()
+
+    def waiter(me, ctx):
+        while not is_available(me, ctx):
+            assert ctx["condition"].wait(is_available, ctx) == cimba.SUCCESS
+        log.append(("available", cimba.time()))
+
+    with cimba.Simulation(seed=1) as sim:
+        ctx = {
+            "resource": cimba.Resource("Dock"),
+            "condition": cimba.Condition("Dock available"),
+        }
+        ctx["condition"].subscribe(ctx["resource"])
+        cimba.Process("Holder", holder, ctx).start()
+        cimba.Process("Waiter", waiter, ctx).start()
+        sim.execute()
+
+    assert log == [("available", 1.0)]
+
+
+def test_condition_subscribe_is_idempotent_and_unsubscribe_removes_observer():
+    log = []
+
+    def is_available(process, ctx):
+        return ctx["resource"].available == 1
+
+    def holder(me, ctx):
+        assert ctx["resource"].acquire() == cimba.SUCCESS
+        cimba.hold(1.0)
+        ctx["resource"].release()
+
+    def waiter(me, ctx):
+        while not is_available(me, ctx):
+            assert ctx["condition"].wait(is_available, ctx) == cimba.SUCCESS
+        log.append(("available", cimba.time()))
+
+    def signaler(me, ctx):
+        cimba.hold(2.0)
+        assert ctx["condition"].signal() == 1
+
+    with cimba.Simulation(seed=1) as sim:
+        ctx = {
+            "resource": cimba.Resource("Dock"),
+            "condition": cimba.Condition("Dock available"),
+        }
+        ctx["condition"].subscribe(ctx["resource"])
+        ctx["condition"].subscribe(ctx["resource"])
+        assert ctx["condition"].unsubscribe(ctx["resource"]) == 1
+        cimba.Process("Holder", holder, ctx).start()
+        cimba.Process("Waiter", waiter, ctx).start()
+        cimba.Process("Signaler", signaler, ctx).start()
+        sim.execute()
+
+    assert log == [("available", 2.0)]
+
+
+def test_condition_cancel_wakes_waiter_with_cancelled_signal():
+    state = {"ready": False}
+    log = []
+
+    def waiter(me, condition):
+        sig = condition.wait(lambda process, ctx: ctx["ready"], state)
+        log.append(("waiter", cimba.time(), sig))
+
+    def canceller(me, ctx):
+        cimba.hold(1.0)
+        assert ctx["condition"].cancel(ctx["target"])
+
+    with cimba.Simulation(seed=1) as sim:
+        condition = cimba.Condition("Ready")
+        target = cimba.Process("Waiter", waiter, condition).start()
+        cimba.Process("Canceller", canceller, {"condition": condition, "target": target}).start()
+        sim.execute()
+
+    assert log == [("waiter", 1.0, cimba.CANCELLED)]
+
+
+def test_condition_remove_unlinks_waiter_without_waking_it():
+    state = {"ready": False}
+    log = []
+
+    def waiter(me, condition):
+        sig = condition.wait(lambda process, ctx: ctx["ready"], state)
+        log.append(("waiter", cimba.time(), sig))
+
+    def remover(me, ctx):
+        cimba.hold(1.0)
+        assert ctx["condition"].remove(ctx["target"])
+        state["ready"] = True
+        assert ctx["condition"].signal() == 0
+        ctx["target"].resume(cimba.INTERRUPTED)
+
+    with cimba.Simulation(seed=1) as sim:
+        condition = cimba.Condition("Ready")
+        target = cimba.Process("Waiter", waiter, condition).start()
+        cimba.Process("Remover", remover, {"condition": condition, "target": target}).start()
+        sim.execute()
+
+    assert log == [("waiter", 1.0, cimba.INTERRUPTED)]
+
+
+def test_condition_subscribe_buffer_front_wakes_on_put():
+    log = []
+
+    def has_content(process, ctx):
+        return ctx["buffer"].level >= 1
+
+    def waiter(me, ctx):
+        while not has_content(me, ctx):
+            assert ctx["condition"].wait(has_content, ctx) == cimba.SUCCESS
+        log.append(("content", cimba.time()))
+
+    def producer(me, ctx):
+        cimba.hold(1.0)
+        assert ctx["buffer"].put(1) == (cimba.SUCCESS, 0)
+
+    with cimba.Simulation(seed=1) as sim:
+        ctx = {
+            "buffer": cimba.Buffer("Inventory", capacity=1),
+            "condition": cimba.Condition("Has content"),
+        }
+        ctx["condition"].subscribe(ctx["buffer"], on="front")
+        cimba.Process("Waiter", waiter, ctx).start()
+        cimba.Process("Producer", producer, ctx).start()
+        sim.execute()
+
+    assert log == [("content", 1.0)]
+
+
+def test_condition_subscribe_objectqueue_rear_wakes_on_get_space():
+    log = []
+
+    def has_space(process, ctx):
+        return ctx["queue"].space >= 1
+
+    def waiter(me, ctx):
+        while not has_space(me, ctx):
+            assert ctx["condition"].wait(has_space, ctx) == cimba.SUCCESS
+        log.append(("space", cimba.time()))
+
+    def consumer(me, ctx):
+        cimba.hold(1.0)
+        assert ctx["queue"].get() == (cimba.SUCCESS, "initial")
+
+    with cimba.Simulation(seed=1) as sim:
+        ctx = {
+            "queue": cimba.ObjectQueue("Departed", capacity=1),
+            "condition": cimba.Condition("Has space"),
+        }
+        assert ctx["queue"].put("initial") == cimba.SUCCESS
+        ctx["condition"].subscribe(ctx["queue"], on="rear")
+        cimba.Process("Waiter", waiter, ctx).start()
+        cimba.Process("Consumer", consumer, ctx).start()
+        sim.execute()
+
+    assert log == [("space", 1.0)]
