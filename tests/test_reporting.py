@@ -87,6 +87,103 @@ def test_histogram_time_series_uses_duration_weights():
     assert [bin.mass for bin in hist.bins] == [0.0, 5.0, 2.0, 0.0]
 
 
+def test_report_objects_export_analysis_friendly_records_and_columns():
+    summary = reporting.SummaryStats(
+        count=2,
+        weight_sum=None,
+        min=1.0,
+        max=2.0,
+        mean=1.5,
+        variance=0.5,
+        stddev=0.70710678,
+        skewness=None,
+        kurtosis=None,
+    )
+    hist = reporting.Histogram(
+        bins=(
+            reporting.HistogramBin(None, 0.0, 1.0, underflow=True),
+            reporting.HistogramBin(0.0, 1.0, 2.0),
+            reporting.HistogramBin(1.0, None, 3.0, overflow=True),
+        ),
+        total_mass=6.0,
+        weighted=False,
+        range=(0.0, 1.0),
+    )
+    corr = reporting.Correlogram("acf", (0, 1), (1.0, 0.25))
+    report = reporting.HistoryReport("Samples", summary, hist, corr)
+
+    assert summary.as_dict()["mean"] == 1.5
+    assert hist.to_records() == [
+        {
+            "bin": 0,
+            "lower": None,
+            "upper": 0.0,
+            "mass": 1.0,
+            "underflow": True,
+            "overflow": False,
+        },
+        {
+            "bin": 1,
+            "lower": 0.0,
+            "upper": 1.0,
+            "mass": 2.0,
+            "underflow": False,
+            "overflow": False,
+        },
+        {
+            "bin": 2,
+            "lower": 1.0,
+            "upper": None,
+            "mass": 3.0,
+            "underflow": False,
+            "overflow": True,
+        },
+    ]
+    assert hist.to_columns()["mass"] == (1.0, 2.0, 3.0)
+    assert corr.to_records() == [
+        {"kind": "acf", "lag": 0, "coefficient": 1.0},
+        {"kind": "acf", "lag": 1, "coefficient": 0.25},
+    ]
+    assert report.as_dict()["title"] == "Samples"
+    assert report.to_tables()["summary"] == [summary.as_dict()]
+    assert report.to_tables()["histogram"] == hist.to_records()
+    report_without_corr = reporting.HistoryReport("Samples", summary, hist)
+    assert report_without_corr.to_tables()["correlogram"] == []
+
+
+def test_sample_records_and_columns_use_stable_column_names():
+    dataset = cimba.Dataset()
+    dataset.add(1.5)
+    dataset.add(2.5)
+
+    assert reporting.sample_records(dataset) == [
+        {"index": 0, "value": 1.5},
+        {"index": 1, "value": 2.5},
+    ]
+    assert reporting.sample_columns(dataset) == {
+        "index": (0, 1),
+        "value": (1.5, 2.5),
+    }
+    assert reporting.sample_columns(cimba.Dataset()) == {
+        "index": (),
+        "value": (),
+    }
+
+    series = cimba.TimeSeries()
+    series.add(10.0, 0.0)
+    series.add(20.0, 2.0)
+
+    assert reporting.sample_records(series) == [
+        {"time": 0.0, "value": 10.0, "weight": 2.0},
+        {"time": 2.0, "value": 20.0, "weight": 0.0},
+    ]
+    assert reporting.sample_columns(cimba.TimeSeries()) == {
+        "time": (),
+        "value": (),
+        "weight": (),
+    }
+
+
 def test_histogram_constant_values_and_invalid_range():
     dataset = cimba.Dataset()
     dataset.add(3.0)

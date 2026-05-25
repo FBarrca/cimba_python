@@ -5,7 +5,7 @@ from __future__ import annotations
 import builtins
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Literal
 
 from .cmb_buffer import UNLIMITED, Buffer
@@ -20,6 +20,9 @@ from .cmb_wtdsummary import WeightedSummary
 
 CorrelationKind = Literal["acf", "pacf"]
 WeightedMode = Literal["auto"] | bool
+Scalar = int | float | str | bool | None
+Record = dict[str, Scalar]
+Columns = dict[str, tuple[Scalar, ...]]
 
 
 @dataclass(frozen=True)
@@ -36,6 +39,11 @@ class SummaryStats:
     skewness: float | None
     kurtosis: float | None
 
+    def as_dict(self) -> Record:
+        """Return a plain dictionary suitable for DataFrame constructors."""
+
+        return asdict(self)
+
 
 @dataclass(frozen=True)
 class FiveNumberSummary:
@@ -48,6 +56,11 @@ class FiveNumberSummary:
     max: float
     weighted: bool = False
 
+    def as_dict(self) -> Record:
+        """Return a plain dictionary suitable for DataFrame constructors."""
+
+        return asdict(self)
+
 
 @dataclass(frozen=True)
 class HistogramBin:
@@ -59,6 +72,11 @@ class HistogramBin:
     underflow: bool = False
     overflow: bool = False
 
+    def as_dict(self) -> Record:
+        """Return a plain dictionary representation of the bin."""
+
+        return asdict(self)
+
 
 @dataclass(frozen=True)
 class Histogram:
@@ -69,6 +87,39 @@ class Histogram:
     weighted: bool
     range: tuple[float, float]
 
+    def as_dict(self) -> dict[str, object]:
+        """Return a nested dictionary/list representation of the histogram."""
+
+        return {
+            "bins": self.to_records(),
+            "total_mass": self.total_mass,
+            "weighted": self.weighted,
+            "range": self.range,
+        }
+
+    def to_records(self) -> list[Record]:
+        """Return one dictionary per bin with stable column names."""
+
+        return [
+            {
+                "bin": index,
+                "lower": bin.lower,
+                "upper": bin.upper,
+                "mass": bin.mass,
+                "underflow": bin.underflow,
+                "overflow": bin.overflow,
+            }
+            for index, bin in enumerate(self.bins)
+        ]
+
+    def to_columns(self) -> Columns:
+        """Return histogram bins as a dict of column tuples."""
+
+        return _records_to_columns(
+            self.to_records(),
+            ("bin", "lower", "upper", "mass", "underflow", "overflow"),
+        )
+
 
 @dataclass(frozen=True)
 class Correlogram:
@@ -77,6 +128,27 @@ class Correlogram:
     kind: CorrelationKind
     lags: tuple[int, ...]
     coefficients: tuple[float, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a plain dictionary representation of the correlogram."""
+
+        return asdict(self)
+
+    def to_records(self) -> list[Record]:
+        """Return one dictionary per lag with stable column names."""
+
+        return [
+            {"kind": self.kind, "lag": lag, "coefficient": coefficient}
+            for lag, coefficient in zip(self.lags, self.coefficients, strict=True)
+        ]
+
+    def to_columns(self) -> Columns:
+        """Return correlogram values as a dict of column tuples."""
+
+        return _records_to_columns(
+            self.to_records(),
+            ("kind", "lag", "coefficient"),
+        )
 
 
 @dataclass(frozen=True)
@@ -87,6 +159,75 @@ class HistoryReport:
     summary: SummaryStats
     histogram: Histogram
     correlogram: Correlogram | None = None
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a nested dictionary/list representation of the report."""
+
+        return {
+            "title": self.title,
+            "summary": self.summary.as_dict(),
+            "histogram": self.histogram.as_dict(),
+            "correlogram": (
+                self.correlogram.as_dict()
+                if self.correlogram is not None
+                else None
+            ),
+        }
+
+    def to_tables(self) -> dict[str, list[Record]]:
+        """Return report sections as table-shaped records.
+
+        The result can be passed section by section to libraries such as
+        pandas or Polars, for example ``DataFrame(report.to_tables()["histogram"])``.
+        """
+
+        tables = {
+            "summary": [self.summary.as_dict()],
+            "histogram": self.histogram.to_records(),
+            "correlogram": (
+                self.correlogram.to_records()
+                if self.correlogram is not None
+                else []
+            ),
+        }
+        return tables
+
+
+def sample_records(source: Dataset | TimeSeries) -> list[Record]:
+    """Return raw samples with stable column names for analysis libraries."""
+
+    if isinstance(source, Dataset):
+        return [
+            {"index": index, "value": float(value)}
+            for index, value in enumerate(source.values())
+        ]
+
+    if isinstance(source, TimeSeries):
+        return [
+            {
+                "time": float(time),
+                "value": float(value),
+                "weight": float(weight),
+            }
+            for time, value, weight in source.values()
+        ]
+
+    raise TypeError("source must be a Dataset or TimeSeries")
+
+
+def sample_columns(source: Dataset | TimeSeries) -> Columns:
+    """Return raw samples as a dict of column tuples."""
+
+    if isinstance(source, Dataset):
+        return _records_to_columns(sample_records(source), ("index", "value"))
+
+    if isinstance(source, TimeSeries):
+        return _records_to_columns(
+            sample_records(source),
+            ("time", "value", "weight"),
+        )
+
+    raise TypeError("source must be a Dataset or TimeSeries")
 
 
 def summarize(source: DataSummary | WeightedSummary | Dataset | TimeSeries) -> SummaryStats:
@@ -708,6 +849,24 @@ def _axes_list(axes: Sequence[object] | object) -> list[object]:
     return [axes]
 
 
+def _records_to_columns(
+    records: Sequence[Record],
+    columns: Sequence[str] | None = None,
+) -> Columns:
+    if columns is None:
+        if not records:
+            return {}
+        columns = tuple(records[0])
+
+    if not columns:
+        return {}
+
+    return {
+        key: tuple(record[key] for record in records)
+        for key in columns
+    }
+
+
 def _load_pyplot():
     try:
         import matplotlib.pyplot as plt
@@ -720,11 +879,14 @@ def _load_pyplot():
 
 
 __all__ = [
+    "Columns",
     "Correlogram",
     "FiveNumberSummary",
     "HistoryReport",
     "Histogram",
     "HistogramBin",
+    "Record",
+    "Scalar",
     "SummaryStats",
     "correlogram",
     "five_number",
@@ -737,5 +899,7 @@ __all__ = [
     "plot_history",
     "plot_report",
     "resource_report",
+    "sample_columns",
+    "sample_records",
     "summarize",
 ]

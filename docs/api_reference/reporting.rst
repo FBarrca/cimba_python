@@ -14,6 +14,11 @@ Python keeps the same reporting coverage but returns structured values first.
 Use ``format_report()`` for debug text, or the plotting helpers for figures.
 The C functions are not exposed under their ``cmb_*`` names.
 
+The reporting backend intentionally stays native and dependency-free for the
+calculations. For analysis libraries, reporting objects expose plain Python
+records and column dictionaries, so pandas, Polars, NumPy, CSV writers, and
+similar tools can consume the results without Cimba importing those libraries.
+
 Install plotting support with the optional extra:
 
 .. code-block:: console
@@ -25,29 +30,60 @@ Install plotting support with the optional extra:
    Availability-aware summary statistics. Fields that do not make sense for the
    available sample count are ``None``.
 
+   .. py:method:: as_dict()
+
+      Return a plain dictionary, suitable for ``pandas.DataFrame([stats.as_dict()])``.
+
 .. py:class:: FiveNumberSummary
 
    Five-number summary with ``min``, ``q1``, ``median``, ``q3``, ``max``, and a
    ``weighted`` flag. This is the Python equivalent of the C five-number
    printers.
 
+   .. py:method:: as_dict()
+
+      Return a plain dictionary.
+
 .. py:class:: HistogramBin
 
    One histogram bucket with ``lower``, ``upper``, ``mass``, ``underflow``, and
    ``overflow`` fields.
 
+   .. py:method:: as_dict()
+
+      Return a plain dictionary.
+
 .. py:class:: Histogram
 
    Histogram data with explicit underflow and overflow buckets.
+
+   .. py:method:: as_dict()
+   .. py:method:: to_records()
+   .. py:method:: to_columns()
+
+      Return nested dictionaries, row records, or column tuples for analysis
+      libraries.
 
 .. py:class:: Correlogram
 
    Autocorrelation or partial-autocorrelation coefficients.
 
+   .. py:method:: as_dict()
+   .. py:method:: to_records()
+   .. py:method:: to_columns()
+
+      Return dictionaries, row records, or column tuples with ``kind``, ``lag``,
+      and ``coefficient`` fields.
+
 .. py:class:: HistoryReport
 
    Structured report containing a title, summary, histogram, and optional
    correlogram.
+
+   .. py:method:: as_dict()
+   .. py:method:: to_tables()
+
+      Return nested report data or table-shaped records keyed by report section.
 
 .. py:function:: summarize(source)
 
@@ -80,6 +116,13 @@ Install plotting support with the optional extra:
    Return a :class:`HistoryReport` for a recorded buffer, queue, resource, or
    resource pool.
 
+.. py:function:: sample_records(source)
+.. py:function:: sample_columns(source)
+
+   Return raw :class:`cimba.Dataset` or :class:`cimba.TimeSeries` samples with
+   stable column names. Datasets use ``index`` and ``value``; time series use
+   ``time``, ``value``, and ``weight``.
+
 .. py:function:: format_report(report)
 
    Return text for a :class:`HistoryReport` matching the native Cimba report:
@@ -99,6 +142,32 @@ Install plotting support with the optional extra:
 
    Plot with Matplotlib. The dependency is imported only when one of these
    helpers is called.
+
+Analysis Interop
+----------------
+
+The record adapters are ordinary Python data:
+
+.. code-block:: python
+
+   from cimba import reporting
+
+   report = reporting.history_report(samples, bins=30, lags=12)
+
+   summary_row = report.summary.as_dict()
+   histogram_rows = report.histogram.to_records()
+   correlogram_rows = report.correlogram.to_records()
+
+   # pandas or Polars can build frames directly from the records.
+   # pd.DataFrame(histogram_rows)
+   # pl.DataFrame(report.to_tables()["summary"])
+
+For raw sample data, use :func:`sample_records` or :func:`sample_columns`:
+
+.. code-block:: python
+
+   rows = reporting.sample_records(history)
+   columns = reporting.sample_columns(history)
 
 C API Equivalents
 -----------------
