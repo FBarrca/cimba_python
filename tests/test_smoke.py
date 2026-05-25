@@ -13,7 +13,7 @@ def test_c_module_shaped_imports_are_available():
 
 
 def test_versions_are_available():
-    assert cimba.__version__ == "0.1.0"
+    assert cimba.__version__ == "0.2.1"
     assert cimba.native_version().startswith("3.")
 
 
