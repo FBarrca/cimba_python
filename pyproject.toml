@@ -1,5 +1,5 @@
 [build-system]
-requires = ["meson-python>=0.16", "cython>=3.0"]
+requires = ["meson-python>=0.16", "cffi>=1.15"]
 build-backend = "mesonpy"
 
 [project]
@@ -11,15 +11,18 @@ requires-python = ">=3.13"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "FBarrca", email = "franbarragan87@gmail.com" }]
-keywords = ["simulation", "discrete-event-simulation", "cimba", "cython"]
+keywords = ["simulation", "discrete-event-simulation", "cimba", "numba"]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Cython",
     "Programming Language :: C",
     "Topic :: Scientific/Engineering",
 ]
-dependencies = []
+dependencies = [
+    "cffi>=1.15",
+    "numpy>=1.20",
+    "numba>=0.57",
+]
 
 [project.urls]
 Homepage = "https://github.com/FBarrca/cimba_python"
@@ -27,31 +30,25 @@ Homepage = "https://github.com/FBarrca/cimba_python"
 
 [dependency-groups]
 dev = ["pytest>=8"]
-# Build tools kept separate from test deps. Installed by default (see
-# tool.uv.default-groups) so the no-build-isolation editable build below can find
-# them in the project venv. (build-system.requires covers isolated wheel builds.)
-build = ["meson-python>=0.16", "meson>=1.1", "ninja", "cython>=3.0"]
+# Build tools in the project venv for the no-build-isolation editable install
+# below. (build-system.requires covers isolated wheel builds.)
+build = ["meson-python>=0.16", "meson>=1.1", "ninja", "cffi>=1.15"]
 
 [tool.uv]
-# meson-python's editable install rebuilds the extension on import, baking in the
-# meson/cython paths used at setup. Under build isolation those live in a throwaway
-# temp dir that gets deleted, breaking rebuild-on-import after a meson.build/.pyx
-# edit. Building against the project venv records persistent .venv paths instead.
+# meson-python editable installs rebuild on import using the tool paths baked
+# in at setup time; under build isolation those point into a deleted temp dir.
+# Build against the project venv so the recorded paths persist.
 no-build-isolation-package = ["cimba"]
 default-groups = ["dev", "build"]
 
 [tool.pytest.ini_options]
-# Only collect our tests; never descend into the vendored C library submodule.
+# Never descend into the vendored C library submodule.
 testpaths = ["tests"]
 
 [tool.meson-python.args]
-setup = ["-Dbuildtype=release"]
-# Build only our extension (+ its real deps: libcimba, codegen) via the alias
-# defined in meson.build. This avoids compiling upstream's tutorials/benchmarks/
-# tests, which are in Meson's default `all` target but irrelevant to the wheel
-# (one of them links system HDF5).
+# Compile only our extension (alias in meson.build), skipping upstream's
+# tutorials/benchmarks/tests -- one of them links system HDF5.
 compile = ["cimba_ext"]
-# Cimba is statically linked into the extension at build time, so its install
-# artifacts (libcimba.a + upstream headers, marked install:true upstream) must
-# not be copied into the wheel. Skip subproject installs.
+# libcimba is statically linked in; keep subproject install artifacts
+# (libcimba.a + upstream headers) out of the wheel.
 install = ["--skip-subprojects"]

@@ -1,0 +1,45 @@
+/*
+ * nbshim.h - prototypes for the Numba support shims in nbshim.c.
+ */
+
+#ifndef CIMBA_PY_NBSHIM_H
+#define CIMBA_PY_NBSHIM_H
+
+#include <stdint.h>
+
+#ifndef CIMBA_PY_EXPORT
+#  if defined(_WIN32) || defined(__CYGWIN__)
+#    define CIMBA_PY_EXPORT __declspec(dllexport)
+#  else
+#    define CIMBA_PY_EXPORT __attribute__((visibility("default")))
+#  endif
+#endif
+
+CIMBA_PY_EXPORT double cpy_random_exponential(double mean);
+CIMBA_PY_EXPORT double cpy_random_gamma(double shape, double scale);
+CIMBA_PY_EXPORT double cpy_random01(void);
+CIMBA_PY_EXPORT double cpy_random_uniform(double min, double max);
+CIMBA_PY_EXPORT double cpy_random_normal(double mu, double sigma);
+CIMBA_PY_EXPORT uint64_t cpy_wtdsummary_sizeof(void);
+CIMBA_PY_EXPORT double cpy_wtdsummary_mean(const void *wsp);
+CIMBA_PY_EXPORT int64_t cpy_buffer_put(void *bp, uint64_t amnt);
+CIMBA_PY_EXPORT int64_t cpy_buffer_get(void *bp, uint64_t amnt);
+CIMBA_PY_EXPORT double cpy_buffer_mean_level(void *bp);
+CIMBA_PY_EXPORT double cpy_resource_mean_in_use(void *rp);
+CIMBA_PY_EXPORT double cpy_resourcepool_mean_in_use(void *rpp);
+CIMBA_PY_EXPORT double cpy_objectqueue_mean_length(void *oqp);
+CIMBA_PY_EXPORT int64_t cpy_objectqueue_put(void *oqp, intptr_t object);
+CIMBA_PY_EXPORT int64_t cpy_objectqueue_get(void *oqp, intptr_t *objloc);
+CIMBA_PY_EXPORT uint64_t cpy_resource_in_use(const void *rp);
+CIMBA_PY_EXPORT uint64_t cpy_resourcepool_in_use(const void *rpp);
+CIMBA_PY_EXPORT uint64_t cpy_objectqueue_length(const void *oqp);
+CIMBA_PY_EXPORT uint64_t cpy_buffer_level(const void *bp);
+CIMBA_PY_EXPORT double cpy_dataset_mean(const void *dsp);
+CIMBA_PY_EXPORT uint64_t cpy_dataset_count(const void *dsp);
+
+CIMBA_PY_EXPORT intptr_t cpy_objectqueue_take(void *oqp);
+CIMBA_PY_EXPORT int64_t cpy_process_status(const void *pp);
+CIMBA_PY_EXPORT void *cpy_process_current(void);
+CIMBA_PY_EXPORT uint32_t cpy_cpu_cores(void);
+
+#endif /* CIMBA_PY_NBSHIM_H */

@@ -1,30 +1,32 @@
-# cimba (Python)
+# Python bindings for Cimba, a multithreaded discrete-event-simulation library.
 
-Python bindings for [**Cimba**](https://github.com/ambonvik/cimba) — a
-multithreaded discrete-event-simulation library written in C (POSIX pthreads for
-parallel replications, stackful coroutines for concurrent processes per thread).
+This package wraps the native Cimba library (vendored under `subprojects/cimba`)
+with two modules:
 
-> **Status: scaffolding.** The repository and build pipeline are in place, but
-> the simulation API is not wrapped yet. `cimba.native_version()` calls into the
-> linked C library so you can confirm the toolchain works end to end.
+| Module | Role |
+| --- | --- |
+| `cimba.sim` | SimPy-flavored `Model` / `@process` API compiled via Numba |
+
+`cimba.native_version()` (alias `cimba.version()`) calls into the linked C
+library so you can confirm the toolchain works end to end.
 
 ## How it's put together
 
 | Piece | Where | Why |
 | --- | --- | --- |
-| Native C library | `subprojects/cimba/` (git submodule) | Lives where Meson expects subprojects; pinned to a commit; updated via git |
-| Build backend | `meson-python` (`pyproject.toml`) | Upstream already uses Meson; reuses its NASM/C23/pthreads build for free |
-| Build wiring | `meson.build` | Pulls the subproject (`my_lib_dep`), builds it **static**, links the extension against it |
-| Python package | `src/cimba/` | `src`-layout; `_cimba.pyx` is the Cython extension |
-| Tests | `tests/` | Smoke test that the extension imports and calls into C |
+| Native C library | `subprojects/cimba/` (git submodule) | Meson subproject; pinned commit |
+| Build backend | `meson-python` (`pyproject.toml`) | Reuses upstream Meson/NASM/C23 build |
+| Build wiring | `meson.build` | cffi glue + native shims, `link_whole` libcimba |
+| Python package | `src/cimba/` | `sim` module + `_cimba` cffi extension |
+| Examples | `examples/` | M/G/1 demos and benchmarks |
+| Tests | `tests/` | Import, linkage, and a short sim-API smoke run |
 
-The C library is built as a **static** archive and embedded into the
-`_cimba` extension, so a built wheel is self-contained (one `.so`, nothing to
-ship alongside it).
+The C library is built as a **static** archive and embedded into `_cimba`, so a
+wheel is self-contained (one `.so`, no external libcimba to ship).
 
 ## Prerequisites
 
-`uv` provides Python 3.13, `meson`, `ninja`, `cython`, and `meson-python`. You
+`uv` provides Python 3.13, `meson`, `ninja`, `cffi`, and `meson-python`. You
 only need these on the system itself:
 
 | Tool | Why | Check |
@@ -46,11 +48,12 @@ git submodule update --init --recursive    # pulls subprojects/cimba
 
 uv sync                       # creates .venv, installs deps, compiles cimba (~15s first run)
 uv run python -c "import cimba; print(cimba.native_version())"   # -> 3.0.0-beta
-uv run pytest                 # -> 2 passed
+uv run pytest                 # smoke tests
+uv run python examples/demo_mg1_simapi.py   # SimPy-flavored M/G/1 demo
 ```
 
 No manual `.venv` activation needed — `uv run` handles it. The first `uv sync`
-compiles the C library + Cython extension; later runs are incremental.
+compiles the C library + cffi extension; later runs are incremental.
 
 ## Build a wheel
 
