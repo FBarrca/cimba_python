@@ -150,7 +150,7 @@ def test_bounded_queue_and_dataset_stats():
     assert exp["d_std"][0] >= 0
 
 
-def test_random_draws_and_yield():
+def test_random_draws_and_suspend():
     class Draws(sim.Model):
         tri: sim.Output
         wei: sim.Output
@@ -171,7 +171,7 @@ def test_random_draws_and_yield():
         env.bet = sim.beta(2.0, 3.0, 0.0, 1.0)
         env.poi = sim.poisson(4.0)
         env.die = sim.dice(1, 6)
-        sim.yield_now()
+        sim.suspend()           # idle until the trial ends
 
     exp = model.experiment(replications=1, duration=10.0, warmup=0.0,
                            seed=3)
@@ -212,6 +212,42 @@ def test_process_handles_and_interrupt():
                            seed=5)
     assert exp.run() == 0
     assert exp["got_sig"][0] == 42.0
+
+
+def test_pqueues_and_timers():
+    class Shop(sim.Model):
+        served_first: sim.Output    # object taken first (priority order)
+        timed_out: sim.Output       # signal a waiter got from its timer
+        qs: sim.PQueues = sim.count(2)
+
+    model = Shop()
+
+    @model.process
+    def producer(env: Shop):
+        sim.pq_put(env.qs[0], 7, 0)     # low priority first
+        sim.pq_put(env.qs[0], 8, 5)     # high priority second
+        sim.hold(1.0)
+        env.served_first = sim.pq_take(env.qs[0])  # leftover entry
+
+    @model.process
+    def consumer(env: Shop):
+        sim.hold(0.5)
+        env.served_first = sim.pq_take(env.qs[0])
+
+    @model.process
+    def waiter(env: Shop):
+        me = sim.current()
+        sim.timer_set(me, 2.0, 99)
+        env.timed_out = sim.suspend()
+        while True:
+            sim.hold(1000.0)
+
+    exp = model.experiment(replications=1, duration=10.0, warmup=0.0,
+                           seed=11)
+    assert exp.run() == 0
+    # the consumer at t=0.5 must get the priority-5 object
+    assert exp["served_first"][0] == 7.0  # producer drained the leftover
+    assert exp["timed_out"][0] == 99.0
 
 
 def test_kwargs_model_still_works():

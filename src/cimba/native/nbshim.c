@@ -11,6 +11,7 @@
 #include <stdint.h>
 
 #include "cimba.h"
+#include "cmb_priorityqueue.h"   /* not part of the cimba.h umbrella */
 #include "nbshim.h"
 
 double cpy_random_exponential(const double mean)
@@ -252,6 +253,40 @@ intptr_t cpy_objectqueue_take(void *oqp)
     void *obj = NULL;
     (void)cmb_objectqueue_get(oqp, &obj);
     return (intptr_t)obj;
+}
+
+/* Priority queues: objects are opaque intptr_t values. Put returns the
+   entry handle used for position queries and cancellation. */
+uint64_t cpy_priorityqueue_put(void *pqp, const intptr_t object,
+                               const int64_t priority)
+{
+    uint64_t hndl = 0u;
+    (void)cmb_priorityqueue_put(pqp, (void *)object, priority, &hndl);
+    return hndl;
+}
+
+/* Blocking get returning the object value directly (0 if interrupted) */
+intptr_t cpy_priorityqueue_take(void *pqp)
+{
+    void *obj = NULL;
+    (void)cmb_priorityqueue_get(pqp, &obj);
+    return (intptr_t)obj;
+}
+
+uint64_t cpy_priorityqueue_length(const void *pqp)
+{
+    return cmb_priorityqueue_length((void *)pqp);
+}
+
+uint64_t cpy_priorityqueue_cancel(void *pqp, const uint64_t hndl)
+{
+    return (uint64_t)cmb_priorityqueue_cancel(pqp, hndl);
+}
+
+/* Replace all pending timers of the process with this one */
+uint64_t cpy_process_timer_set(void *pp, const double dur, const int64_t sig)
+{
+    return cmb_process_timer_set(pp, dur, sig);
 }
 
 /* Process status as an integer: 0 created, 1 running, 2 finished */

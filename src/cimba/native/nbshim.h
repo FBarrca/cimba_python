@@ -59,6 +59,13 @@ CIMBA_PY_EXPORT double cpy_dataset_mean(const void *dsp);
 CIMBA_PY_EXPORT uint64_t cpy_dataset_count(const void *dsp);
 
 CIMBA_PY_EXPORT intptr_t cpy_objectqueue_take(void *oqp);
+CIMBA_PY_EXPORT uint64_t cpy_priorityqueue_put(void *pqp, intptr_t object,
+                                               int64_t priority);
+CIMBA_PY_EXPORT intptr_t cpy_priorityqueue_take(void *pqp);
+CIMBA_PY_EXPORT uint64_t cpy_priorityqueue_length(const void *pqp);
+CIMBA_PY_EXPORT uint64_t cpy_priorityqueue_cancel(void *pqp, uint64_t hndl);
+CIMBA_PY_EXPORT uint64_t cpy_process_timer_set(void *pp, double dur,
+                                               int64_t sig);
 CIMBA_PY_EXPORT int64_t cpy_process_status(const void *pp);
 CIMBA_PY_EXPORT void *cpy_process_current(void);
 CIMBA_PY_EXPORT uint32_t cpy_cpu_cores(void);

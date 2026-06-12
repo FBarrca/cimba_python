@@ -65,17 +65,21 @@ from numba import njit
 from . import _bindings as _b
 from ._intrinsics import record_addr as _record_addr
 from ._model import (Condition, Dataset, Env, Experiment, FloatState,
-                     Handle, Model, Output, Param, Pool, Predicate,
-                     Processes, Queue, Resource, State, Store, capacity)
+                     Handle, Model, Output, Param, Pool, PQueues, Predicate,
+                     Processes, Queue, Resource, State, Store, capacity,
+                     count)
 
 __all__ = [
     "Model", "Experiment", "Env", "Handle",
     "Param", "Output", "State", "FloatState", "Queue", "Resource", "Pool",
-    "Store", "Dataset", "Condition", "Predicate", "Processes", "capacity",
+    "Store", "Dataset", "Condition", "Predicate", "Processes", "PQueues",
+    "capacity", "count",
     "SUCCESS", "PREEMPTED", "INTERRUPTED", "STOPPED",
     "hold", "now", "current", "interrupt", "stop", "wait_process", "resume",
-    "yield_now", "status", "set_priority",
+    "suspend", "status", "set_priority",
+    "timer_set", "timer_add", "timers_clear",
     "flip", "pool_held",
+    "pq_put", "pq_take", "pq_length", "pq_position", "pq_cancel",
     "put", "get", "level", "space", "mean_level",
     "acquire", "release", "preempt", "available", "in_use", "mean_in_use",
     "pool_acquire", "pool_release", "pool_preempt", "pool_available",
@@ -134,9 +138,9 @@ if TYPE_CHECKING:
         """Resume a process stopped with sim.stop()."""
         ...
 
-    def yield_now() -> int:
-        """Reschedule the calling process at the current time, letting
-        other events scheduled for this instant run first."""
+    def suspend() -> int:
+        """Suspend the calling process indefinitely; returns the signal
+        of whatever wakes it (a timer, sim.resume(), sim.interrupt())."""
         ...
 
     def status(process: Handle) -> int:
@@ -145,6 +149,19 @@ if TYPE_CHECKING:
 
     def set_priority(process: Handle, priority: int) -> None:
         """Change a process's priority (queueing order in acquires)."""
+        ...
+
+    def timer_set(process: Handle, delay: float, signal: int) -> int:
+        """Replace the process's pending timers with one waking it from
+        sim.suspend() with `signal` after `delay`. Returns the timer id."""
+        ...
+
+    def timer_add(process: Handle, delay: float, signal: int) -> int:
+        """Add a timer alongside any pending ones. Returns the timer id."""
+        ...
+
+    def timers_clear(process: Handle) -> None:
+        """Cancel all pending timers of the process."""
         ...
 
     # --- Queues (cmb_buffer): counted amounts --------------------------------
@@ -241,6 +258,29 @@ if TYPE_CHECKING:
 
     def store_mean_length(store: Handle) -> float:
         """Time-weighted mean store length over the recording window."""
+        ...
+
+    # --- Priority queues (cmb_priorityqueue) ------------------------------------
+    def pq_put(pqueue: Handle, obj: int, priority: int) -> int:
+        """Insert an object (any nonzero int64) ordered by priority;
+        returns the entry handle for pq_position()/pq_cancel()."""
+        ...
+
+    def pq_take(pqueue: Handle) -> int:
+        """Remove and return the highest-priority object, blocking while
+        the queue is empty."""
+        ...
+
+    def pq_length(pqueue: Handle) -> int:
+        """Current number of entries in the queue."""
+        ...
+
+    def pq_position(pqueue: Handle, entry: int) -> int:
+        """1-based position of the entry in the queue."""
+        ...
+
+    def pq_cancel(pqueue: Handle, entry: int) -> int:
+        """Remove an entry from the queue; 1 if found, else 0."""
         ...
 
     # --- Datasets (cmb_dataset): tally statistics ------------------------------
@@ -363,9 +403,12 @@ else:
     stop = _b.process_stop
     wait_process = _b.process_wait_process
     resume = _b.process_resume
-    yield_now = _b.process_yield
+    suspend = _b.process_yield
     status = _b.process_status
     set_priority = _b.process_priority_set
+    timer_set = _b.process_timer_set
+    timer_add = _b.process_timer_add
+    timers_clear = _b.process_timers_clear
 
     # Queues (cmb_buffer)
     put = _b.buffer_put
@@ -397,6 +440,13 @@ else:
     store_length = _b.objectqueue_length
     store_space = _b.objectqueue_space
     store_mean_length = _b.objectqueue_mean_length
+
+    # Priority queues (cmb_priorityqueue)
+    pq_put = _b.priorityqueue_put
+    pq_take = _b.priorityqueue_take
+    pq_length = _b.priorityqueue_length
+    pq_position = _b.priorityqueue_position
+    pq_cancel = _b.priorityqueue_cancel
 
     # Datasets (cmb_dataset)
     tally = _b.dataset_add

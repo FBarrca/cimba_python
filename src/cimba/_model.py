@@ -74,12 +74,16 @@ if TYPE_CHECKING:
     Predicate = int      #: address of the matching @model.predicate
     #: handles of the same-named @model.process's copies, indexable
     Processes = Sequence[Handle]
+    #: indexable array of priority queues; default declares the count
+    PQueues = Sequence[Handle]
 
     class _Capacity:
         cap: int | str
         def __init__(self, cap: int | str) -> None: ...
 
     def capacity(cap: int | str) -> Any: ...
+
+    def count(n: int) -> Any: ...
 
     _DECL_KINDS: dict[Any, str] = {}
 else:
@@ -98,6 +102,7 @@ else:
     class Condition(_Decl): ...
     class Predicate(_Decl): ...
     class Processes(_Decl): ...
+    class PQueues(_Decl): ...
 
     class _Capacity:
         def __init__(self, cap):
@@ -107,12 +112,16 @@ else:
         """Declare a Pool/Store capacity: an int or the name of a param."""
         return _Capacity(cap)
 
+    def count(n):
+        """Declare the number of elements in a PQueues field."""
+        return n
+
     _DECL_KINDS = {Param: "param", Output: "output", State: "state",
                    FloatState: "fstate",
                    Queue: "queue", Resource: "resource", Pool: "pool",
                    Store: "store", Dataset: "dataset",
                    Condition: "condition", Predicate: "predicate",
-                   Processes: "processes"}
+                   Processes: "processes", PQueues: "pqueues"}
 
 
 def _class_declarations(cls: type) -> dict[str, Any]:
@@ -122,7 +131,8 @@ def _class_declarations(cls: type) -> dict[str, Any]:
                              "fstate": [], "resource": [],
                              "dataset": [], "condition": [],
                              "predicate": [], "processes": [],
-                             "queue": {}, "pool": {}, "store": {}}
+                             "queue": {}, "pool": {}, "store": {},
+                             "pqueues": {}}
     for fname, hint in get_type_hints(cls).items():
         kind = _DECL_KINDS.get(hint)
         if kind is None:
@@ -131,6 +141,13 @@ def _class_declarations(cls: type) -> dict[str, Any]:
         if kind in ("queue", "pool", "store"):
             if isinstance(default, _Capacity):
                 default = default.cap
+            decls[kind][fname] = default
+        elif kind == "pqueues":
+            if not isinstance(default, int) or default < 1:
+                raise ValueError(
+                    f"field '{fname}': a PQueues declaration needs a "
+                    "positive count default, e.g. "
+                    "'qs: sim.PQueues = sim.count(4)'")
             decls[kind][fname] = default
         else:
             if default is not None:
@@ -225,6 +242,7 @@ class Model:
         self.conditions = decls["condition"] + list(conditions)
         self.state = decls["state"] + list(state)
         self.float_state: list[str] = decls["fstate"]
+        self.pqueues: dict[str, int] = decls["pqueues"]
         self._predicate_fields: list[str] = decls["predicate"]
         self._process_fields: list[str] = decls["processes"]
 
@@ -239,6 +257,7 @@ class Model:
                             ("condition", self.conditions),
                             ("state", self.state),
                             ("fstate", self.float_state),
+                            ("pqueues", self.pqueues),
                             ("predicate", self._predicate_fields),
                             ("processes", self._process_fields)):
             for n in names:
@@ -359,6 +378,7 @@ class Model:
         fields += [(h, "<i8") for h in self._entities]
         fields += [(s, "<i8") for s in self.state]
         fields += [(s, "<f8") for s in self.float_state]
+        fields += [(f, "<i8", (n,)) for f, n in self.pqueues.items()]
         fields += [(p, "<i8") for p in self._predicate_fields]
         fields += [(f, "<i8") for _n, _fn, f in self._predicates
                    if f.startswith("_pred_")]
@@ -428,6 +448,9 @@ class Model:
                   COLLECT=collect_inner, CAP=_UNBOUNDED)
         for e in self._entities:
             ns[f"NAME_{e}"] = _b.cstring(e)
+        for f, n in self.pqueues.items():
+            for k in range(n):
+                ns[f"NAME_{f}_{k}"] = _b.cstring(f"{f}_{k}")
         for pname, proc in proc_cfuncs.items():
             ns[f"NAME_{pname}"] = _b.cstring(pname)
             ns[f"F_{pname}"] = proc.address
@@ -504,6 +527,12 @@ class Model:
             src += ["    h = condition_create()",
                     f"    condition_initialize(h, NAME_{c})",
                     f"    env['{c}'] = h"]
+        for f, n in self.pqueues.items():
+            for k in range(n):
+                src += ["    h = priorityqueue_create()",
+                        f"    priorityqueue_initialize(h, NAME_{f}_{k}, "
+                        "CAP)",
+                        f"    env['{f}'][{k}] = h"]
         offsets = {n: off for n, (_dt, off) in dtype.fields.items()}
         for pname, _fn, copies, pri, indexed in self._processes:
             for i in range(copies):
@@ -537,6 +566,10 @@ class Model:
             src += [f"    dataset_destroy(env['{d}'])"]
         for c in self.conditions:
             src += [f"    condition_destroy(env['{c}'])"]
+        for f, n in self.pqueues.items():
+            for k in range(n):
+                src += [f"    priorityqueue_terminate(env['{f}'][{k}])",
+                        f"    priorityqueue_destroy(env['{f}'][{k}])"]
         src += ["    event_queue_terminate()",
                 "    random_terminate()"]
         return "\n".join(src)

@@ -67,6 +67,9 @@ process_status = _extern("cpy_process_status", _i64(_intp))
 process_yield = _extern("cpy_process_yield", _i64())
 process_priority_set = _extern("cmb_process_priority_set",
                                _void(_intp, _i64))
+process_timer_set = _extern("cpy_process_timer_set", _u64(_intp, _f64, _i64))
+process_timer_add = _extern("cmb_process_timer_add", _u64(_intp, _f64, _i64))
+process_timers_clear = _extern("cmb_process_timers_clear", _void(_intp))
 
 # --- Buffers: counted amounts -------------------------------------------------
 buffer_create = _extern("cmb_buffer_create", _intp())
@@ -126,6 +129,19 @@ objectqueue_recording_start = _extern(
 objectqueue_recording_stop = _extern(
     "cmb_objectqueue_recording_stop", _void(_intp))
 objectqueue_mean_length = _extern("cpy_objectqueue_mean_length", _f64(_intp))
+
+# --- Priority queues: entries ordered by priority, with cancellation -------------
+priorityqueue_create = _extern("cmb_priorityqueue_create", _intp())
+priorityqueue_initialize = _extern(
+    "cmb_priorityqueue_initialize", _void(_intp, _intp, _u64))
+priorityqueue_terminate = _extern("cmb_priorityqueue_terminate", _void(_intp))
+priorityqueue_destroy = _extern("cmb_priorityqueue_destroy", _void(_intp))
+priorityqueue_put = _extern("cpy_priorityqueue_put", _u64(_intp, _intp, _i64))
+priorityqueue_take = _extern("cpy_priorityqueue_take", _intp(_intp))
+priorityqueue_length = _extern("cpy_priorityqueue_length", _u64(_intp))
+priorityqueue_position = _extern(
+    "cmb_priorityqueue_position", _u64(_intp, _u64))
+priorityqueue_cancel = _extern("cpy_priorityqueue_cancel", _u64(_intp, _u64))
 
 # --- Datasets: tally statistics --------------------------------------------------
 dataset_create = _extern("cmb_dataset_create", _intp())
