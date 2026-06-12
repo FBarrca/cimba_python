@@ -35,7 +35,4 @@ def use_threads(n: int) -> int:
     The ``n`` argument is accepted for API compatibility (``0`` means all cores)
     but is not passed through to the C library yet.
     """
-    cores = os.cpu_count() or 1
-    if n not in (0, cores):
-        return cores
-    return cores
+    return os.cpu_count() or 1

@@ -39,6 +39,9 @@ cffi_gen = custom_target(
 py.install_sources(
     'src/cimba/__init__.py',
     'src/cimba/sim.py',
+    'src/cimba/_bindings.py',
+    'src/cimba/_intrinsics.py',
+    'src/cimba/_model.py',
     'src/cimba/py.typed',
     'src/cimba/_cimba.pyi',
     subdir: 'cimba',
