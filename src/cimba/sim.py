@@ -42,10 +42,11 @@ Concept translation (cimba -> sim API):
     cmb_condition     sim.Condition + sim.Predicate + @model.predicate,
                       sim.wait_for()/sim.signal()
     cmb_dataset       sim.Dataset, sim.tally(), sim.dataset_mean()/
-                      sim.dataset_count()
-    statistics        recorded automatically over the measurement window:
-                      sim.mean_level(), sim.mean_in_use(),
-                      sim.pool_mean_in_use(), sim.store_mean_length()
+                      _count()/_min()/_max()/_std()
+    statistics        recorded over the measurement window (after warmup,
+                      datasets are reset when it opens): sim.mean_level(),
+                      sim.mean_in_use(), sim.pool_mean_in_use(),
+                      sim.store_mean_length()
 
 Mutable per-trial counters are declared with sim.State. Multi-copy
 processes may take a second argument to learn their index:
@@ -72,15 +73,19 @@ __all__ = [
     "Param", "Output", "State", "FloatState", "Queue", "Resource", "Pool",
     "Store", "Dataset", "Condition", "Predicate", "capacity",
     "hold", "now", "current", "interrupt", "stop", "wait_process", "resume",
-    "put", "get", "level", "mean_level",
-    "acquire", "release", "preempt", "in_use", "mean_in_use",
+    "yield_now", "status",
+    "put", "get", "level", "space", "mean_level",
+    "acquire", "release", "preempt", "available", "in_use", "mean_in_use",
     "pool_acquire", "pool_release", "pool_preempt", "pool_available",
     "pool_in_use", "pool_mean_in_use",
-    "store_put", "store_take", "store_length", "store_mean_length",
-    "tally", "dataset_mean", "dataset_count",
+    "store_put", "store_take", "store_length", "store_space",
+    "store_mean_length",
+    "tally", "dataset_mean", "dataset_count", "dataset_min", "dataset_max",
+    "dataset_std",
     "wait_for", "signal",
     "exponential", "gamma", "uniform", "normal", "random01",
-    "rayleigh", "pert", "bernoulli",
+    "rayleigh", "pert", "bernoulli", "triangular", "weibull", "lognormal",
+    "erlang", "beta", "poisson", "dice",
     "f2i", "i2f",
 ]
 
@@ -120,6 +125,15 @@ if TYPE_CHECKING:
         """Resume a process stopped with sim.stop()."""
         ...
 
+    def yield_now() -> int:
+        """Reschedule the calling process at the current time, letting
+        other events scheduled for this instant run first."""
+        ...
+
+    def status(process: Handle) -> int:
+        """Process status code (0 created, 1 running, 2 finished)."""
+        ...
+
     # --- Queues (cmb_buffer): counted amounts --------------------------------
     def put(queue: Handle, amount: int) -> int:
         """Add `amount` to the queue, blocking while it is full."""
@@ -131,6 +145,10 @@ if TYPE_CHECKING:
 
     def level(queue: Handle) -> int:
         """Current queue content."""
+        ...
+
+    def space(queue: Handle) -> int:
+        """Remaining queue capacity (huge for unbounded queues)."""
         ...
 
     def mean_level(queue: Handle) -> float:
@@ -148,6 +166,10 @@ if TYPE_CHECKING:
 
     def preempt(resource: Handle) -> int:
         """Acquire the resource, preempting a lower-priority holder."""
+        ...
+
+    def available(resource: Handle) -> int:
+        """1 if the resource is currently free, else 0."""
         ...
 
     def in_use(resource: Handle) -> int:
@@ -196,6 +218,10 @@ if TYPE_CHECKING:
         """Current number of objects in the store."""
         ...
 
+    def store_space(store: Handle) -> int:
+        """Remaining store capacity (huge for unbounded stores)."""
+        ...
+
     def store_mean_length(store: Handle) -> float:
         """Time-weighted mean store length over the recording window."""
         ...
@@ -211,6 +237,18 @@ if TYPE_CHECKING:
 
     def dataset_count(dataset: Handle) -> int:
         """Number of observations tallied so far."""
+        ...
+
+    def dataset_min(dataset: Handle) -> float:
+        """Smallest observation tallied so far."""
+        ...
+
+    def dataset_max(dataset: Handle) -> float:
+        """Largest observation tallied so far."""
+        ...
+
+    def dataset_std(dataset: Handle) -> float:
+        """Sample standard deviation of the observations (0 if < 2)."""
         ...
 
     # --- Random draws -----------------------------------------------------------
@@ -246,6 +284,34 @@ if TYPE_CHECKING:
         """1 with probability `p`, else 0."""
         ...
 
+    def triangular(low: float, mode: float, high: float) -> float:
+        """Triangular-distributed draw over [low, high]."""
+        ...
+
+    def weibull(shape: float, scale: float) -> float:
+        """Weibull-distributed draw."""
+        ...
+
+    def lognormal(m: float, s: float) -> float:
+        """Log-normal draw; mean exp(m + s^2/2), median exp(m)."""
+        ...
+
+    def erlang(k: int, m: float) -> float:
+        """Erlang draw: sum of k exponentials of mean m (mean k*m)."""
+        ...
+
+    def beta(a: float, b: float, low: float, high: float) -> float:
+        """Beta(a, b) draw scaled to [low, high]."""
+        ...
+
+    def poisson(rate: float) -> int:
+        """Poisson-distributed count with the given rate."""
+        ...
+
+    def dice(a: int, b: int) -> int:
+        """Uniform integer draw from [a, b] inclusive."""
+        ...
+
     # --- Conditions (cmb_condition) ---------------------------------------------
     def signal(condition: Handle) -> int:
         """Wake the condition's waiters to re-evaluate their predicates."""
@@ -276,17 +342,21 @@ else:
     stop = _b.process_stop
     wait_process = _b.process_wait_process
     resume = _b.process_resume
+    yield_now = _b.process_yield
+    status = _b.process_status
 
     # Queues (cmb_buffer)
     put = _b.buffer_put
     get = _b.buffer_get
     level = _b.buffer_level
+    space = _b.buffer_space
     mean_level = _b.buffer_mean_level
 
     # Resources (cmb_resource)
     acquire = _b.resource_acquire
     release = _b.resource_release
     preempt = _b.resource_preempt
+    available = _b.resource_available
     in_use = _b.resource_in_use
     mean_in_use = _b.resource_mean_in_use
 
@@ -302,12 +372,16 @@ else:
     store_put = _b.objectqueue_put
     store_take = _b.objectqueue_take
     store_length = _b.objectqueue_length
+    store_space = _b.objectqueue_space
     store_mean_length = _b.objectqueue_mean_length
 
     # Datasets (cmb_dataset)
     tally = _b.dataset_add
     dataset_mean = _b.dataset_mean
     dataset_count = _b.dataset_count
+    dataset_min = _b.dataset_min
+    dataset_max = _b.dataset_max
+    dataset_std = _b.dataset_std
 
     # Random draws
     exponential = _b.random_exponential
@@ -318,6 +392,13 @@ else:
     rayleigh = _b.random_rayleigh
     pert = _b.random_pert
     bernoulli = _b.random_bernoulli
+    triangular = _b.random_triangular
+    weibull = _b.random_weibull
+    lognormal = _b.random_lognormal
+    erlang = _b.random_erlang
+    beta = _b.random_beta
+    poisson = _b.random_poisson
+    dice = _b.random_dice
 
     # Conditions (cmb_condition)
     signal = _b.condition_signal

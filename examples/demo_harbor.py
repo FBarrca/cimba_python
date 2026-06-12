@@ -201,8 +201,9 @@ def _ship_lifecycle(env, anchorage, berths, dockable, time_in_system,
         sim.pool_release(env.tugs, tugs_needed)
         sim.signal(env.harbormaster)
 
-        if sim.now() > env.start_time + env.warmup_s:
-            sim.tally(time_in_system, sim.now() - t_arr)
+        # Datasets are reset when the measurement window opens, which
+        # replaces the C version's explicit warmup-time check
+        sim.tally(time_in_system, sim.now() - t_arr)
 
 
 @harbor.process(copies=N_HANDLERS[0])

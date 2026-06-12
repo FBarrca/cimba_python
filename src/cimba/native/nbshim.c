@@ -53,6 +53,43 @@ uint64_t cpy_random_bernoulli(const double p)
     return cmb_random_bernoulli(p);
 }
 
+double cpy_random_triangular(const double min, const double mode,
+                             const double max)
+{
+    return cmb_random_triangular(min, mode, max);
+}
+
+double cpy_random_weibull(const double shape, const double scale)
+{
+    return cmb_random_weibull(shape, scale);
+}
+
+double cpy_random_lognormal(const double m, const double s)
+{
+    return cmb_random_lognormal(m, s);
+}
+
+double cpy_random_erlang(const uint64_t k, const double m)
+{
+    return cmb_random_erlang((unsigned)k, m);
+}
+
+double cpy_random_beta(const double a, const double b,
+                       const double min, const double max)
+{
+    return cmb_random_beta(a, b, min, max);
+}
+
+uint64_t cpy_random_poisson(const double r)
+{
+    return cmb_random_poisson(r);
+}
+
+int64_t cpy_random_dice(const int64_t a, const int64_t b)
+{
+    return cmb_random_dice((long)a, (long)b);
+}
+
 uint64_t cpy_wtdsummary_sizeof(void)
 {
     return sizeof(struct cmb_wtdsummary);
@@ -153,6 +190,21 @@ uint64_t cpy_buffer_level(const void *bp)
     return cmb_buffer_level((void *)bp);
 }
 
+uint64_t cpy_buffer_space(const void *bp)
+{
+    return cmb_buffer_space((void *)bp);
+}
+
+uint64_t cpy_objectqueue_space(const void *oqp)
+{
+    return cmb_objectqueue_space((void *)oqp);
+}
+
+uint64_t cpy_resource_available(const void *rp)
+{
+    return cmb_resource_available(rp);
+}
+
 /* Tally statistics over a dataset */
 double cpy_dataset_mean(const void *dsp)
 {
@@ -165,6 +217,27 @@ double cpy_dataset_mean(const void *dsp)
 uint64_t cpy_dataset_count(const void *dsp)
 {
     return cmb_dataset_count(dsp);
+}
+
+double cpy_dataset_min(const void *dsp)
+{
+    return cmb_dataset_min(dsp);
+}
+
+double cpy_dataset_max(const void *dsp)
+{
+    return cmb_dataset_max(dsp);
+}
+
+double cpy_dataset_stddev(const void *dsp)
+{
+    if (cmb_dataset_count(dsp) < 2u) {
+        return 0.0;
+    }
+    struct cmb_datasummary ds;
+    cmb_datasummary_initialize(&ds);
+    cmb_dataset_summarize(dsp, &ds);
+    return cmb_datasummary_stddev(&ds);
 }
 
 /* Blocking take from an object queue, returning the object value
@@ -185,6 +258,12 @@ int64_t cpy_process_status(const void *pp)
 void *cpy_process_current(void)
 {
     return cmb_process_current();
+}
+
+/* Reschedule the caller at the current time, letting same-time events run */
+int64_t cpy_process_yield(void)
+{
+    return cmb_process_yield();
 }
 
 uint32_t cpy_cpu_cores(void)

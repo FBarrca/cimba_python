@@ -65,7 +65,7 @@ if TYPE_CHECKING:
     Output = float       #: result, written by the model
     State = int          #: mutable per-trial counter
     FloatState = float   #: mutable per-trial real-valued state
-    Queue = Handle       #: cmb_buffer of counted amounts
+    Queue = Handle       #: cmb_buffer; default declares capacity
     Resource = Handle    #: cmb_resource, single holder
     Pool = Handle        #: cmb_resourcepool; default declares capacity
     Store = Handle       #: cmb_objectqueue; default declares capacity
@@ -115,23 +115,24 @@ def _class_declarations(cls: type) -> dict[str, Any]:
     """Collect env field declarations from a Model subclass's annotations,
     in declaration order (base classes first)."""
     decls: dict[str, Any] = {"param": [], "output": [], "state": [],
-                             "fstate": [], "queue": [], "resource": [],
+                             "fstate": [], "resource": [],
                              "dataset": [], "condition": [],
-                             "predicate": [], "pool": {}, "store": {}}
+                             "predicate": [],
+                             "queue": {}, "pool": {}, "store": {}}
     for fname, hint in get_type_hints(cls).items():
         kind = _DECL_KINDS.get(hint)
         if kind is None:
             continue
         default = getattr(cls, fname, None)
-        if kind in ("pool", "store"):
+        if kind in ("queue", "pool", "store"):
             if isinstance(default, _Capacity):
                 default = default.cap
             decls[kind][fname] = default
         else:
             if default is not None:
                 raise ValueError(
-                    f"field '{fname}': only Pool/Store declarations may "
-                    "carry a capacity default")
+                    f"field '{fname}': only Queue/Pool/Store declarations "
+                    "may carry a capacity default")
             decls[kind].append(fname)
     return decls
 
@@ -201,7 +202,7 @@ class Model:
     def __init__(self, name: str | None = None, *,
                  params: Iterable[str] = (),
                  outputs: Iterable[str] = (),
-                 queues: Iterable[str] = (),
+                 queues: _Capacities = None,
                  resources: Iterable[str] = (),
                  pools: _Capacities = None,
                  stores: _Capacities = None,
@@ -212,7 +213,7 @@ class Model:
         self.name = name if name is not None else type(self).__name__
         self.params = decls["param"] + list(params)
         self.outputs = decls["output"] + list(outputs)
-        self.queues = decls["queue"] + list(queues)
+        self.queues = decls["queue"] | _as_capacity_dict(queues)
         self.resources = decls["resource"] + list(resources)
         self.pools = decls["pool"] | _as_capacity_dict(pools)
         self.stores = decls["store"] | _as_capacity_dict(stores)
@@ -239,7 +240,8 @@ class Model:
                 if n in seen:
                     raise ValueError(f"duplicate field name '{n}'")
                 seen.add(n)
-        for cap in list(self.pools.values()) + list(self.stores.values()):
+        for cap in (list(self.queues.values()) + list(self.pools.values())
+                    + list(self.stores.values())):
             if cap is not None and not isinstance(cap, int) \
                     and cap not in self.params:
                 raise ValueError(f"capacity '{cap}' is neither an int nor "
@@ -318,7 +320,7 @@ class Model:
     # --- Trial record layout ----------------------------------------------
     @property
     def _entities(self) -> list[str]:
-        return (self.queues + self.resources + list(self.pools)
+        return (list(self.queues) + self.resources + list(self.pools)
                 + list(self.stores) + self.datasets + self.conditions)
 
     @property
@@ -426,6 +428,8 @@ class Model:
         src = ["def _start_rec(subject, obj):",
                "    env = carray(subject, 1)[0]"]
         src += [f"    {k}_recording_start(env['{n}'])" for k, n in recorded]
+        # Datasets tally over the measurement window only
+        src += [f"    dataset_reset(env['{d}'])" for d in self.datasets]
         src += ["def _stop_rec(subject, obj):",
                 "    env = carray(subject, 1)[0]"]
         src += [f"    {k}_recording_stop(env['{n}'])" for k, n in recorded]
@@ -448,9 +452,9 @@ class Model:
                 "    event_schedule(EV_STOP, self_addr, 0, t, 0)",
                 "    t = t + env['cooldown_s']",
                 "    event_schedule(EV_END, self_addr, 0, t, 0)"]
-        for q in self.queues:
+        for q, cap in self.queues.items():
             src += ["    h = buffer_create()",
-                    f"    buffer_initialize(h, NAME_{q}, CAP)",
+                    f"    buffer_initialize(h, NAME_{q}, {cap_expr(cap)})",
                     f"    env['{q}'] = h"]
         for r in self.resources:
             src += ["    h = resource_create()",
