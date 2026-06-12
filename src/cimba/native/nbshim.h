@@ -97,6 +97,12 @@ CIMBA_PY_EXPORT uint64_t cpy_process_timer_set(void *pp, double dur,
                                                int64_t sig);
 CIMBA_PY_EXPORT uint64_t cpy_process_timer_cancel(void *pp, uint64_t hndl);
 CIMBA_PY_EXPORT int64_t cpy_process_status(const void *pp);
+CIMBA_PY_EXPORT uint64_t cpy_process_sizeof(void);
+CIMBA_PY_EXPORT intptr_t cpy_process_create_sized(uint64_t nbytes);
+CIMBA_PY_EXPORT void cpy_spawned_register(void *pp);
+CIMBA_PY_EXPORT uint64_t cpy_spawned_unregister(void *pp);
+CIMBA_PY_EXPORT void cpy_spawned_stop_all(void);
+CIMBA_PY_EXPORT void cpy_spawned_reclaim(void);
 CIMBA_PY_EXPORT void *cpy_process_current(void);
 CIMBA_PY_EXPORT uint32_t cpy_cpu_cores(void);
 CIMBA_PY_EXPORT void cpy_logger_flags_on(uint32_t flags);

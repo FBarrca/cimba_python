@@ -22,6 +22,7 @@ ffibuilder.cdef("""
                               size_t trial_struct_size,
                               void (*your_trial_func)(void *));
     uint64_t cmb_random_hwseed(void);
+    uint64_t cpy_process_sizeof(void);
     void cpy_logger_flags_on(uint32_t flags);
     void cpy_logger_flags_off(uint32_t flags);
     void cmb_logger_flags_off(uint32_t flags);

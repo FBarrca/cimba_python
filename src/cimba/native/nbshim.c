@@ -10,6 +10,7 @@
 
 #include <inttypes.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #include "cimba.h"
 #include "cmb_priorityqueue.h"   /* not part of the cimba.h umbrella */
@@ -431,6 +432,83 @@ uint64_t cpy_process_timer_cancel(void *pp, const uint64_t hndl)
 int64_t cpy_process_status(const void *pp)
 {
     return (int64_t)cmb_process_status(pp);
+}
+
+uint64_t cpy_process_sizeof(void)
+{
+    return sizeof(struct cmb_process);
+}
+
+/* Like cmb_process_create, but with room for derived-struct fields after
+ * the cmb_process header (zeroed). cmb_process_destroy frees the block. */
+intptr_t cpy_process_create_sized(const uint64_t nbytes)
+{
+    cmb_assert_release(nbytes >= sizeof(struct cmb_process));
+
+    void *pp = calloc(1u, nbytes);
+    cmb_assert_release(pp != NULL);
+
+    return (intptr_t)pp;
+}
+
+/*
+ * Registry of live sim.spawn()ed processes, one per trial thread.
+ * spawn registers, despawn unregisters; at the end of the trial the
+ * generated code stops the leftovers (like the static processes) and
+ * reclaims their memory.
+ */
+static CMB_THREAD_LOCAL struct {
+    struct cmb_process **items;
+    uint64_t len;
+    uint64_t cap;
+} cpy_spawned = { NULL, 0u, 0u };
+
+void cpy_spawned_register(void *pp)
+{
+    cmb_assert_release(pp != NULL);
+
+    if (cpy_spawned.len == cpy_spawned.cap) {
+        const uint64_t cap = (cpy_spawned.cap == 0u) ? 16u
+                                                     : 2u * cpy_spawned.cap;
+        cpy_spawned.items = realloc(cpy_spawned.items,
+                                    cap * sizeof(*cpy_spawned.items));
+        cmb_assert_release(cpy_spawned.items != NULL);
+        cpy_spawned.cap = cap;
+    }
+    cpy_spawned.items[cpy_spawned.len++] = pp;
+}
+
+uint64_t cpy_spawned_unregister(void *pp)
+{
+    for (uint64_t i = 0u; i < cpy_spawned.len; i++) {
+        if (cpy_spawned.items[i] == pp) {
+            cpy_spawned.items[i] = cpy_spawned.items[--cpy_spawned.len];
+            return 1u;
+        }
+    }
+    return 0u;
+}
+
+void cpy_spawned_stop_all(void)
+{
+    for (uint64_t i = 0u; i < cpy_spawned.len; i++) {
+        struct cmb_process *pp = cpy_spawned.items[i];
+        if (cmb_process_status(pp) == CMB_PROCESS_RUNNING) {
+            cmb_process_stop(pp, NULL);
+        }
+    }
+}
+
+void cpy_spawned_reclaim(void)
+{
+    for (uint64_t i = 0u; i < cpy_spawned.len; i++) {
+        cmb_process_terminate(cpy_spawned.items[i]);
+        cmb_process_destroy(cpy_spawned.items[i]);
+    }
+    free(cpy_spawned.items);
+    cpy_spawned.items = NULL;
+    cpy_spawned.len = 0u;
+    cpy_spawned.cap = 0u;
 }
 
 void *cpy_process_current(void)

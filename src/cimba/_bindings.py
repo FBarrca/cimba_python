@@ -80,6 +80,11 @@ random_pascal = _extern("cpy_random_pascal", _u64(_u64, _f64))
 
 # --- Processes ---------------------------------------------------------------
 process_create = _extern("cmb_process_create", _intp())
+process_create_sized = _extern("cpy_process_create_sized", _intp(_u64))
+spawned_register = _extern("cpy_spawned_register", _void(_intp))
+spawned_unregister = _extern("cpy_spawned_unregister", _u64(_intp))
+spawned_stop_all = _extern("cpy_spawned_stop_all", _void())
+spawned_reclaim = _extern("cpy_spawned_reclaim", _void())
 process_initialize = _extern(
     "cmb_process_initialize", _void(_intp, _intp, _intp, _intp, _i64))
 process_start = _extern("cmb_process_start", _void(_intp))

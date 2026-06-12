@@ -27,10 +27,15 @@ static type of `env`, so fields are checked and completed:
 
 Concept translation (cimba -> sim API):
 
-    cmb_process       @model.process (copies=, priority=), sim.hold(),
-                      sim.current(), sim.interrupt(), sim.stop(),
-                      sim.wait_process(), sim.wait_event(), sim.resume(),
-                      sim.timer_set()/sim.timer_add()/sim.timer_cancel()
+    cmb_process       @model.process (copies=, priority=, struct=),
+                      sim.hold(), sim.current(), sim.interrupt(),
+                      sim.stop(), sim.wait_process(), sim.wait_event(),
+                      sim.resume(), sim.timer_set()/sim.timer_add()/
+                      sim.timer_cancel(); dynamic creation via
+                      sim.Spawnable fields, sim.spawn()/sim.despawn()
+    derived structs   sim.Struct subclasses; a process declares its own
+                      fields with a final `vip: Visitor` parameter, and
+                      Visitor(handle) views any such process's fields
     cmb_buffer        sim.Queue, sim.put()/sim.get()/sim.level()
     cmb_resource      sim.Resource, sim.acquire()/sim.release()/
                       sim.preempt(), sim.held()
@@ -67,24 +72,30 @@ and the trial codegen live in ``_model``.
 
 from typing import TYPE_CHECKING, Any
 
+import numpy as _np
+
+from numba import carray as _carray
 from numba import njit
+from numba import types as _nbtypes
 
 from . import _bindings as _b
+from ._intrinsics import ptr_caster as _ptr_caster
 from ._intrinsics import record_addr as _record_addr
 from ._model import (Condition, Dataset, Env, Event, Experiment, FloatState,
                      Handle, Model, Output, Param, Pool, PQueues, Predicate,
-                     Processes, Queue, Resource, State, Store, capacity,
-                     count)
+                     Processes, Queue, Resource, Spawnable, State, Store,
+                     Struct, capacity, count)
 
 __all__ = [
     "Model", "Experiment", "Env", "Handle",
     "Param", "Output", "State", "FloatState", "Queue", "Resource", "Pool",
     "Store", "Dataset", "Condition", "Predicate", "Event", "Processes",
-    "PQueues", "capacity", "count",
+    "PQueues", "Spawnable", "Struct", "capacity", "count",
     "SUCCESS", "PREEMPTED", "INTERRUPTED", "STOPPED", "CANCELLED", "TIMEOUT",
     "LOGGER_FATAL", "LOGGER_ERROR", "LOGGER_WARNING", "LOGGER_INFO",
     "hold", "now", "current", "interrupt", "stop", "wait_process",
     "wait_event", "resume",
+    "spawn", "despawn",
     "suspend", "status", "set_priority",
     "timer_set", "timer_add", "timer_cancel", "timers_clear",
     "schedule", "schedule_at", "event_cancel", "event_reschedule",
@@ -170,6 +181,22 @@ if TYPE_CHECKING:
 
     def resume(process: Handle, signal: int) -> None:
         """Resume a process stopped with sim.stop()."""
+        ...
+
+    def spawn(process: int, env: Env, priority: int = 0) -> Handle:
+        """Create and start a new copy of a spawnable process; `process`
+        is the sim.Spawnable env field of the same name. The new process
+        only begins running once the caller blocks, so its sim.Struct
+        fields (zeroed at creation) can be initialized through the
+        returned handle first."""
+        ...
+
+    def despawn(process: Handle) -> None:
+        """Free a finished spawned process (its function returned,
+        sim.status() == 2), recycling its memory during the trial.
+        Optional: spawned processes still alive or unreclaimed at the
+        end of the trial are stopped and freed automatically. Despawning
+        the same handle twice is a no-op."""
         ...
 
     def suspend() -> int:
@@ -623,6 +650,35 @@ else:
     wait_event = _b.process_wait_event
     resume = _b.process_resume
     suspend = _b.process_yield
+
+    # Dynamic process creation: a sim.Spawnable env field points at a
+    # static descriptor [cfunc address, name cstring, allocation size]
+    # built at model compile time (see _model._compile). Live spawns are
+    # tracked in a per-trial native registry, so leftovers are stopped
+    # and reclaimed at the end of the trial like the static processes.
+    _spawn_desc = _ptr_caster(_nbtypes.int64)
+    _process_create_sized = _b.process_create_sized
+    _process_initialize = _b.process_initialize
+    _process_start = _b.process_start
+    _process_terminate = _b.process_terminate
+    _process_destroy = _b.process_destroy
+    _spawned_register = _b.spawned_register
+    _spawned_unregister = _b.spawned_unregister
+
+    @njit
+    def spawn(process, env, priority=0):
+        d = _carray(_spawn_desc(process), 3)
+        p = _process_create_sized(_np.uint64(d[2]))
+        _process_initialize(p, d[1], d[0], _record_addr(env), priority)
+        _process_start(p)
+        _spawned_register(p)
+        return p
+
+    @njit
+    def despawn(process):
+        if _spawned_unregister(process) != 0:
+            _process_terminate(process)
+            _process_destroy(process)
     status = _b.process_status
     set_priority = _b.process_priority_set
     timer_set = _b.process_timer_set

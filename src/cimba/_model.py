@@ -16,6 +16,7 @@ functions, then compiles everything on first ``experiment()``:
 
 import keyword
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import (TYPE_CHECKING, Any, TypedDict, TypeVar, get_type_hints,
                     overload)
 
@@ -23,6 +24,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from numba import carray, cfunc, from_dtype, njit, types
+from numba.extending import overload as _nb_overload
 
 from . import _bindings as _b
 from ._cimba import ffi, lib
@@ -77,6 +79,8 @@ if TYPE_CHECKING:
     Processes = Sequence[Handle]
     #: indexable array of priority queues; default declares the count
     PQueues = Sequence[Handle]
+    #: the same-named @model.process, created at runtime by sim.spawn()
+    Spawnable = int
 
     class _Capacity:
         cap: int | str
@@ -105,6 +109,7 @@ else:
     class Event(_Decl): ...
     class Processes(_Decl): ...
     class PQueues(_Decl): ...
+    class Spawnable(_Decl): ...
 
     class _Capacity:
         def __init__(self, cap):
@@ -124,7 +129,8 @@ else:
                    Store: "store", Dataset: "dataset",
                    Condition: "condition", Predicate: "predicate",
                    Event: "event",
-                   Processes: "processes", PQueues: "pqueues"}
+                   Processes: "processes", PQueues: "pqueues",
+                   Spawnable: "spawnable"}
 
 
 def _class_declarations(cls: type) -> dict[str, Any]:
@@ -134,6 +140,7 @@ def _class_declarations(cls: type) -> dict[str, Any]:
                              "fstate": [], "resource": [],
                              "dataset": [], "condition": [],
                              "predicate": [], "event": [], "processes": [],
+                             "spawnable": [],
                              "queue": {}, "pool": {}, "store": {},
                              "pqueues": {}}
     for fname, hint in get_type_hints(cls).items():
@@ -175,6 +182,98 @@ _EXTERN_FUNCS = {name: obj for name, obj in vars(_b).items()
 
 _UNBOUNDED = np.uint64(0xFFFFFFFFFFFFFFFF)
 
+# Offset of derived-struct fields inside an extended process allocation:
+# the cmb_process header, rounded up to the 8-byte record alignment.
+_PROC_DATA_OFFSET = (int(lib.cpy_process_sizeof()) + 7) & ~7
+
+
+class Struct:
+    """Per-process data fields, declared like a dataclass: subclass it
+    and annotate the fields (``float`` or ``int``). A process function
+    asks for its own view by annotating a final parameter with the
+    subclass::
+
+        class Visitor(sim.Struct):
+            patience: float
+            rides: int
+
+        @model.process(copies=4)
+        def visitor(env, vip: Visitor):
+            vip.patience = sim.triangular(0.5, 1.0, 1.5)
+
+    Each process copy then carries its own fields, zeroed at creation, in
+    the same native allocation as the process (this is the Python form of
+    the C tutorial's ``struct visitor { struct cmb_process core; ... }``).
+    Subclassing a Struct subclass inherits its fields.
+
+    Other processes reach the same fields through the process handle:
+    inside model code, ``Visitor(handle)`` returns a read/write view --
+    so a handle pulled from a queue is all a server needs to update a
+    visitor's statistics. ``@model.process(struct=Visitor)`` attaches the
+    fields without the view parameter.
+    """
+
+    if TYPE_CHECKING:
+        def __init__(self, process: Handle) -> None: ...
+
+    def __new__(cls, *args: Any, **kwargs: Any) -> "Struct":
+        raise TypeError(f"{cls.__name__}(handle) views are only available "
+                        "inside compiled model code")
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        fields = []
+        for fname, hint in get_type_hints(cls).items():
+            if fname.startswith("_"):
+                continue
+            if hint is float:
+                fields.append((fname, "<f8"))
+            elif hint is int:
+                fields.append((fname, "<i8"))
+            else:
+                raise TypeError(f"struct field '{fname}': only float and "
+                                "int fields are supported")
+        if not fields:
+            raise ValueError(f"struct '{cls.__name__}' declares no fields")
+        cls._dtype = np.dtype(fields)
+        cls._alloc_size = _PROC_DATA_OFFSET + cls._dtype.itemsize
+
+        cast = ptr_caster(from_dtype(cls._dtype))
+        offset = _PROC_DATA_OFFSET
+
+        def view(process):
+            return carray(cast(process + offset), 1)[0]
+
+        @_nb_overload(cls)
+        def struct_view(process):
+            if not isinstance(process, types.Integer):
+                return None
+            return view
+
+
+def _is_struct_class(obj: Any) -> bool:
+    return (isinstance(obj, type) and issubclass(obj, Struct)
+            and obj is not Struct)
+
+
+@dataclass
+class _ProcDecl:
+    """A registered @model.process function."""
+
+    name: str
+    fn: Callable[..., Any]
+    copies: int
+    priority: int
+    indexed: bool                  # takes the copy index argument
+    struct: type[Struct] | None    # per-process fields, if any
+    injected: bool                 # fn receives its own struct view
+    spawnable: bool                # created by sim.spawn(), not at setup
+
+    @property
+    def alloc_size(self) -> int:
+        return (self.struct._alloc_size if self.struct is not None
+                else _PROC_DATA_OFFSET)
+
 
 class _Compiled(TypedDict):
     """Artifacts of Model._compile(), kept alive for the model's lifetime.
@@ -185,6 +284,9 @@ class _Compiled(TypedDict):
     procs: dict[str, Any]
     preds: dict[str, Any]
     user_events: dict[str, Any]
+    #: per-Spawnable-field descriptor arrays sim.spawn() reads:
+    #: [cfunc address, name cstring, allocation size]
+    spawns: dict[str, np.ndarray]
     collect: Any
     dtype: np.dtype
 
@@ -250,6 +352,7 @@ class Model:
         self._predicate_fields: list[str] = decls["predicate"]
         self._event_fields: list[str] = decls["event"]
         self._process_fields: list[str] = decls["processes"]
+        self._spawnable_fields: list[str] = decls["spawnable"]
 
         seen: set[str] = set()
         for kind, names in (("param", self.params),
@@ -265,7 +368,8 @@ class Model:
                             ("pqueues", self.pqueues),
                             ("predicate", self._predicate_fields),
                             ("event", self._event_fields),
-                            ("processes", self._process_fields)):
+                            ("processes", self._process_fields),
+                            ("spawnable", self._spawnable_fields)):
             for n in names:
                 _check_name(n, kind)
                 if n in seen:
@@ -278,9 +382,7 @@ class Model:
                 raise ValueError(f"capacity '{cap}' is neither an int nor "
                                  "a declared param")
         self._seen = seen
-        # (name, fn, copies, priority, indexed)
-        self._processes: list[
-            tuple[str, Callable[..., Any], int, int, bool]] = []
+        self._processes: list[_ProcDecl] = []
         # (name, fn, env field holding the compiled address)
         self._predicates: list[tuple[str, Callable[..., Any], str]] = []
         # (name, fn, env field holding the compiled address, takes_data)
@@ -294,31 +396,70 @@ class Model:
 
     @overload
     def process(self, fn: None = None, *, copies: int = 1,
-                priority: int = 0) -> Callable[[_F], _F]: ...
+                priority: int = 0,
+                struct: "type[Struct] | None" = None
+                ) -> Callable[[_F], _F]: ...
 
-    def process(self, fn=None, *, copies: int = 1, priority: int = 0):
+    def process(self, fn=None, *, copies: int = 1, priority: int = 0,
+                struct=None):
         """Register a process function `def fn(env)` or `def fn(env, idx)`
-        (the latter receives its copy index). copies=n starts n identical
-        processes; priority sets the cimba process priority."""
+        (the latter receives its copy index). A final parameter annotated
+        with a sim.Struct subclass receives the process's own field view:
+        `def fn(env, vip: Visitor)` or `def fn(env, idx, vip: Visitor)`.
+        copies=n starts n identical processes; priority sets the cimba
+        process priority; struct= attaches the per-process fields without
+        the view parameter. A process named in a sim.Spawnable field is
+        not started at setup -- sim.spawn(env.<name>, env) creates its
+        copies at runtime."""
         if fn is None:
             return lambda f: self.process(f, copies=copies,
-                                          priority=priority)
+                                          priority=priority, struct=struct)
         if copies < 1:
             raise ValueError("copies must be >= 1")
+        if struct is not None and not _is_struct_class(struct):
+            raise ValueError("struct= expects a sim.Struct subclass")
         name = fn.__name__
-        if name in self._process_fields:
-            # Handles are published in the declared Processes field
+        spawnable = name in self._spawnable_fields
+        if name in self._process_fields or spawnable:
+            # The declared field publishes the handles (Processes) or the
+            # spawn reference (Spawnable)
             if self._compiled is not None:
                 raise RuntimeError("model is already compiled")
-            if any(p[0] == name for p in self._processes):
+            if any(p.name == name for p in self._processes):
                 raise ValueError(f"process '{name}' already registered")
         else:
             self._register_name(name, "process")
+
         nargs = fn.__code__.co_argcount
-        if nargs not in (1, 2):
-            raise ValueError("process functions take (env) or (env, idx)")
-        self._processes.append((fn.__name__, fn, copies, priority,
-                                nargs == 2))
+        params = fn.__code__.co_varnames[:nargs]
+        hints = get_type_hints(fn)
+        own = hints.get(params[-1]) if nargs > 1 else None
+        injected = _is_struct_class(own)
+        for p in params[1:len(params) - 1 if injected else None]:
+            if _is_struct_class(hints.get(p)):
+                raise ValueError(f"process '{name}': the {hints[p].__name__}"
+                                 " view must be the last parameter")
+        if injected:
+            if struct is not None and struct is not own:
+                raise ValueError(f"process '{name}': struct= and the view "
+                                 "annotation disagree")
+            struct = own
+        indexed = nargs - injected == 2
+        if nargs - injected not in (1, 2):
+            raise ValueError(
+                "process functions take (env), (env, idx), and optionally "
+                "a final view parameter annotated with a sim.Struct "
+                "subclass")
+        if spawnable:
+            if copies != 1:
+                raise ValueError(f"spawnable process '{name}' cannot take "
+                                 "copies; sim.spawn() creates them")
+            if indexed:
+                raise ValueError(f"spawnable process '{name}' takes (env) "
+                                 "or (env, view), not a copy index")
+        self._processes.append(_ProcDecl(name, fn, copies, priority,
+                                         indexed, struct, injected,
+                                         spawnable))
         return fn
 
     def predicate(self, fn: _F) -> _F:
@@ -396,9 +537,9 @@ class Model:
 
     @property
     def _process_handles(self) -> list[str]:
-        return [self._handle_expr(pname, i)
-                for pname, _fn, copies, _pri, _ix in self._processes
-                for i in range(copies)]
+        return [self._handle_expr(p.name, i)
+                for p in self._processes if not p.spawnable
+                for i in range(p.copies)]
 
     @property
     def dtype(self) -> np.dtype:
@@ -416,16 +557,19 @@ class Model:
         fields += [(e, "<i8") for e in self._event_fields]
         fields += [(f, "<i8") for _n, _fn, f, _d in self._events
                    if f.startswith("_ev_")]
-        for pname, _fn, copies, _pri, indexed in self._processes:
-            if pname in self._process_fields:
-                fields += [(pname, "<i8", (copies,))]
+        fields += [(s, "<i8") for s in self._spawnable_fields]
+        for p in self._processes:
+            if p.spawnable:
+                continue
+            if p.name in self._process_fields:
+                fields += [(p.name, "<i8", (p.copies,))]
             else:
-                fields += [(f"_p_{pname}_{i}", "<i8")
-                           for i in range(copies)]
-            if indexed:
-                for i in range(copies):
-                    fields += [(f"_cx_{pname}_{i}_env", "<i8"),
-                               (f"_cx_{pname}_{i}_idx", "<i8")]
+                fields += [(f"_p_{p.name}_{i}", "<i8")
+                           for i in range(p.copies)]
+            if p.indexed:
+                for i in range(p.copies):
+                    fields += [(f"_cx_{p.name}_{i}_env", "<i8"),
+                               (f"_cx_{p.name}_{i}_idx", "<i8")]
         return np.dtype(fields)
 
     # --- Compilation --------------------------------------------------------
@@ -442,20 +586,34 @@ class Model:
         ev_sig = types.void(trial_ptr, types.intp)
         rec_from_addr = ptr_caster(rec)
 
-        def make_proc(inner):
-            @cfunc(proc_sig)
-            def proc(me, ctxp):
-                inner(carray(ctxp, 1)[0])
-                return 0
+        def make_proc(inner, struct):
+            if struct is None:
+                @cfunc(proc_sig)
+                def proc(me, ctxp):
+                    inner(carray(ctxp, 1)[0])
+                    return 0
+            else:
+                @cfunc(proc_sig)
+                def proc(me, ctxp):
+                    inner(carray(ctxp, 1)[0], struct(me))
+                    return 0
             return proc
 
-        def make_proc_indexed(inner):
-            @cfunc(proc_sig_ix)
-            def proc(me, ctxp):
-                pair = carray(ctxp, 2)
-                env = carray(rec_from_addr(pair[0]), 1)[0]
-                inner(env, pair[1])
-                return 0
+        def make_proc_indexed(inner, struct):
+            if struct is None:
+                @cfunc(proc_sig_ix)
+                def proc(me, ctxp):
+                    pair = carray(ctxp, 2)
+                    env = carray(rec_from_addr(pair[0]), 1)[0]
+                    inner(env, pair[1])
+                    return 0
+            else:
+                @cfunc(proc_sig_ix)
+                def proc(me, ctxp):
+                    pair = carray(ctxp, 2)
+                    env = carray(rec_from_addr(pair[0]), 1)[0]
+                    inner(env, pair[1], struct(me))
+                    return 0
             return proc
 
         def make_pred(inner):
@@ -476,10 +634,11 @@ class Model:
             return ev
 
         proc_cfuncs = {}
-        for pname, fn, _copies, _pri, indexed in self._processes:
-            inner = njit(fn)
-            proc_cfuncs[pname] = (make_proc_indexed(inner) if indexed
-                                  else make_proc(inner))
+        for p in self._processes:
+            inner = njit(p.fn)
+            view = p.struct if p.injected else None
+            proc_cfuncs[p.name] = (make_proc_indexed(inner, view)
+                                   if p.indexed else make_proc(inner, view))
         # Predicates and events keyed by the env field that publishes
         # their compiled address
         pred_cfuncs = {field: make_pred(njit(fn))
@@ -504,6 +663,9 @@ class Model:
         for pname, proc in proc_cfuncs.items():
             ns[f"NAME_{pname}"] = _b.cstring(pname)
             ns[f"F_{pname}"] = proc.address
+        for p in self._processes:
+            if p.struct is not None and not p.spawnable:
+                ns[f"SZ_{p.name}"] = np.uint64(p.alloc_size)
         return ns
 
     def _trial_source(self, dtype: np.dtype) -> str:
@@ -544,10 +706,13 @@ class Model:
                 ]
         # Stop only processes still running; some may have finished on
         # their own (e.g. a source that produced a fixed number of items)
-        src += ["def _end_sim(subject, obj):",
-                "    env = carray(subject, 1)[0]"]
-        src += [f"    if process_status({h}) == 1:\n"
-                f"        process_stop({h}, 0)" for h in handles]
+        has_spawns = any(p.spawnable for p in self._processes)
+        src = (src
+               + ["def _end_sim(subject, obj):",
+                  "    env = carray(subject, 1)[0]"]
+               + [f"    if process_status({h}) == 1:\n"
+                  f"        process_stop({h}, 0)" for h in handles]
+               + (["    spawned_stop_all()"] if has_spawns else []))
 
         src += ["def _trial(vtrl):",
                 "    arr = carray(vtrl, 1)",
@@ -595,18 +760,23 @@ class Model:
                         "CAP)",
                         f"    env['{f}'][{k}] = h"]
         offsets = {n: off for n, (_dt, off) in dtype.fields.items()}
-        for pname, _fn, copies, pri, indexed in self._processes:
-            for i in range(copies):
-                if indexed:
+        for p in self._processes:
+            if p.spawnable:
+                continue
+            pname = p.name
+            create = ("process_create()" if p.struct is None
+                      else f"process_create_sized(SZ_{pname})")
+            for i in range(p.copies):
+                if p.indexed:
                     src += [f"    env['_cx_{pname}_{i}_env'] = self_addr",
                             f"    env['_cx_{pname}_{i}_idx'] = {i}",
                             f"    ctx = self_addr + "
                             f"{offsets[f'_cx_{pname}_{i}_env']}"]
                 else:
                     src += ["    ctx = self_addr"]
-                src += ["    p = process_create()",
+                src += [f"    p = {create}",
                         f"    process_initialize(p, NAME_{pname}, "
-                        f"F_{pname}, ctx, {pri})",
+                        f"F_{pname}, ctx, {p.priority})",
                         "    process_start(p)",
                         f"    {self._handle_expr(pname, i)} = p"]
         src += ["    event_queue_execute()"]
@@ -615,6 +785,8 @@ class Model:
         for h in handles:
             src += [f"    process_terminate({h})",
                     f"    process_destroy({h})"]
+        if has_spawns:
+            src += ["    spawned_reclaim()"]
         for q in self.queues:
             src += [f"    buffer_destroy(env['{q}'])"]
         for r in self.resources:
@@ -650,10 +822,14 @@ class Model:
         if unbound:
             raise ValueError(f"Event field(s) {unbound} declared but "
                              "no @event of that name registered")
-        registered = {p[0] for p in self._processes}
+        registered = {p.name for p in self._processes}
         unbound = [f for f in self._process_fields if f not in registered]
         if unbound:
             raise ValueError(f"Processes field(s) {unbound} declared but "
+                             "no @process of that name registered")
+        unbound = [f for f in self._spawnable_fields if f not in registered]
+        if unbound:
+            raise ValueError(f"Spawnable field(s) {unbound} declared but "
                              "no @process of that name registered")
 
         dtype = self.dtype
@@ -663,6 +839,12 @@ class Model:
 
         proc_cfuncs, pred_cfuncs, event_cfuncs, collect_inner = \
             self._compile_callbacks(rec)
+        spawn_descs = {
+            p.name: np.array([proc_cfuncs[p.name].address,
+                              _b.cstring(p.name), p.alloc_size],
+                             dtype=np.int64)
+            for p in self._processes if p.spawnable
+        }
         ns = self._codegen_namespace(proc_cfuncs, collect_inner)
         self._source = self._trial_source(dtype)
         exec(compile(self._source, f"<cimba model '{self.name}'>", "exec"),
@@ -683,6 +865,7 @@ class Model:
             "procs": proc_cfuncs,
             "preds": pred_cfuncs,
             "user_events": event_cfuncs,
+            "spawns": spawn_descs,
             "collect": collect_inner,
             "dtype": dtype,
         }
@@ -730,6 +913,8 @@ class Model:
             trials[field] = pred.address
         for field, ev in compiled["user_events"].items():
             trials[field] = ev.address
+        for field, desc in compiled["spawns"].items():
+            trials[field] = desc.ctypes.data
 
         rng = np.random.default_rng(
             seed if seed is not None else int(lib.cmb_random_hwseed())
