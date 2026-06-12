@@ -1,12 +1,41 @@
 """Smoke tests: confirm the package built and links the native C library."""
 
+import os
 import numpy as np
 import pytest
+import time
 
 import cimba
 import cimba.sim as sim
 
 CAT_WEIGHTS = np.array([2.0, 3.0, 5.0], dtype=np.float64)
+
+
+def capture_native_stdout(fn):
+    read_fd, write_fd = os.pipe()
+    saved_fd = os.dup(1)
+    try:
+        os.dup2(write_fd, 1)
+        os.close(write_fd)
+        fn()
+        os.dup2(saved_fd, 1)
+        chunks = []
+        while True:
+            chunk = os.read(read_fd, 8192)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks).decode()
+    finally:
+        try:
+            os.dup2(saved_fd, 1)
+        except OSError:
+            pass
+        os.close(saved_fd)
+        try:
+            os.close(read_fd)
+        except OSError:
+            pass
 
 
 def test_wrapper_version():
@@ -18,6 +47,112 @@ def test_native_version_is_linked():
     assert isinstance(v, str)
     assert v
     assert v.startswith("3.")
+
+
+def test_logger_flag_controls():
+    cimba.logger_flags_off(cimba.LOGGER_INFO)
+    cimba.logger_flags_on(cimba.LOGGER_INFO)
+
+
+def test_sim_logging_helpers():
+    userflag = 0x00000001
+    msg = sim.log_text("python logging smoke")
+    label_i = sim.log_text("count")
+    label_f = sim.log_text("value")
+
+    class LogModel(sim.Model):
+        done: sim.Output
+
+    model = LogModel()
+
+    @model.process
+    def actor(env: LogModel):
+        sim.log_user(userflag, msg)
+        sim.log_user_i64(userflag, label_i, 7)
+        sim.log_user_f64(userflag, label_f, 2.5)
+        env.done = 1.0
+        sim.suspend()
+
+    cimba.logger_flags_on(userflag)
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=7)
+    out = capture_native_stdout(lambda: exp.run())
+    assert "python logging smoke" in out
+    assert "count 7" in out
+    assert "value 2.500000" in out
+    assert exp.failures == 0
+    assert exp["done"][0] == 1.0
+
+
+def test_sim_logging_suppressed_in_trial_threads():
+    userflag = 0x00000002
+    msg = sim.log_text("this should be suppressed")
+
+    class LogModel(sim.Model):
+        done: sim.Output
+
+    model = LogModel()
+
+    @model.process
+    def actor(env: LogModel):
+        sim.log_user(userflag, msg)
+        env.done = 1.0
+        sim.suspend()
+
+    cimba.logger_flags_off(userflag)
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=8)
+    out = capture_native_stdout(lambda: exp.run())
+    assert "this should be suppressed" not in out
+    assert exp.failures == 0
+    assert exp["done"][0] == 1.0
+    cimba.logger_flags_on(userflag)
+
+
+def test_disabled_logging_overhead_is_bounded():
+    userflag = 0x00000004
+    msg = sim.log_text("disabled")
+    cimba.logger_flags_off(userflag)
+
+    class NoLog(sim.Model):
+        done: sim.Output
+
+    no_log = NoLog()
+
+    @no_log.process
+    def no_log_actor(env: NoLog):
+        for _ in range(200):
+            sim.hold(0.0)
+        env.done = 1.0
+
+    class DisabledLog(sim.Model):
+        done: sim.Output
+
+    disabled_log = DisabledLog()
+
+    @disabled_log.process
+    def disabled_actor(env: DisabledLog):
+        for _ in range(200):
+            sim.log_user(userflag, msg)
+            sim.hold(0.0)
+        env.done = 1.0
+
+    no_log_exp = no_log.experiment(replications=1, duration=1.0, warmup=0.0,
+                                   seed=9)
+    disabled_exp = disabled_log.experiment(replications=1, duration=1.0,
+                                           warmup=0.0, seed=9)
+    no_log_exp.run()
+    disabled_exp.run()
+
+    t0 = time.perf_counter()
+    assert no_log_exp.run() == 0
+    no_log_time = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    assert disabled_exp.run() == 0
+    disabled_time = time.perf_counter() - t0
+
+    assert no_log_exp["done"][0] == 1.0
+    assert disabled_exp["done"][0] == 1.0
+    assert disabled_time < max(0.25, no_log_time * 20.0)
+    cimba.logger_flags_on(userflag)
 
 
 class MM1(sim.Model):
@@ -329,6 +464,110 @@ def test_process_timeout_bindings():
     assert exp["waited"][0] == sim.SUCCESS
     assert exp["target_signal"][0] == sim.TIMEOUT
     assert exp["constants_ok"][0] == 1.0
+
+
+def test_low_level_events():
+    class Evented(sim.Model):
+        fired_at: sim.Output
+        payload: sim.Output
+        sched_ok: sim.Output
+        t_sched: sim.Output
+        t_resched: sim.Output
+        prio_after: sim.Output
+        wait_status: sim.Output
+        cancel_first: sim.Output
+        cancel_second: sim.Output
+        n_bumps: sim.Output
+        count_ok: sim.Output
+        cur_ok: sim.Output
+        ring: sim.Event
+        counter: sim.State
+
+    model = Evented()
+
+    @model.event
+    def ring(env: Evented, data: int):
+        env.fired_at = sim.now()
+        env.payload = data
+        env.cur_ok = 1.0 if sim.current_event() != 0 else 0.0
+
+    @model.event
+    def bump(env: Evented):
+        env.counter += 1
+
+    @model.process
+    def driver(env: Evented):
+        h = sim.schedule(env.ring, env, 2.0, 42, 7)
+        env.sched_ok = sim.event_scheduled(h)
+        env.t_sched = sim.event_time(h)
+        env.count_ok = 1.0 if sim.event_count() >= 1 else 0.0
+        sim.event_reschedule(h, sim.now() + 3.0)
+        env.t_resched = sim.event_time(h)
+        sim.event_reprioritize(h, 9)
+        env.prio_after = sim.event_priority(h)
+        env.wait_status = sim.wait_event(h)
+
+        h2 = sim.schedule(env._ev_bump, env, 1.0)  # defaults: data/priority
+        env.cancel_first = sim.event_cancel(h2)
+        env.cancel_second = sim.event_cancel(h2)
+        sim.schedule_at(env._ev_bump, env, sim.now() + 1.0)
+        sim.hold(2.0)
+        env.n_bumps = env.counter
+        while True:
+            sim.hold(1000.0)
+
+    exp = model.experiment(replications=1, duration=20.0, warmup=0.0,
+                           seed=37)
+    assert exp.run() == 0
+    assert exp["sched_ok"][0] == 1.0
+    assert exp["t_sched"][0] == 2.0
+    assert exp["t_resched"][0] == 3.0
+    assert exp["prio_after"][0] == 9.0
+    assert exp["fired_at"][0] == 3.0
+    assert exp["payload"][0] == 42.0
+    assert exp["wait_status"][0] == sim.SUCCESS
+    assert exp["cancel_first"][0] == 1.0
+    assert exp["cancel_second"][0] == 0.0
+    assert exp["n_bumps"][0] == 1.0  # cancelled bump never fired
+    assert exp["count_ok"][0] == 1.0
+    assert exp["cur_ok"][0] == 1.0
+
+
+def test_clear_events_ends_trial():
+    class Clearer(sim.Model):
+        ended_at: sim.Output
+        had_events: sim.Output
+
+    model = Clearer()
+
+    @model.process
+    def runner(env: Clearer):
+        sim.hold(1.0)
+        env.ended_at = sim.now()
+        env.had_events = 1.0 if sim.event_count() > 0 else 0.0
+        sim.clear_events()
+        sim.suspend()
+
+    exp = model.experiment(replications=1, duration=100.0, warmup=10.0,
+                           seed=31)
+    assert exp.run() == 0
+    assert exp["ended_at"][0] == 1.0
+    assert exp["had_events"][0] == 1.0
+
+
+def test_unbound_event_field_rejected():
+    class Gate(sim.Model):
+        x: sim.Param
+        ring: sim.Event
+
+    model = Gate()
+
+    @model.process
+    def proc(env: Gate):
+        sim.hold(1.0)
+
+    with pytest.raises(ValueError, match="ring"):
+        model.experiment(x=1.0)
 
 
 def test_pqueues_and_timers():

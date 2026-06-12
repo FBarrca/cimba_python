@@ -72,6 +72,7 @@ if TYPE_CHECKING:
     Dataset = Handle     #: cmb_dataset tally statistics
     Condition = Handle   #: cmb_condition variable
     Predicate = int      #: address of the matching @model.predicate
+    Event = int          #: address of the matching @model.event callback
     #: handles of the same-named @model.process's copies, indexable
     Processes = Sequence[Handle]
     #: indexable array of priority queues; default declares the count
@@ -101,6 +102,7 @@ else:
     class Dataset(_Decl): ...
     class Condition(_Decl): ...
     class Predicate(_Decl): ...
+    class Event(_Decl): ...
     class Processes(_Decl): ...
     class PQueues(_Decl): ...
 
@@ -121,6 +123,7 @@ else:
                    Queue: "queue", Resource: "resource", Pool: "pool",
                    Store: "store", Dataset: "dataset",
                    Condition: "condition", Predicate: "predicate",
+                   Event: "event",
                    Processes: "processes", PQueues: "pqueues"}
 
 
@@ -130,7 +133,7 @@ def _class_declarations(cls: type) -> dict[str, Any]:
     decls: dict[str, Any] = {"param": [], "output": [], "state": [],
                              "fstate": [], "resource": [],
                              "dataset": [], "condition": [],
-                             "predicate": [], "processes": [],
+                             "predicate": [], "event": [], "processes": [],
                              "queue": {}, "pool": {}, "store": {},
                              "pqueues": {}}
     for fname, hint in get_type_hints(cls).items():
@@ -181,6 +184,7 @@ class _Compiled(TypedDict):
     events: tuple[Any, Any, Any]
     procs: dict[str, Any]
     preds: dict[str, Any]
+    user_events: dict[str, Any]
     collect: Any
     dtype: np.dtype
 
@@ -244,6 +248,7 @@ class Model:
         self.float_state: list[str] = decls["fstate"]
         self.pqueues: dict[str, int] = decls["pqueues"]
         self._predicate_fields: list[str] = decls["predicate"]
+        self._event_fields: list[str] = decls["event"]
         self._process_fields: list[str] = decls["processes"]
 
         seen: set[str] = set()
@@ -259,6 +264,7 @@ class Model:
                             ("fstate", self.float_state),
                             ("pqueues", self.pqueues),
                             ("predicate", self._predicate_fields),
+                            ("event", self._event_fields),
                             ("processes", self._process_fields)):
             for n in names:
                 _check_name(n, kind)
@@ -277,6 +283,8 @@ class Model:
             tuple[str, Callable[..., Any], int, int, bool]] = []
         # (name, fn, env field holding the compiled address)
         self._predicates: list[tuple[str, Callable[..., Any], str]] = []
+        # (name, fn, env field holding the compiled address, takes_data)
+        self._events: list[tuple[str, Callable[..., Any], str, bool]] = []
         self._collect: Callable[..., Any] | None = None
         self._compiled: _Compiled | None = None
 
@@ -332,6 +340,29 @@ class Model:
         self._predicates.append((name, fn, field))
         return fn
 
+    def event(self, fn: _F) -> _F:
+        """Register a low-level event callback `def fn(env)` or
+        `def fn(env, data)` (the latter receives the int64 data word given
+        at scheduling time). Its compiled address is published in the
+        declared Event field of the same name, for use with
+        sim.schedule(env.<name>, env, delay, ...). (Without a declared
+        field, it is published as the hidden field `_ev_<name>`.)"""
+        name = fn.__name__
+        nargs = fn.__code__.co_argcount
+        if nargs not in (1, 2):
+            raise ValueError("event functions take (env) or (env, data)")
+        if name in self._event_fields:
+            if self._compiled is not None:
+                raise RuntimeError("model is already compiled")
+            if any(f == name for _n, _fn, f, _d in self._events):
+                raise ValueError(f"event '{name}' already registered")
+            field = name
+        else:
+            self._register_name(name, "event")
+            field = f"_ev_{name}"
+        self._events.append((name, fn, field, nargs == 2))
+        return fn
+
     def collect(self, fn: _F) -> _F:
         """Register the statistics-collection function, run once at the
         end of each trial."""
@@ -382,6 +413,9 @@ class Model:
         fields += [(p, "<i8") for p in self._predicate_fields]
         fields += [(f, "<i8") for _n, _fn, f in self._predicates
                    if f.startswith("_pred_")]
+        fields += [(e, "<i8") for e in self._event_fields]
+        fields += [(f, "<i8") for _n, _fn, f, _d in self._events
+                   if f.startswith("_ev_")]
         for pname, _fn, copies, _pri, indexed in self._processes:
             if pname in self._process_fields:
                 fields += [(pname, "<i8", (copies,))]
@@ -397,13 +431,15 @@ class Model:
     # --- Compilation --------------------------------------------------------
     def _compile_callbacks(
         self, rec: Any,
-    ) -> tuple[dict[str, Any], dict[str, Any], Any]:
-        """njit-compile the registered process/predicate/collect functions
-        and wrap processes and predicates in cfuncs cimba can call."""
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], Any]:
+        """njit-compile the registered process/predicate/event/collect
+        functions and wrap all but collect in cfuncs cimba can call."""
         trial_ptr = types.CPointer(rec)
         proc_sig = types.intp(types.intp, trial_ptr)
         proc_sig_ix = types.intp(types.intp, types.CPointer(types.int64))
         pred_sig = types.boolean(types.intp, types.intp, trial_ptr)
+        # cmb_event_func: subject is the env pointer, object the data word
+        ev_sig = types.void(trial_ptr, types.intp)
         rec_from_addr = ptr_caster(rec)
 
         def make_proc(inner):
@@ -428,16 +464,30 @@ class Model:
                 return inner(carray(ctxp, 1)[0])
             return pred
 
+        def make_event(inner, takes_data):
+            if takes_data:
+                @cfunc(ev_sig)
+                def ev(subject, data):
+                    inner(carray(subject, 1)[0], data)
+            else:
+                @cfunc(ev_sig)
+                def ev(subject, data):
+                    inner(carray(subject, 1)[0])
+            return ev
+
         proc_cfuncs = {}
         for pname, fn, _copies, _pri, indexed in self._processes:
             inner = njit(fn)
             proc_cfuncs[pname] = (make_proc_indexed(inner) if indexed
                                   else make_proc(inner))
-        # Predicates keyed by the env field that publishes their address
+        # Predicates and events keyed by the env field that publishes
+        # their compiled address
         pred_cfuncs = {field: make_pred(njit(fn))
                        for _n, fn, field in self._predicates}
+        event_cfuncs = {field: make_event(njit(fn), takes_data)
+                        for _n, fn, field, takes_data in self._events}
         collect_inner = njit(self._collect) if self._collect else None
-        return proc_cfuncs, pred_cfuncs, collect_inner
+        return proc_cfuncs, pred_cfuncs, event_cfuncs, collect_inner
 
     def _codegen_namespace(self, proc_cfuncs: dict[str, Any],
                            collect_inner: Any) -> dict[str, Any]:
@@ -503,6 +553,7 @@ class Model:
                 "    arr = carray(vtrl, 1)",
                 "    env = arr[0]",
                 "    self_addr = addressof(vtrl)",
+                "    logger_apply_flags()",
                 "    event_queue_initialize(env['start_time'])",
                 "    random_initialize(env['seed'])",
                 "    t = env['start_time'] + env['warmup_s']",
@@ -594,6 +645,11 @@ class Model:
         if unbound:
             raise ValueError(f"Predicate field(s) {unbound} declared but "
                              "no @predicate of that name registered")
+        bound = {f for _n, _fn, f, _d in self._events}
+        unbound = [f for f in self._event_fields if f not in bound]
+        if unbound:
+            raise ValueError(f"Event field(s) {unbound} declared but "
+                             "no @event of that name registered")
         registered = {p[0] for p in self._processes}
         unbound = [f for f in self._process_fields if f not in registered]
         if unbound:
@@ -605,7 +661,7 @@ class Model:
         trial_ptr = types.CPointer(rec)
         evt_sig = types.void(trial_ptr, types.intp)
 
-        proc_cfuncs, pred_cfuncs, collect_inner = \
+        proc_cfuncs, pred_cfuncs, event_cfuncs, collect_inner = \
             self._compile_callbacks(rec)
         ns = self._codegen_namespace(proc_cfuncs, collect_inner)
         self._source = self._trial_source(dtype)
@@ -626,6 +682,7 @@ class Model:
             "events": (start_rec, stop_rec, end_sim),
             "procs": proc_cfuncs,
             "preds": pred_cfuncs,
+            "user_events": event_cfuncs,
             "collect": collect_inner,
             "dtype": dtype,
         }
@@ -671,6 +728,8 @@ class Model:
             trials[o] = np.nan
         for field, pred in compiled["preds"].items():
             trials[field] = pred.address
+        for field, ev in compiled["user_events"].items():
+            trials[field] = ev.address
 
         rng = np.random.default_rng(
             seed if seed is not None else int(lib.cmb_random_hwseed())

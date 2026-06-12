@@ -43,6 +43,11 @@ Concept translation (cimba -> sim API):
                       sim.i2f() bit-cast timestamps in and out)
     cmb_condition     sim.Condition + sim.Predicate + @model.predicate,
                       sim.wait_for()/sim.signal()
+    cmb_event         sim.Event + @model.event, sim.schedule()/
+                      sim.schedule_at(), sim.event_cancel()/
+                      _reschedule()/_reprioritize()/_scheduled()/
+                      _time()/_priority(), sim.current_event(),
+                      sim.event_count(), sim.clear_events()
     cmb_dataset       sim.Dataset, sim.tally(), sim.dataset_mean()/
                       _count()/_min()/_max()/_std()
     statistics        recorded over the measurement window (after warmup,
@@ -66,7 +71,7 @@ from numba import njit
 
 from . import _bindings as _b
 from ._intrinsics import record_addr as _record_addr
-from ._model import (Condition, Dataset, Env, Experiment, FloatState,
+from ._model import (Condition, Dataset, Env, Event, Experiment, FloatState,
                      Handle, Model, Output, Param, Pool, PQueues, Predicate,
                      Processes, Queue, Resource, State, Store, capacity,
                      count)
@@ -74,13 +79,17 @@ from ._model import (Condition, Dataset, Env, Experiment, FloatState,
 __all__ = [
     "Model", "Experiment", "Env", "Handle",
     "Param", "Output", "State", "FloatState", "Queue", "Resource", "Pool",
-    "Store", "Dataset", "Condition", "Predicate", "Processes", "PQueues",
-    "capacity", "count",
+    "Store", "Dataset", "Condition", "Predicate", "Event", "Processes",
+    "PQueues", "capacity", "count",
     "SUCCESS", "PREEMPTED", "INTERRUPTED", "STOPPED", "CANCELLED", "TIMEOUT",
+    "LOGGER_FATAL", "LOGGER_ERROR", "LOGGER_WARNING", "LOGGER_INFO",
     "hold", "now", "current", "interrupt", "stop", "wait_process",
     "wait_event", "resume",
     "suspend", "status", "set_priority",
     "timer_set", "timer_add", "timer_cancel", "timers_clear",
+    "schedule", "schedule_at", "event_cancel", "event_reschedule",
+    "event_reprioritize", "event_scheduled", "event_time",
+    "event_priority", "current_event", "event_count", "clear_events",
     "flip", "held", "pool_held",
     "pq_put", "pq_get", "pq_take", "pq_length", "pq_space", "pq_position",
     "pq_reprioritize", "pq_cancel", "pq_mean_length",
@@ -100,6 +109,7 @@ __all__ = [
     "logistic", "cauchy", "pareto", "chisquared", "f_dist", "std_t",
     "t_dist", "geometric", "binomial", "negative_binomial", "pascal",
     "hypoexponential", "hyperexponential", "categorical", "loaded_dice",
+    "log_text", "log_user", "log_user_i64", "log_user_f64",
     "f2i", "i2f",
 ]
 
@@ -111,6 +121,16 @@ INTERRUPTED = -2  #: interrupted with the generic signal
 STOPPED = -3      #: the awaited process was stopped
 CANCELLED = -4    #: a wait/request was cancelled
 TIMEOUT = -5      #: conventional signal for timer wakeups
+
+LOGGER_FATAL = 0x80000000
+LOGGER_ERROR = 0x40000000
+LOGGER_WARNING = 0x20000000
+LOGGER_INFO = 0x10000000
+
+
+def log_text(text: str) -> Handle:
+    """Return a stable native string handle for process-body logging."""
+    return _b.cstring(text)
 
 if TYPE_CHECKING:
     # Typed declarations of the modeling verbs. At runtime (the `else`
@@ -180,6 +200,63 @@ if TYPE_CHECKING:
 
     def timers_clear(process: Handle) -> None:
         """Cancel all pending timers of the process."""
+        ...
+
+    # --- Low-level events (cmb_event) -----------------------------------------
+    def schedule(event: int, env: Env, delay: float, data: int = 0,
+                 priority: int = 0) -> int:
+        """Schedule a @model.event callback `delay` time units from now.
+        `event` is the env field of the same name; `data` is the int64
+        word handed to the callback. Returns the event handle used by the
+        other event verbs and sim.wait_event()."""
+        ...
+
+    def schedule_at(event: int, env: Env, at: float, data: int = 0,
+                    priority: int = 0) -> int:
+        """Schedule a @model.event callback at absolute time `at`
+        (must not be before sim.now()). Returns the event handle."""
+        ...
+
+    def event_cancel(event: int) -> int:
+        """Remove a scheduled event from the queue; 1 if found, else 0.
+        Processes blocked on it in sim.wait_event() see CANCELLED."""
+        ...
+
+    def event_reschedule(event: int, at: float) -> int:
+        """Move a scheduled event to absolute time `at`; 1 if found."""
+        ...
+
+    def event_reprioritize(event: int, priority: int) -> int:
+        """Change a scheduled event's priority; 1 if found."""
+        ...
+
+    def event_scheduled(event: int) -> int:
+        """1 if the event is currently in the event queue, else 0."""
+        ...
+
+    def event_time(event: int) -> float:
+        """Scheduled time of an event; it must still be in the queue
+        (check with event_scheduled() first if unsure)."""
+        ...
+
+    def event_priority(event: int) -> int:
+        """Priority of an event; it must still be in the queue."""
+        ...
+
+    def current_event() -> int:
+        """Handle of the currently (or most recently) executed event,
+        zero if none."""
+        ...
+
+    def event_count() -> int:
+        """Number of events currently in the event queue."""
+        ...
+
+    def clear_events() -> None:
+        """Cancel every scheduled event, ending the trial as soon as the
+        caller blocks or returns. This also cancels the generated
+        lifecycle events, so the recording window never closes and
+        running processes are not stopped -- low-level escape hatch."""
         ...
 
     # --- Queues (cmb_buffer): counted amounts --------------------------------
@@ -501,6 +578,19 @@ if TYPE_CHECKING:
         """Alias for categorical(probabilities)."""
         ...
 
+    # --- Logging ---------------------------------------------------------------
+    def log_user(flags: int, message: Handle) -> None:
+        """Log a static message handle created by sim.log_text()."""
+        ...
+
+    def log_user_i64(flags: int, label: Handle, value: int) -> None:
+        """Log a static label and int64 value."""
+        ...
+
+    def log_user_f64(flags: int, label: Handle, value: float) -> None:
+        """Log a static label and float64 value."""
+        ...
+
     # --- Conditions (cmb_condition) ---------------------------------------------
     def signal(condition: Handle) -> int:
         """Wake the condition's waiters to re-evaluate their predicates."""
@@ -539,6 +629,29 @@ else:
     timer_add = _b.process_timer_add
     timer_cancel = _b.process_timer_cancel
     timers_clear = _b.process_timers_clear
+
+    # Low-level events (cmb_event)
+    event_cancel = _b.event_cancel
+    event_reschedule = _b.event_reschedule
+    event_reprioritize = _b.event_reprioritize
+    event_scheduled = _b.event_is_scheduled
+    event_time = _b.event_time
+    event_priority = _b.event_priority
+    current_event = _b.event_current
+    event_count = _b.event_queue_count
+    clear_events = _b.event_queue_clear
+
+    _event_schedule = _b.event_schedule
+
+    @njit
+    def schedule(event, env, delay, data=0, priority=0):
+        return _event_schedule(event, _record_addr(env), data,
+                               now() + delay, priority)
+
+    @njit
+    def schedule_at(event, env, at, data=0, priority=0):
+        return _event_schedule(event, _record_addr(env), data, at,
+                               priority)
 
     # Queues (cmb_buffer)
     put = _b.buffer_put
@@ -677,3 +790,8 @@ else:
     @njit
     def wait_for(cond, pred, env):
         return _condition_wait(cond, pred, _record_addr(env))
+
+    # Logging
+    log_user = _b.logger_user_msg
+    log_user_i64 = _b.logger_user_i64
+    log_user_f64 = _b.logger_user_f64

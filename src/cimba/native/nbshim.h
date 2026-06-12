@@ -50,6 +50,11 @@ CIMBA_PY_EXPORT uint64_t cpy_random_geometric(double p);
 CIMBA_PY_EXPORT uint64_t cpy_random_binomial(uint64_t n, double p);
 CIMBA_PY_EXPORT uint64_t cpy_random_negative_binomial(uint64_t m, double p);
 CIMBA_PY_EXPORT uint64_t cpy_random_pascal(uint64_t m, double p);
+CIMBA_PY_EXPORT uint64_t cpy_event_cancel(uint64_t hndl);
+CIMBA_PY_EXPORT uint64_t cpy_event_reschedule(uint64_t hndl, double time);
+CIMBA_PY_EXPORT uint64_t cpy_event_reprioritize(uint64_t hndl,
+                                                int64_t priority);
+CIMBA_PY_EXPORT uint64_t cpy_event_is_scheduled(uint64_t hndl);
 CIMBA_PY_EXPORT uint64_t cpy_resourcepool_available(const void *rpp);
 CIMBA_PY_EXPORT uint64_t cpy_buffer_space(const void *bp);
 CIMBA_PY_EXPORT uint64_t cpy_objectqueue_space(const void *oqp);
@@ -94,5 +99,13 @@ CIMBA_PY_EXPORT uint64_t cpy_process_timer_cancel(void *pp, uint64_t hndl);
 CIMBA_PY_EXPORT int64_t cpy_process_status(const void *pp);
 CIMBA_PY_EXPORT void *cpy_process_current(void);
 CIMBA_PY_EXPORT uint32_t cpy_cpu_cores(void);
+CIMBA_PY_EXPORT void cpy_logger_flags_on(uint32_t flags);
+CIMBA_PY_EXPORT void cpy_logger_flags_off(uint32_t flags);
+CIMBA_PY_EXPORT void cpy_logger_apply_flags(void);
+CIMBA_PY_EXPORT void cpy_logger_user_msg(uint32_t flags, intptr_t message);
+CIMBA_PY_EXPORT void cpy_logger_user_i64(uint32_t flags, intptr_t label,
+                                         int64_t value);
+CIMBA_PY_EXPORT void cpy_logger_user_f64(uint32_t flags, intptr_t label,
+                                         double value);
 
 #endif /* CIMBA_PY_NBSHIM_H */

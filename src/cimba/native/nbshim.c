@@ -8,6 +8,7 @@
  * struct-size/accessor helpers so Numba code never needs C struct layouts.
  */
 
+#include <inttypes.h>
 #include <stdint.h>
 
 #include "cimba.h"
@@ -175,6 +176,27 @@ uint64_t cpy_random_negative_binomial(const uint64_t m, const double p)
 uint64_t cpy_random_pascal(const uint64_t m, const double p)
 {
     return cmb_random_pascal((unsigned)m, p);
+}
+
+/* Low-level event queue: bool returns widened to uint64_t for Numba */
+uint64_t cpy_event_cancel(const uint64_t hndl)
+{
+    return (uint64_t)cmb_event_cancel(hndl);
+}
+
+uint64_t cpy_event_reschedule(const uint64_t hndl, const double time)
+{
+    return (uint64_t)cmb_event_reschedule(hndl, time);
+}
+
+uint64_t cpy_event_reprioritize(const uint64_t hndl, const int64_t priority)
+{
+    return (uint64_t)cmb_event_reprioritize(hndl, priority);
+}
+
+uint64_t cpy_event_is_scheduled(const uint64_t hndl)
+{
+    return (uint64_t)cmb_event_is_scheduled(hndl);
 }
 
 uint64_t cpy_wtdsummary_sizeof(void)
@@ -426,4 +448,50 @@ uint32_t cpy_cpu_cores(void)
 {
     extern uint32_t cmi_cpu_cores(void);
     return cmi_cpu_cores();
+}
+
+static uint32_t logger_flags_on_mask = 0u;
+static uint32_t logger_flags_off_mask = 0u;
+
+void cpy_logger_flags_on(const uint32_t flags)
+{
+    cmb_logger_flags_on(flags);
+    logger_flags_on_mask |= flags;
+    logger_flags_off_mask &= ~flags;
+}
+
+void cpy_logger_flags_off(const uint32_t flags)
+{
+    cmb_logger_flags_off(flags);
+    logger_flags_off_mask |= flags;
+    logger_flags_on_mask &= ~flags;
+}
+
+void cpy_logger_apply_flags(void)
+{
+    if (logger_flags_on_mask != 0u) {
+        cmb_logger_flags_on(logger_flags_on_mask);
+    }
+    if (logger_flags_off_mask != 0u) {
+        cmb_logger_flags_off(logger_flags_off_mask);
+    }
+}
+
+void cpy_logger_user_msg(const uint32_t flags, const intptr_t message)
+{
+    cmi_logger_user(stdout, flags, "python", 0, "%s", (const char *)message);
+}
+
+void cpy_logger_user_i64(const uint32_t flags, const intptr_t label,
+                         const int64_t value)
+{
+    cmi_logger_user(stdout, flags, "python", 0, "%s %" PRIi64,
+                    (const char *)label, value);
+}
+
+void cpy_logger_user_f64(const uint32_t flags, const intptr_t label,
+                         const double value)
+{
+    cmi_logger_user(stdout, flags, "python", 0, "%s %f",
+                    (const char *)label, value);
 }

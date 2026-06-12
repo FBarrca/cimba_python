@@ -19,6 +19,7 @@ _extern = types.ExternalFunction
 _intp = types.intp
 _void = types.void
 _i64 = types.int64
+_u32 = types.uint32
 _u64 = types.uint64
 _f64 = types.float64
 
@@ -26,8 +27,17 @@ _f64 = types.float64
 event_queue_initialize = _extern("cmb_event_queue_initialize", _void(_f64))
 event_queue_execute = _extern("cmb_event_queue_execute", _void())
 event_queue_terminate = _extern("cmb_event_queue_terminate", _void())
+event_queue_clear = _extern("cmb_event_queue_clear", _void())
+event_queue_count = _extern("cmb_event_queue_count", _u64())
 event_schedule = _extern(
     "cmb_event_schedule", _u64(_intp, _intp, _intp, _f64, _i64))
+event_current = _extern("cmb_event_current", _u64())
+event_time = _extern("cmb_event_time", _f64(_u64))
+event_priority = _extern("cmb_event_priority", _i64(_u64))
+event_cancel = _extern("cpy_event_cancel", _u64(_u64))
+event_reschedule = _extern("cpy_event_reschedule", _u64(_u64, _f64))
+event_reprioritize = _extern("cpy_event_reprioritize", _u64(_u64, _i64))
+event_is_scheduled = _extern("cpy_event_is_scheduled", _u64(_u64))
 time = _extern("cmb_time", _f64())
 
 # --- Random streams ---------------------------------------------------------
@@ -193,6 +203,12 @@ condition_initialize = _extern("cmb_condition_initialize", _void(_intp, _intp))
 condition_destroy = _extern("cmb_condition_destroy", _void(_intp))
 condition_wait = _extern("cmb_condition_wait", _i64(_intp, _intp, _intp))
 condition_signal = _extern("cmb_condition_signal", _u64(_intp))
+
+# --- Logging --------------------------------------------------------------------
+logger_apply_flags = _extern("cpy_logger_apply_flags", _void())
+logger_user_msg = _extern("cpy_logger_user_msg", _void(_u32, _intp))
+logger_user_i64 = _extern("cpy_logger_user_i64", _void(_u32, _intp, _i64))
+logger_user_f64 = _extern("cpy_logger_user_f64", _void(_u32, _intp, _f64))
 
 
 _keepalive: list[object] = []
