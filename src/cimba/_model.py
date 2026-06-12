@@ -15,7 +15,7 @@ functions, then compiles everything on first ``experiment()``:
 """
 
 import keyword
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import (TYPE_CHECKING, Any, TypedDict, TypeVar, get_type_hints,
                     overload)
 
@@ -72,6 +72,8 @@ if TYPE_CHECKING:
     Dataset = Handle     #: cmb_dataset tally statistics
     Condition = Handle   #: cmb_condition variable
     Predicate = int      #: address of the matching @model.predicate
+    #: handles of the same-named @model.process's copies, indexable
+    Processes = Sequence[Handle]
 
     class _Capacity:
         cap: int | str
@@ -95,6 +97,7 @@ else:
     class Dataset(_Decl): ...
     class Condition(_Decl): ...
     class Predicate(_Decl): ...
+    class Processes(_Decl): ...
 
     class _Capacity:
         def __init__(self, cap):
@@ -108,7 +111,8 @@ else:
                    FloatState: "fstate",
                    Queue: "queue", Resource: "resource", Pool: "pool",
                    Store: "store", Dataset: "dataset",
-                   Condition: "condition", Predicate: "predicate"}
+                   Condition: "condition", Predicate: "predicate",
+                   Processes: "processes"}
 
 
 def _class_declarations(cls: type) -> dict[str, Any]:
@@ -117,7 +121,7 @@ def _class_declarations(cls: type) -> dict[str, Any]:
     decls: dict[str, Any] = {"param": [], "output": [], "state": [],
                              "fstate": [], "resource": [],
                              "dataset": [], "condition": [],
-                             "predicate": [],
+                             "predicate": [], "processes": [],
                              "queue": {}, "pool": {}, "store": {}}
     for fname, hint in get_type_hints(cls).items():
         kind = _DECL_KINDS.get(hint)
@@ -222,6 +226,7 @@ class Model:
         self.state = decls["state"] + list(state)
         self.float_state: list[str] = decls["fstate"]
         self._predicate_fields: list[str] = decls["predicate"]
+        self._process_fields: list[str] = decls["processes"]
 
         seen: set[str] = set()
         for kind, names in (("param", self.params),
@@ -234,7 +239,8 @@ class Model:
                             ("condition", self.conditions),
                             ("state", self.state),
                             ("fstate", self.float_state),
-                            ("predicate", self._predicate_fields)):
+                            ("predicate", self._predicate_fields),
+                            ("processes", self._process_fields)):
             for n in names:
                 _check_name(n, kind)
                 if n in seen:
@@ -272,7 +278,15 @@ class Model:
                                           priority=priority)
         if copies < 1:
             raise ValueError("copies must be >= 1")
-        self._register_name(fn.__name__, "process")
+        name = fn.__name__
+        if name in self._process_fields:
+            # Handles are published in the declared Processes field
+            if self._compiled is not None:
+                raise RuntimeError("model is already compiled")
+            if any(p[0] == name for p in self._processes):
+                raise ValueError(f"process '{name}' already registered")
+        else:
+            self._register_name(name, "process")
         nargs = fn.__code__.co_argcount
         if nargs not in (1, 2):
             raise ValueError("process functions take (env) or (env, idx)")
@@ -323,15 +337,23 @@ class Model:
         return (list(self.queues) + self.resources + list(self.pools)
                 + list(self.stores) + self.datasets + self.conditions)
 
+    def _handle_expr(self, pname: str, i: int) -> str:
+        """Env expression for a process handle: an element of the declared
+        Processes field, or the hidden per-copy scalar."""
+        if pname in self._process_fields:
+            return f"env['{pname}'][{i}]"
+        return f"env['_p_{pname}_{i}']"
+
     @property
     def _process_handles(self) -> list[str]:
-        return [f"_p_{pname}_{i}"
+        return [self._handle_expr(pname, i)
                 for pname, _fn, copies, _pri, _ix in self._processes
                 for i in range(copies)]
 
     @property
     def dtype(self) -> np.dtype:
-        fields = list(_STANDARD_FIELDS)
+        # (name, format) or (name, format, shape) numpy field specs
+        fields: list[Any] = list(_STANDARD_FIELDS)
         fields += [(p, "<f8") for p in self.params]
         fields += [(o, "<f8") for o in self.outputs]
         fields += [(h, "<i8") for h in self._entities]
@@ -341,7 +363,11 @@ class Model:
         fields += [(f, "<i8") for _n, _fn, f in self._predicates
                    if f.startswith("_pred_")]
         for pname, _fn, copies, _pri, indexed in self._processes:
-            fields += [(f"_p_{pname}_{i}", "<i8") for i in range(copies)]
+            if pname in self._process_fields:
+                fields += [(pname, "<i8", (copies,))]
+            else:
+                fields += [(f"_p_{pname}_{i}", "<i8")
+                           for i in range(copies)]
             if indexed:
                 for i in range(copies):
                     fields += [(f"_cx_{pname}_{i}_env", "<i8"),
@@ -437,8 +463,8 @@ class Model:
         # their own (e.g. a source that produced a fixed number of items)
         src += ["def _end_sim(subject, obj):",
                 "    env = carray(subject, 1)[0]"]
-        src += [f"    if process_status(env['{h}']) == 1:\n"
-                f"        process_stop(env['{h}'], 0)" for h in handles]
+        src += [f"    if process_status({h}) == 1:\n"
+                f"        process_stop({h}, 0)" for h in handles]
 
         src += ["def _trial(vtrl):",
                 "    arr = carray(vtrl, 1)",
@@ -492,13 +518,13 @@ class Model:
                         f"    process_initialize(p, NAME_{pname}, "
                         f"F_{pname}, ctx, {pri})",
                         "    process_start(p)",
-                        f"    env['_p_{pname}_{i}'] = p"]
+                        f"    {self._handle_expr(pname, i)} = p"]
         src += ["    event_queue_execute()"]
         if self._collect is not None:
             src += ["    COLLECT(env)"]
         for h in handles:
-            src += [f"    process_terminate(env['{h}'])",
-                    f"    process_destroy(env['{h}'])"]
+            src += [f"    process_terminate({h})",
+                    f"    process_destroy({h})"]
         for q in self.queues:
             src += [f"    buffer_destroy(env['{q}'])"]
         for r in self.resources:
@@ -525,6 +551,11 @@ class Model:
         if unbound:
             raise ValueError(f"Predicate field(s) {unbound} declared but "
                              "no @predicate of that name registered")
+        registered = {p[0] for p in self._processes}
+        unbound = [f for f in self._process_fields if f not in registered]
+        if unbound:
+            raise ValueError(f"Processes field(s) {unbound} declared but "
+                             "no @process of that name registered")
 
         dtype = self.dtype
         rec = from_dtype(dtype)

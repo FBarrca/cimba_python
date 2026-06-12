@@ -65,15 +65,17 @@ from numba import njit
 from . import _bindings as _b
 from ._intrinsics import record_addr as _record_addr
 from ._model import (Condition, Dataset, Env, Experiment, FloatState,
-                     Handle, Model, Output, Param, Pool, Predicate, Queue,
-                     Resource, State, Store, capacity)
+                     Handle, Model, Output, Param, Pool, Predicate,
+                     Processes, Queue, Resource, State, Store, capacity)
 
 __all__ = [
     "Model", "Experiment", "Env", "Handle",
     "Param", "Output", "State", "FloatState", "Queue", "Resource", "Pool",
-    "Store", "Dataset", "Condition", "Predicate", "capacity",
+    "Store", "Dataset", "Condition", "Predicate", "Processes", "capacity",
+    "SUCCESS", "PREEMPTED", "INTERRUPTED", "STOPPED",
     "hold", "now", "current", "interrupt", "stop", "wait_process", "resume",
-    "yield_now", "status",
+    "yield_now", "status", "set_priority",
+    "flip", "pool_held",
     "put", "get", "level", "space", "mean_level",
     "acquire", "release", "preempt", "available", "in_use", "mean_in_use",
     "pool_acquire", "pool_release", "pool_preempt", "pool_available",
@@ -88,6 +90,13 @@ __all__ = [
     "erlang", "beta", "poisson", "dice",
     "f2i", "i2f",
 ]
+
+# Signal values returned by the blocking verbs (cmb_process.h). Any other
+# value is a user-defined signal passed via sim.interrupt()/sim.resume().
+SUCCESS = 0       #: returned normally
+PREEMPTED = -1    #: holdings were preempted; the process lost them all
+INTERRUPTED = -2  #: interrupted with the generic signal
+STOPPED = -3      #: the awaited process was stopped
 
 if TYPE_CHECKING:
     # Typed declarations of the modeling verbs. At runtime (the `else`
@@ -132,6 +141,10 @@ if TYPE_CHECKING:
 
     def status(process: Handle) -> int:
         """Process status code (0 created, 1 running, 2 finished)."""
+        ...
+
+    def set_priority(process: Handle, priority: int) -> None:
+        """Change a process's priority (queueing order in acquires)."""
         ...
 
     # --- Queues (cmb_buffer): counted amounts --------------------------------
@@ -195,6 +208,10 @@ if TYPE_CHECKING:
 
     def pool_available(pool: Handle) -> int:
         """Number of pool units currently free."""
+        ...
+
+    def pool_held(pool: Handle, process: Handle) -> int:
+        """Number of pool units held by the given process."""
         ...
 
     def pool_in_use(pool: Handle) -> int:
@@ -284,6 +301,10 @@ if TYPE_CHECKING:
         """1 with probability `p`, else 0."""
         ...
 
+    def flip() -> int:
+        """Fair coin: 1 or 0, equivalent to bernoulli(0.5) but faster."""
+        ...
+
     def triangular(low: float, mode: float, high: float) -> float:
         """Triangular-distributed draw over [low, high]."""
         ...
@@ -344,6 +365,7 @@ else:
     resume = _b.process_resume
     yield_now = _b.process_yield
     status = _b.process_status
+    set_priority = _b.process_priority_set
 
     # Queues (cmb_buffer)
     put = _b.buffer_put
@@ -365,6 +387,7 @@ else:
     pool_release = _b.resourcepool_release
     pool_preempt = _b.resourcepool_preempt
     pool_available = _b.resourcepool_available
+    pool_held = _b.resourcepool_held
     pool_in_use = _b.resourcepool_in_use
     pool_mean_in_use = _b.resourcepool_mean_in_use
 
@@ -392,6 +415,7 @@ else:
     rayleigh = _b.random_rayleigh
     pert = _b.random_pert
     bernoulli = _b.random_bernoulli
+    flip = _b.random_flip
     triangular = _b.random_triangular
     weibull = _b.random_weibull
     lognormal = _b.random_lognormal

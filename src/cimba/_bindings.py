@@ -41,6 +41,7 @@ random_normal = _extern("cpy_random_normal", _f64(_f64, _f64))
 random_rayleigh = _extern("cpy_random_rayleigh", _f64(_f64))
 random_pert = _extern("cpy_random_PERT", _f64(_f64, _f64, _f64))
 random_bernoulli = _extern("cpy_random_bernoulli", _u64(_f64))
+random_flip = _extern("cpy_random_flip", _u64())
 random_triangular = _extern("cpy_random_triangular", _f64(_f64, _f64, _f64))
 random_weibull = _extern("cpy_random_weibull", _f64(_f64, _f64))
 random_lognormal = _extern("cpy_random_lognormal", _f64(_f64, _f64))
@@ -64,6 +65,8 @@ process_resume = _extern("cmb_process_resume", _void(_intp, _i64))
 process_current = _extern("cpy_process_current", _intp())
 process_status = _extern("cpy_process_status", _i64(_intp))
 process_yield = _extern("cpy_process_yield", _i64())
+process_priority_set = _extern("cmb_process_priority_set",
+                               _void(_intp, _i64))
 
 # --- Buffers: counted amounts -------------------------------------------------
 buffer_create = _extern("cmb_buffer_create", _intp())
@@ -103,6 +106,8 @@ resourcepool_recording_start = _extern(
 resourcepool_recording_stop = _extern(
     "cmb_resourcepool_stop_recording", _void(_intp))
 resourcepool_available = _extern("cpy_resourcepool_available", _u64(_intp))
+resourcepool_held = _extern("cmb_resourcepool_held_by_process",
+                            _u64(_intp, _intp))
 resourcepool_in_use = _extern("cpy_resourcepool_in_use", _u64(_intp))
 resourcepool_mean_in_use = _extern("cpy_resourcepool_mean_in_use", _f64(_intp))
 

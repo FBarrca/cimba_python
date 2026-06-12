@@ -23,6 +23,7 @@ CIMBA_PY_EXPORT double cpy_random_normal(double mu, double sigma);
 CIMBA_PY_EXPORT double cpy_random_rayleigh(double s);
 CIMBA_PY_EXPORT double cpy_random_PERT(double min, double mode, double max);
 CIMBA_PY_EXPORT uint64_t cpy_random_bernoulli(double p);
+CIMBA_PY_EXPORT uint64_t cpy_random_flip(void);
 CIMBA_PY_EXPORT double cpy_random_triangular(double min, double mode,
                                              double max);
 CIMBA_PY_EXPORT double cpy_random_weibull(double shape, double scale);

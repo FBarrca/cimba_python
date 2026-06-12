@@ -53,6 +53,11 @@ uint64_t cpy_random_bernoulli(const double p)
     return cmb_random_bernoulli(p);
 }
 
+uint64_t cpy_random_flip(void)
+{
+    return (uint64_t)cmb_random_flip();
+}
+
 double cpy_random_triangular(const double min, const double mode,
                              const double max)
 {

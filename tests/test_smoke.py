@@ -185,6 +185,35 @@ def test_random_draws_and_yield():
     assert 1.0 <= exp["die"][0] <= 6.0
 
 
+def test_process_handles_and_interrupt():
+    class Game(sim.Model):
+        got_sig: sim.Output
+        worker: sim.Processes
+
+    model = Game()
+
+    @model.process(copies=2)
+    def worker(env: Game, idx: int):
+        if idx == 0:
+            env.got_sig = sim.hold(1000.0)  # interrupted by the poker
+        else:
+            while True:
+                sim.hold(1000.0)
+
+    @model.process
+    def poker(env: Game):
+        sim.hold(1.0)
+        sim.interrupt(env.worker[0], 42, 0)
+        while True:
+            sim.hold(1000.0)
+
+    assert model.dtype["worker"].shape == (2,)
+    exp = model.experiment(replications=1, duration=10.0, warmup=0.0,
+                           seed=5)
+    assert exp.run() == 0
+    assert exp["got_sig"][0] == 42.0
+
+
 def test_kwargs_model_still_works():
     model = sim.Model("legacy", params=["rho"], outputs=["out"],
                       queues=["q"])
