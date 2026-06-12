@@ -29,14 +29,16 @@ Concept translation (cimba -> sim API):
 
     cmb_process       @model.process (copies=, priority=), sim.hold(),
                       sim.current(), sim.interrupt(), sim.stop(),
-                      sim.wait_process(), sim.resume()
+                      sim.wait_process(), sim.wait_event(), sim.resume(),
+                      sim.timer_set()/sim.timer_add()/sim.timer_cancel()
     cmb_buffer        sim.Queue, sim.put()/sim.get()/sim.level()
     cmb_resource      sim.Resource, sim.acquire()/sim.release()/
-                      sim.preempt()
+                      sim.preempt(), sim.held()
     cmb_resourcepool  sim.Pool (= n or sim.capacity(param)),
                       sim.pool_acquire()/sim.pool_release()/
                       sim.pool_preempt()
-    cmb_objectqueue   sim.Store, sim.store_put()/sim.store_take()
+    cmb_objectqueue   sim.Store, sim.store_put()/sim.store_take()/
+                      sim.store_get()/sim.store_position()
                       (objects are opaque int64 values; sim.f2i()/
                       sim.i2f() bit-cast timestamps in and out)
     cmb_condition     sim.Condition + sim.Predicate + @model.predicate,
@@ -46,7 +48,7 @@ Concept translation (cimba -> sim API):
     statistics        recorded over the measurement window (after warmup,
                       datasets are reset when it opens): sim.mean_level(),
                       sim.mean_in_use(), sim.pool_mean_in_use(),
-                      sim.store_mean_length()
+                      sim.store_mean_length(), sim.pq_mean_length()
 
 Mutable per-trial counters are declared with sim.State. Multi-copy
 processes may take a second argument to learn their index:
@@ -74,18 +76,20 @@ __all__ = [
     "Param", "Output", "State", "FloatState", "Queue", "Resource", "Pool",
     "Store", "Dataset", "Condition", "Predicate", "Processes", "PQueues",
     "capacity", "count",
-    "SUCCESS", "PREEMPTED", "INTERRUPTED", "STOPPED",
-    "hold", "now", "current", "interrupt", "stop", "wait_process", "resume",
+    "SUCCESS", "PREEMPTED", "INTERRUPTED", "STOPPED", "CANCELLED", "TIMEOUT",
+    "hold", "now", "current", "interrupt", "stop", "wait_process",
+    "wait_event", "resume",
     "suspend", "status", "set_priority",
-    "timer_set", "timer_add", "timers_clear",
-    "flip", "pool_held",
-    "pq_put", "pq_take", "pq_length", "pq_position", "pq_cancel",
+    "timer_set", "timer_add", "timer_cancel", "timers_clear",
+    "flip", "held", "pool_held",
+    "pq_put", "pq_take", "pq_length", "pq_space", "pq_position",
+    "pq_reprioritize", "pq_cancel", "pq_mean_length",
     "put", "get", "level", "space", "mean_level",
     "acquire", "release", "preempt", "available", "in_use", "mean_in_use",
     "pool_acquire", "pool_release", "pool_preempt", "pool_available",
     "pool_in_use", "pool_mean_in_use",
-    "store_put", "store_take", "store_length", "store_space",
-    "store_mean_length",
+    "store_put", "store_get", "store_take", "store_length", "store_space",
+    "store_position", "store_mean_length",
     "tally", "dataset_mean", "dataset_count", "dataset_min", "dataset_max",
     "dataset_std",
     "wait_for", "signal",
@@ -104,6 +108,8 @@ SUCCESS = 0       #: returned normally
 PREEMPTED = -1    #: holdings were preempted; the process lost them all
 INTERRUPTED = -2  #: interrupted with the generic signal
 STOPPED = -3      #: the awaited process was stopped
+CANCELLED = -4    #: a wait/request was cancelled
+TIMEOUT = -5      #: conventional signal for timer wakeups
 
 if TYPE_CHECKING:
     # Typed declarations of the modeling verbs. At runtime (the `else`
@@ -137,6 +143,10 @@ if TYPE_CHECKING:
         """Block until the target process finishes (join)."""
         ...
 
+    def wait_event(event: int) -> int:
+        """Block until a scheduled event occurs or is cancelled."""
+        ...
+
     def resume(process: Handle, signal: int) -> None:
         """Resume a process stopped with sim.stop()."""
         ...
@@ -161,6 +171,10 @@ if TYPE_CHECKING:
 
     def timer_add(process: Handle, delay: float, signal: int) -> int:
         """Add a timer alongside any pending ones. Returns the timer id."""
+        ...
+
+    def timer_cancel(process: Handle, timer: int) -> int:
+        """Cancel one pending timer. Returns 1 if found, else 0."""
         ...
 
     def timers_clear(process: Handle) -> None:
@@ -209,6 +223,10 @@ if TYPE_CHECKING:
         """1 if the resource is currently held, else 0."""
         ...
 
+    def held(resource: Handle, process: Handle) -> int:
+        """1 if `process` holds this resource, else 0."""
+        ...
+
     def mean_in_use(resource: Handle) -> float:
         """Time-weighted mean utilization over the recording window."""
         ...
@@ -244,11 +262,15 @@ if TYPE_CHECKING:
 
     # --- Stores (cmb_objectqueue): FIFO of opaque int64 objects ---------------
     def store_put(store: Handle, obj: int) -> int:
-        """Append an object (any nonzero int64), blocking while full."""
+        """Append an object, blocking while full."""
+        ...
+
+    def store_get(store: Handle) -> tuple[int, int]:
+        """Remove the oldest object, returning (status, object)."""
         ...
 
     def store_take(store: Handle) -> int:
-        """Remove and return the oldest object, blocking while empty."""
+        """Remove and return the oldest object; interrupted takes return 0."""
         ...
 
     def store_length(store: Handle) -> int:
@@ -257,6 +279,10 @@ if TYPE_CHECKING:
 
     def store_space(store: Handle) -> int:
         """Remaining store capacity (huge for unbounded stores)."""
+        ...
+
+    def store_position(store: Handle, obj: int) -> int:
+        """1-based position of an object in the store, or 0 if absent."""
         ...
 
     def store_mean_length(store: Handle) -> float:
@@ -278,12 +304,24 @@ if TYPE_CHECKING:
         """Current number of entries in the queue."""
         ...
 
+    def pq_space(pqueue: Handle) -> int:
+        """Remaining priority queue capacity."""
+        ...
+
     def pq_position(pqueue: Handle, entry: int) -> int:
         """1-based position of the entry in the queue."""
         ...
 
+    def pq_reprioritize(pqueue: Handle, entry: int, priority: int) -> None:
+        """Change an entry's priority, reshuffling queue order."""
+        ...
+
     def pq_cancel(pqueue: Handle, entry: int) -> int:
         """Remove an entry from the queue; 1 if found, else 0."""
+        ...
+
+    def pq_mean_length(pqueue: Handle) -> float:
+        """Time-weighted mean queue length over the recording window."""
         ...
 
     # --- Datasets (cmb_dataset): tally statistics ------------------------------
@@ -461,7 +499,7 @@ if TYPE_CHECKING:
         ...
 
 else:
-    from ._intrinsics import f2i, i2f
+    from ._intrinsics import f2i, i2f, store_get
 
     # Process verbs
     hold = _b.process_hold
@@ -470,12 +508,14 @@ else:
     interrupt = _b.process_interrupt
     stop = _b.process_stop
     wait_process = _b.process_wait_process
+    wait_event = _b.process_wait_event
     resume = _b.process_resume
     suspend = _b.process_yield
     status = _b.process_status
     set_priority = _b.process_priority_set
     timer_set = _b.process_timer_set
     timer_add = _b.process_timer_add
+    timer_cancel = _b.process_timer_cancel
     timers_clear = _b.process_timers_clear
 
     # Queues (cmb_buffer)
@@ -491,6 +531,7 @@ else:
     preempt = _b.resource_preempt
     available = _b.resource_available
     in_use = _b.resource_in_use
+    held = _b.resource_held
     mean_in_use = _b.resource_mean_in_use
 
     # Resource pools (cmb_resourcepool)
@@ -507,14 +548,18 @@ else:
     store_take = _b.objectqueue_take
     store_length = _b.objectqueue_length
     store_space = _b.objectqueue_space
+    store_position = _b.objectqueue_position
     store_mean_length = _b.objectqueue_mean_length
 
     # Priority queues (cmb_priorityqueue)
     pq_put = _b.priorityqueue_put
     pq_take = _b.priorityqueue_take
     pq_length = _b.priorityqueue_length
+    pq_space = _b.priorityqueue_space
     pq_position = _b.priorityqueue_position
+    pq_reprioritize = _b.priorityqueue_reprioritize
     pq_cancel = _b.priorityqueue_cancel
+    pq_mean_length = _b.priorityqueue_mean_length
 
     # Datasets (cmb_dataset)
     tally = _b.dataset_add

@@ -477,11 +477,21 @@ class Model:
         src = ["def _start_rec(subject, obj):",
                "    env = carray(subject, 1)[0]"]
         src += [f"    {k}_recording_start(env['{n}'])" for k, n in recorded]
+        for f, n in self.pqueues.items():
+            for k in range(n):
+                src += [
+                    f"    priorityqueue_recording_start(env['{f}'][{k}])"
+                ]
         # Datasets tally over the measurement window only
         src += [f"    dataset_reset(env['{d}'])" for d in self.datasets]
         src += ["def _stop_rec(subject, obj):",
                 "    env = carray(subject, 1)[0]"]
         src += [f"    {k}_recording_stop(env['{n}'])" for k, n in recorded]
+        for f, n in self.pqueues.items():
+            for k in range(n):
+                src += [
+                    f"    priorityqueue_recording_stop(env['{f}'][{k}])"
+                ]
         # Stop only processes still running; some may have finished on
         # their own (e.g. a source that produced a fixed number of items)
         src += ["def _end_sim(subject, obj):",

@@ -235,6 +235,11 @@ double cpy_objectqueue_mean_length(void *oqp)
     return mean_of_history(cmb_objectqueue_history(oqp));
 }
 
+double cpy_priorityqueue_mean_length(void *pqp)
+{
+    return mean_of_history(cmb_priorityqueue_history(pqp));
+}
+
 /* Value-passing object queue access: objects are opaque intptr_t values */
 int64_t cpy_objectqueue_put(void *oqp, const intptr_t object)
 {
@@ -254,6 +259,11 @@ int64_t cpy_objectqueue_get(void *oqp, intptr_t *objloc)
 uint64_t cpy_resource_in_use(const void *rp)
 {
     return cmb_resource_in_use(rp);
+}
+
+uint64_t cpy_resource_held_by_process(const void *rp, const void *pp)
+{
+    return cmb_resource_held_by_process(rp, pp);
 }
 
 uint64_t cpy_resourcepool_available(const void *rpp)
@@ -359,6 +369,17 @@ uint64_t cpy_priorityqueue_length(const void *pqp)
     return cmb_priorityqueue_length((void *)pqp);
 }
 
+uint64_t cpy_priorityqueue_space(const void *pqp)
+{
+    return cmb_priorityqueue_space((void *)pqp);
+}
+
+void cpy_priorityqueue_reprioritize(void *pqp, const uint64_t hndl,
+                                    const int64_t priority)
+{
+    cmb_priorityqueue_reprioritize(pqp, hndl, priority);
+}
+
 uint64_t cpy_priorityqueue_cancel(void *pqp, const uint64_t hndl)
 {
     return (uint64_t)cmb_priorityqueue_cancel(pqp, hndl);
@@ -368,6 +389,11 @@ uint64_t cpy_priorityqueue_cancel(void *pqp, const uint64_t hndl)
 uint64_t cpy_process_timer_set(void *pp, const double dur, const int64_t sig)
 {
     return cmb_process_timer_set(pp, dur, sig);
+}
+
+uint64_t cpy_process_timer_cancel(void *pp, const uint64_t hndl)
+{
+    return (uint64_t)cmb_process_timer_cancel(pp, hndl);
 }
 
 /* Process status as an integer: 0 created, 1 running, 2 finished */

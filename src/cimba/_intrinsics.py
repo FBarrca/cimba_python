@@ -9,7 +9,9 @@ through Python.
 from collections.abc import Callable
 from typing import Any
 
+from llvmlite import ir
 from numba import types
+from numba.core import cgutils
 from numba.extending import intrinsic
 
 
@@ -52,6 +54,30 @@ def ptr_caster(pointee: Any) -> Callable[[int], Any]:
         return ptr_type(addr), codegen
 
     return cast
+
+
+@intrinsic
+def store_get(typingctx, store):
+    """Blocking objectqueue get returning (status, object)."""
+    if not isinstance(store, types.Integer):
+        raise TypeError("store_get() expects a store handle")
+
+    ret_type = types.Tuple((types.int64, types.intp))
+
+    def codegen(context, builder, signature, args):
+        intp_t = context.get_value_type(types.intp)
+        int64_t = context.get_value_type(types.int64)
+        objloc = cgutils.alloca_once(builder, intp_t)
+        builder.store(context.get_constant(types.intp, 0), objloc)
+
+        fnty = ir.FunctionType(int64_t, [intp_t, intp_t.as_pointer()])
+        fn = cgutils.get_or_insert_function(
+            builder.module, fnty, "cpy_objectqueue_get")
+        status = builder.call(fn, [args[0], objloc])
+        obj = builder.load(objloc)
+        return context.make_tuple(builder, ret_type, [status, obj])
+
+    return ret_type(store), codegen
 
 
 @intrinsic

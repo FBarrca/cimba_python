@@ -66,9 +66,12 @@ CIMBA_PY_EXPORT double cpy_buffer_mean_level(void *bp);
 CIMBA_PY_EXPORT double cpy_resource_mean_in_use(void *rp);
 CIMBA_PY_EXPORT double cpy_resourcepool_mean_in_use(void *rpp);
 CIMBA_PY_EXPORT double cpy_objectqueue_mean_length(void *oqp);
+CIMBA_PY_EXPORT double cpy_priorityqueue_mean_length(void *pqp);
 CIMBA_PY_EXPORT int64_t cpy_objectqueue_put(void *oqp, intptr_t object);
 CIMBA_PY_EXPORT int64_t cpy_objectqueue_get(void *oqp, intptr_t *objloc);
 CIMBA_PY_EXPORT uint64_t cpy_resource_in_use(const void *rp);
+CIMBA_PY_EXPORT uint64_t cpy_resource_held_by_process(const void *rp,
+                                                      const void *pp);
 CIMBA_PY_EXPORT uint64_t cpy_resourcepool_in_use(const void *rpp);
 CIMBA_PY_EXPORT uint64_t cpy_objectqueue_length(const void *oqp);
 CIMBA_PY_EXPORT uint64_t cpy_buffer_level(const void *bp);
@@ -80,9 +83,13 @@ CIMBA_PY_EXPORT uint64_t cpy_priorityqueue_put(void *pqp, intptr_t object,
                                                int64_t priority);
 CIMBA_PY_EXPORT intptr_t cpy_priorityqueue_take(void *pqp);
 CIMBA_PY_EXPORT uint64_t cpy_priorityqueue_length(const void *pqp);
+CIMBA_PY_EXPORT uint64_t cpy_priorityqueue_space(const void *pqp);
+CIMBA_PY_EXPORT void cpy_priorityqueue_reprioritize(void *pqp, uint64_t hndl,
+                                                    int64_t priority);
 CIMBA_PY_EXPORT uint64_t cpy_priorityqueue_cancel(void *pqp, uint64_t hndl);
 CIMBA_PY_EXPORT uint64_t cpy_process_timer_set(void *pp, double dur,
                                                int64_t sig);
+CIMBA_PY_EXPORT uint64_t cpy_process_timer_cancel(void *pp, uint64_t hndl);
 CIMBA_PY_EXPORT int64_t cpy_process_status(const void *pp);
 CIMBA_PY_EXPORT void *cpy_process_current(void);
 CIMBA_PY_EXPORT uint32_t cpy_cpu_cores(void);

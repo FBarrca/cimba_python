@@ -273,6 +273,49 @@ def test_process_handles_and_interrupt():
     assert exp["got_sig"][0] == 42.0
 
 
+def test_process_timeout_bindings():
+    class Timeout(sim.Model):
+        cancel_first: sim.Output
+        cancel_second: sim.Output
+        waited: sim.Output
+        target_signal: sim.Output
+        constants_ok: sim.Output
+        target: sim.Processes
+
+    model = Timeout()
+
+    @model.process
+    def target(env: Timeout):
+        env.target_signal = sim.suspend()
+        while True:
+            sim.hold(1000.0)
+
+    @model.process
+    def controller(env: Timeout):
+        me = sim.current()
+        cancelled = sim.timer_add(me, 5.0, sim.TIMEOUT)
+        env.cancel_first = sim.timer_cancel(me, cancelled)
+        env.cancel_second = sim.timer_cancel(me, cancelled)
+        env.constants_ok = 1.0
+        if sim.TIMEOUT != -5 or sim.CANCELLED != -4:
+            env.constants_ok = 0.0
+
+        sim.hold(0.1)
+        target_timer = sim.timer_add(env.target[0], 1.0, sim.TIMEOUT)
+        env.waited = sim.wait_event(target_timer)
+        while True:
+            sim.hold(1000.0)
+
+    exp = model.experiment(replications=1, duration=10.0, warmup=0.0,
+                           seed=17)
+    assert exp.run() == 0
+    assert exp["cancel_first"][0] == 1.0
+    assert exp["cancel_second"][0] == 0.0
+    assert exp["waited"][0] == sim.SUCCESS
+    assert exp["target_signal"][0] == sim.TIMEOUT
+    assert exp["constants_ok"][0] == 1.0
+
+
 def test_pqueues_and_timers():
     class Shop(sim.Model):
         served_first: sim.Output    # object taken first (priority order)
@@ -307,6 +350,101 @@ def test_pqueues_and_timers():
     # the consumer at t=0.5 must get the priority-5 object
     assert exp["served_first"][0] == 7.0  # producer drained the leftover
     assert exp["timed_out"][0] == 99.0
+
+
+def test_pqueue_space_reprioritize_and_mean_length():
+    class PQStats(sim.Model):
+        space_ok: sim.Output
+        pos_before: sim.Output
+        pos_after: sim.Output
+        first: sim.Output
+        mean_len: sim.Output
+        qs: sim.PQueues = sim.count(1)
+
+    model = PQStats()
+
+    @model.process
+    def actor(env: PQStats):
+        q = env.qs[0]
+        low = sim.pq_put(q, 10, 0)
+        sim.pq_put(q, 20, 5)
+        env.space_ok = 0.0
+        if sim.pq_space(q) > sim.pq_length(q):
+            env.space_ok = 1.0
+        env.pos_before = sim.pq_position(q, low)
+        sim.pq_reprioritize(q, low, 10)
+        env.pos_after = sim.pq_position(q, low)
+        sim.hold(1.0)
+        env.first = sim.pq_take(q)
+        sim.hold(1.0)
+        sim.pq_take(q)
+        sim.suspend()
+
+    @model.collect
+    def collect(env: PQStats):
+        env.mean_len = sim.pq_mean_length(env.qs[0])
+
+    exp = model.experiment(replications=1, duration=5.0, warmup=0.0,
+                           seed=19)
+    assert exp.run() == 0
+    assert exp["space_ok"][0] == 1.0
+    assert exp["pos_before"][0] == 2.0
+    assert exp["pos_after"][0] == 1.0
+    assert exp["first"][0] == 10.0
+    assert np.isfinite(exp["mean_len"][0])
+    assert exp["mean_len"][0] > 0.0
+
+
+def test_store_get_position_and_resource_held():
+    class StoreResource(sim.Model):
+        zero_status: sim.Output
+        zero_obj: sim.Output
+        pos: sim.Output
+        timeout_status: sim.Output
+        timeout_obj: sim.Output
+        held_before: sim.Output
+        held_after: sim.Output
+        store: sim.Store
+        resource: sim.Resource
+
+    model = StoreResource()
+
+    @model.process
+    def actor(env: StoreResource):
+        me = sim.current()
+        sim.acquire(env.resource)
+        env.held_before = sim.held(env.resource, me)
+        sim.release(env.resource)
+        env.held_after = sim.held(env.resource, me)
+
+        sim.store_put(env.store, 0)
+        status, obj = sim.store_get(env.store)
+        env.zero_status = status
+        env.zero_obj = obj
+
+        sim.store_put(env.store, 41)
+        sim.store_put(env.store, 42)
+        env.pos = sim.store_position(env.store, 42)
+        sim.store_take(env.store)
+        sim.store_take(env.store)
+
+        sim.timer_set(me, 1.0, sim.TIMEOUT)
+        status, obj = sim.store_get(env.store)
+        env.timeout_status = status
+        env.timeout_obj = obj
+        while True:
+            sim.hold(1000.0)
+
+    exp = model.experiment(replications=1, duration=10.0, warmup=0.0,
+                           seed=23)
+    assert exp.run() == 0
+    assert exp["held_before"][0] == 1.0
+    assert exp["held_after"][0] == 0.0
+    assert exp["zero_status"][0] == sim.SUCCESS
+    assert exp["zero_obj"][0] == 0.0
+    assert exp["pos"][0] == 2.0
+    assert exp["timeout_status"][0] == sim.TIMEOUT
+    assert exp["timeout_obj"][0] == 0.0
 
 
 def test_kwargs_model_still_works():
