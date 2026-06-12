@@ -185,6 +185,65 @@ def test_random_draws_and_suspend():
     assert 1.0 <= exp["die"][0] <= 6.0
 
 
+def test_extra_random_distributions():
+    class ExtraDraws(sim.Model):
+        sn: sim.Output
+        se: sim.Output
+        sg: sim.Output
+        sb: sim.Output
+        pm: sim.Output
+        lg: sim.Output
+        cy: sim.Output
+        pr: sim.Output
+        cs: sim.Output
+        fd: sim.Output
+        st: sim.Output
+        td: sim.Output
+        geo: sim.Output
+        binom: sim.Output
+        nbinom: sim.Output
+        pas: sim.Output
+
+    model = ExtraDraws()
+
+    @model.process
+    def draw(env: ExtraDraws):
+        env.sn = sim.std_normal()
+        env.se = sim.std_exponential()
+        env.sg = sim.std_gamma(2.5)
+        env.sb = sim.std_beta(2.0, 3.0)
+        env.pm = sim.pert_mod(0.0, 4.0, 10.0, 6.0)
+        env.lg = sim.logistic(0.0, 1.0)
+        env.cy = sim.cauchy(0.0, 1.0)
+        env.pr = sim.pareto(2.5, 1.0)
+        env.cs = sim.chisquared(4.0)
+        env.fd = sim.f_dist(5.0, 8.0)
+        env.st = sim.std_t(7.0)
+        env.td = sim.t_dist(1.0, 2.0, 7.0)
+        env.geo = sim.geometric(0.4)
+        env.binom = sim.binomial(10, 0.4)
+        env.nbinom = sim.negative_binomial(3, 0.4)
+        env.pas = sim.pascal(3, 0.4)
+        sim.suspend()
+
+    exp = model.experiment(replications=1, duration=10.0, warmup=0.0,
+                           seed=13)
+    assert exp.run() == 0
+    for field in ("sn", "lg", "cy", "st", "td"):
+        assert np.isfinite(exp[field][0])
+    assert exp["se"][0] >= 0.0
+    assert exp["sg"][0] >= 0.0
+    assert 0.0 <= exp["sb"][0] <= 1.0
+    assert 0.0 <= exp["pm"][0] <= 10.0
+    assert exp["pr"][0] >= 1.0
+    assert exp["cs"][0] >= 0.0
+    assert exp["fd"][0] >= 0.0
+    assert exp["geo"][0] >= 1.0
+    assert 0.0 <= exp["binom"][0] <= 10.0
+    assert exp["nbinom"][0] >= 0.0
+    assert exp["pas"][0] >= 0.0
+
+
 def test_process_handles_and_interrupt():
     class Game(sim.Model):
         got_sig: sim.Output

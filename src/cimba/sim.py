@@ -92,6 +92,9 @@ __all__ = [
     "exponential", "gamma", "uniform", "normal", "random01",
     "rayleigh", "pert", "bernoulli", "triangular", "weibull", "lognormal",
     "erlang", "beta", "poisson", "dice",
+    "std_normal", "std_exponential", "std_gamma", "std_beta", "pert_mod",
+    "logistic", "cauchy", "pareto", "chisquared", "f_dist", "std_t",
+    "t_dist", "geometric", "binomial", "negative_binomial", "pascal",
     "f2i", "i2f",
 ]
 
@@ -337,6 +340,11 @@ if TYPE_CHECKING:
         """PERT-distributed draw (scaled beta) over [low, high]."""
         ...
 
+    def pert_mod(low: float, mode: float, high: float,
+                 lambda_: float) -> float:
+        """Modified PERT draw with explicit peakiness parameter."""
+        ...
+
     def bernoulli(p: float) -> int:
         """1 with probability `p`, else 0."""
         ...
@@ -371,6 +379,66 @@ if TYPE_CHECKING:
 
     def dice(a: int, b: int) -> int:
         """Uniform integer draw from [a, b] inclusive."""
+        ...
+
+    def std_normal() -> float:
+        """Standard normal draw with mean 0 and standard deviation 1."""
+        ...
+
+    def std_exponential() -> float:
+        """Standard exponential draw with mean 1."""
+        ...
+
+    def std_gamma(shape: float) -> float:
+        """Standard gamma draw with scale 1."""
+        ...
+
+    def std_beta(a: float, b: float) -> float:
+        """Beta(a, b) draw over [0, 1]."""
+        ...
+
+    def logistic(m: float, s: float) -> float:
+        """Logistic-distributed draw with location `m` and scale `s`."""
+        ...
+
+    def cauchy(mode: float, scale: float) -> float:
+        """Cauchy-distributed draw."""
+        ...
+
+    def pareto(shape: float, mode: float) -> float:
+        """Pareto-distributed draw on [mode, infinity)."""
+        ...
+
+    def chisquared(k: float) -> float:
+        """Chi-squared draw with `k` degrees of freedom."""
+        ...
+
+    def f_dist(a: float, b: float) -> float:
+        """F-distributed draw with numerator/denominator degrees."""
+        ...
+
+    def std_t(v: float) -> float:
+        """Standard Student's t draw with `v` degrees of freedom."""
+        ...
+
+    def t_dist(m: float, s: float, v: float) -> float:
+        """Location-scale Student's t draw."""
+        ...
+
+    def geometric(p: float) -> int:
+        """Geometric draw: trials up to and including first success."""
+        ...
+
+    def binomial(n: int, p: float) -> int:
+        """Binomial draw: successes in `n` Bernoulli trials."""
+        ...
+
+    def negative_binomial(m: int, p: float) -> int:
+        """Failures before the `m`th success."""
+        ...
+
+    def pascal(m: int, p: float) -> int:
+        """Alias for negative_binomial."""
         ...
 
     # --- Conditions (cmb_condition) ---------------------------------------------
@@ -464,6 +532,7 @@ else:
     random01 = _b.random01
     rayleigh = _b.random_rayleigh
     pert = _b.random_pert
+    pert_mod = _b.random_pert_mod
     bernoulli = _b.random_bernoulli
     flip = _b.random_flip
     triangular = _b.random_triangular
@@ -473,6 +542,21 @@ else:
     beta = _b.random_beta
     poisson = _b.random_poisson
     dice = _b.random_dice
+    std_normal = _b.random_std_normal
+    std_exponential = _b.random_std_exponential
+    std_gamma = _b.random_std_gamma
+    std_beta = _b.random_std_beta
+    logistic = _b.random_logistic
+    cauchy = _b.random_cauchy
+    pareto = _b.random_pareto
+    chisquared = _b.random_chisquared
+    f_dist = _b.random_f_dist
+    std_t = _b.random_std_t
+    t_dist = _b.random_t
+    geometric = _b.random_geometric
+    binomial = _b.random_binomial
+    negative_binomial = _b.random_negative_binomial
+    pascal = _b.random_pascal
 
     # Conditions (cmb_condition)
     signal = _b.condition_signal

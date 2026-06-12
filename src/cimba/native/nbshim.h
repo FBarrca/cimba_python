@@ -22,6 +22,8 @@ CIMBA_PY_EXPORT double cpy_random_uniform(double min, double max);
 CIMBA_PY_EXPORT double cpy_random_normal(double mu, double sigma);
 CIMBA_PY_EXPORT double cpy_random_rayleigh(double s);
 CIMBA_PY_EXPORT double cpy_random_PERT(double min, double mode, double max);
+CIMBA_PY_EXPORT double cpy_random_PERT_mod(double min, double mode,
+                                           double max, double lambda);
 CIMBA_PY_EXPORT uint64_t cpy_random_bernoulli(double p);
 CIMBA_PY_EXPORT uint64_t cpy_random_flip(void);
 CIMBA_PY_EXPORT double cpy_random_triangular(double min, double mode,
@@ -33,6 +35,21 @@ CIMBA_PY_EXPORT double cpy_random_beta(double a, double b,
                                        double min, double max);
 CIMBA_PY_EXPORT uint64_t cpy_random_poisson(double r);
 CIMBA_PY_EXPORT int64_t cpy_random_dice(int64_t a, int64_t b);
+CIMBA_PY_EXPORT double cpy_random_std_normal(void);
+CIMBA_PY_EXPORT double cpy_random_std_exponential(void);
+CIMBA_PY_EXPORT double cpy_random_std_gamma(double shape);
+CIMBA_PY_EXPORT double cpy_random_std_beta(double a, double b);
+CIMBA_PY_EXPORT double cpy_random_logistic(double m, double s);
+CIMBA_PY_EXPORT double cpy_random_cauchy(double mode, double scale);
+CIMBA_PY_EXPORT double cpy_random_pareto(double shape, double mode);
+CIMBA_PY_EXPORT double cpy_random_chisquared(double k);
+CIMBA_PY_EXPORT double cpy_random_F_dist(double a, double b);
+CIMBA_PY_EXPORT double cpy_random_std_t_dist(double v);
+CIMBA_PY_EXPORT double cpy_random_t_dist(double m, double s, double v);
+CIMBA_PY_EXPORT uint64_t cpy_random_geometric(double p);
+CIMBA_PY_EXPORT uint64_t cpy_random_binomial(uint64_t n, double p);
+CIMBA_PY_EXPORT uint64_t cpy_random_negative_binomial(uint64_t m, double p);
+CIMBA_PY_EXPORT uint64_t cpy_random_pascal(uint64_t m, double p);
 CIMBA_PY_EXPORT uint64_t cpy_resourcepool_available(const void *rpp);
 CIMBA_PY_EXPORT uint64_t cpy_buffer_space(const void *bp);
 CIMBA_PY_EXPORT uint64_t cpy_objectqueue_space(const void *oqp);

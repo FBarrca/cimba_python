@@ -49,6 +49,12 @@ double cpy_random_PERT(const double min, const double mode, const double max)
     return cmb_random_PERT(min, mode, max);
 }
 
+double cpy_random_PERT_mod(const double min, const double mode,
+                           const double max, const double lambda)
+{
+    return cmb_random_PERT_mod(min, mode, max, lambda);
+}
+
 uint64_t cpy_random_bernoulli(const double p)
 {
     return cmb_random_bernoulli(p);
@@ -94,6 +100,81 @@ uint64_t cpy_random_poisson(const double r)
 int64_t cpy_random_dice(const int64_t a, const int64_t b)
 {
     return cmb_random_dice((long)a, (long)b);
+}
+
+double cpy_random_std_normal(void)
+{
+    return cmb_random_std_normal();
+}
+
+double cpy_random_std_exponential(void)
+{
+    return cmb_random_std_exponential();
+}
+
+double cpy_random_std_gamma(const double shape)
+{
+    return cmb_random_std_gamma(shape);
+}
+
+double cpy_random_std_beta(const double a, const double b)
+{
+    return cmb_random_std_beta(a, b);
+}
+
+double cpy_random_logistic(const double m, const double s)
+{
+    return cmb_random_logistic(m, s);
+}
+
+double cpy_random_cauchy(const double mode, const double scale)
+{
+    return cmb_random_cauchy(mode, scale);
+}
+
+double cpy_random_pareto(const double shape, const double mode)
+{
+    return cmb_random_pareto(shape, mode);
+}
+
+double cpy_random_chisquared(const double k)
+{
+    return cmb_random_chisquared(k);
+}
+
+double cpy_random_F_dist(const double a, const double b)
+{
+    return cmb_random_F_dist(a, b);
+}
+
+double cpy_random_std_t_dist(const double v)
+{
+    return cmb_random_std_t_dist(v);
+}
+
+double cpy_random_t_dist(const double m, const double s, const double v)
+{
+    return cmb_random_t_dist(m, s, v);
+}
+
+uint64_t cpy_random_geometric(const double p)
+{
+    return cmb_random_geometric(p);
+}
+
+uint64_t cpy_random_binomial(const uint64_t n, const double p)
+{
+    return cmb_random_binomial((unsigned)n, p);
+}
+
+uint64_t cpy_random_negative_binomial(const uint64_t m, const double p)
+{
+    return cmb_random_negative_binomial((unsigned)m, p);
+}
+
+uint64_t cpy_random_pascal(const uint64_t m, const double p)
+{
+    return cmb_random_pascal((unsigned)m, p);
 }
 
 uint64_t cpy_wtdsummary_sizeof(void)
