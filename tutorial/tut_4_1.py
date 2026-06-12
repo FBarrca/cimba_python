@@ -12,21 +12,27 @@ the tugs back to depart. Every movement first claims the radio channel.
 
 Translation notes (C -> cimba.sim):
 
-* The C version spawns one cmb_process per ship at arrival time and
-  recycles it through the davyjones condition + departed-ships list.
-  Process creation is static here, so each size class instead has a fixed
-  crew of handler processes (more than can ever be in port at once)
-  pulling arrival tickets from an anchorage store; the ticket is the
-  arrival time, bit-cast with sim.f2i(). Handlers tally time-in-system
-  directly, which retires the davyjones/exit-value machinery.
+* Ships are dynamic processes, as in C: arrivals sim.spawn()s one per
+  arrival through the sim.Spawnable `ship` field and initializes its Ship
+  fields before it starts running (C's ship_initialize). The per-ship
+  attributes are sim.Struct fields in the process allocation -- the
+  Python form of the C tutorial deriving struct ship from cmb_process --
+  and the process sees them through its annotated `shp: Ship` parameter.
+* A departing ship tallies its time in system, hands its own process
+  handle to the departures process through the `departed` store, and
+  returns; the departures process sim.despawn()s it, corresponding to
+  the C davyjones/departed-ships recycling path. Spawned leftovers are
+  stopped and reclaimed automatically at the end of the trial.
 * The C version registers the tug/berth pools as resource guards of the
   harbormaster condition, so releases re-test waiting predicates
   automatically. Here, ships signal the harbormaster explicitly after
   releasing resources.
-* is_ready_to_dock() reads per-ship limits through the process struct;
-  here each size class has its own predicate over the shared env. The
-  while-loop around sim.wait_for() catches the same race as the C code
-  (another ship grabbing the tugs between wakeup and resumption).
+* is_ready_to_dock() reads per-ship limits through the Ship struct, just
+  as the C predicate reads struct ship. Python predicates do not receive
+  the waiting process as an argument, so wait_for() uses a simple
+  harbormaster wake-up predicate and the ship rechecks its own docking
+  test in a loop, catching the same race as the C code (another ship
+  grabbing the tugs between wakeup and resumption).
 * Logging and histogram printing are not exposed; the report prints
   dataset means and pool utilizations instead, over replicated trials
   running in parallel (the C tutorial runs a single trial).
@@ -43,12 +49,22 @@ import cimba as cp
 import cimba.sim as sim
 
 # Ship classes (SMALL, LARGE), as hard-coded in the C tutorial
+SMALL = 0
+LARGE = 1
 TUGS_NEEDED = (1, 3)
 MAX_WIND = (10.0, 12.0)      # m/s
 MIN_DEPTH = (8.0, 13.0)      # m
-N_HANDLERS = (16, 8)         # fixed crews of ship-handler processes
 
 HOURS_PER_YEAR = 24.0 * 7 * 52
+
+
+class Ship(sim.Struct):
+    """Per-ship fields, as in the C tutorial's struct ship."""
+    size: int
+    tugs_needed: int
+    max_wind: float
+    min_depth: float
+    arrival: float
 
 
 class Harbor(sim.Model):
@@ -78,42 +94,54 @@ class Harbor(sim.Model):
     water_depth: sim.FloatState      # m
 
     # Entities
+    ship: sim.Spawnable              # one spawned per arrival
     tugs: sim.Pool = sim.capacity("num_tugs")
     berths_small: sim.Pool = sim.capacity("num_berths_small")
     berths_large: sim.Pool = sim.capacity("num_berths_large")
     comms: sim.Resource              # the radio channel
     harbormaster: sim.Condition      # gates docking
-    anchorage_small: sim.Store       # arrival tickets (bit-cast times)
-    anchorage_large: sim.Store
+    departed: sim.Store              # finished ships to reclaim
     time_small: sim.Dataset          # time in system
     time_large: sim.Dataset
-    dockable_small: sim.Predicate
-    dockable_large: sim.Predicate
+    harbormaster_called: sim.Predicate
 
 
 harbor = Harbor()
 
 
-# Shared docking test, used both by the predicates the harbormaster
-# evaluates and by the handlers' race-catching loop.
 @njit
-def _can_dock(env, berths, tugs_needed, max_wind, min_depth):
-    return (env.water_depth >= min_depth
-            and env.wind_mag <= max_wind
-            and sim.pool_available(env.tugs) >= tugs_needed
+def _ship_berths(env, shp):
+    if shp.size == LARGE:
+        return env.berths_large
+    return env.berths_small
+
+
+@harbor.predicate
+def harbormaster_called(env: Harbor) -> bool:
+    return True
+
+
+@njit
+def _is_ready_to_dock(env, shp):
+    berths = _ship_berths(env, shp)
+    return (env.water_depth >= shp.min_depth
+            and env.wind_mag <= shp.max_wind
+            and sim.pool_available(env.tugs) >= shp.tugs_needed
             and sim.pool_available(berths) >= 1)
 
 
-@harbor.predicate
-def dockable_small(env: Harbor) -> bool:
-    return _can_dock(env, env.berths_small,
-                     TUGS_NEEDED[0], MAX_WIND[0], MIN_DEPTH[0])
+@njit
+def _ship_time_in_system(env, shp):
+    if shp.size == LARGE:
+        return env.time_large
+    return env.time_small
 
 
-@harbor.predicate
-def dockable_large(env: Harbor) -> bool:
-    return _can_dock(env, env.berths_large,
-                     TUGS_NEEDED[1], MAX_WIND[1], MIN_DEPTH[1])
+@njit
+def _ship_unload_avg(env, shp):
+    if shp.size == LARGE:
+        return env.unload_avg_large
+    return env.unload_avg_small
 
 
 # Priority 1: each hour, the wind updates before the tide reads it
@@ -152,74 +180,68 @@ def arrivals(env: Harbor):
     mean_interarr = 1.0 / env.arrival_rate
     while True:
         sim.hold(sim.exponential(mean_interarr))
-        if sim.bernoulli(env.percent_large) == 1:
-            sim.store_put(env.anchorage_large, sim.f2i(sim.now()))
-        else:
-            sim.store_put(env.anchorage_small, sim.f2i(sim.now()))
+        h = sim.spawn(env.ship, env, 0)
+        shp = Ship(h)
+        shp.size = sim.bernoulli(env.percent_large)
+        shp.tugs_needed = TUGS_NEEDED[shp.size]
+        shp.max_wind = MAX_WIND[shp.size]
+        shp.min_depth = MIN_DEPTH[shp.size]
+        shp.arrival = sim.now()
 
 
-@njit
-def _ship_lifecycle(env, anchorage, berths, dockable, time_in_system,
-                    tugs_needed, max_wind, min_depth, unload_avg):
+@harbor.process
+def ship(env: Harbor, shp: Ship):
+    me = sim.current()
+    berths = _ship_berths(env, shp)
+
+    # Wait for suitable conditions to dock. The loop catches spurious
+    # wakeups, such as several ships waiting for the tide and one of
+    # them grabbing the tugs before we can react.
+    while not _is_ready_to_dock(env, shp):
+        sim.wait_for(env.harbormaster, env.harbormaster_called, env)
+
+    # Cleared to dock: grab a berth and the tugs
+    sim.pool_acquire(berths, 1)
+    sim.pool_acquire(env.tugs, shp.tugs_needed)
+
+    # Announce our intention to move
+    sim.acquire(env.comms)
+    sim.hold(sim.gamma(5.0, 0.01))
+    sim.release(env.comms)
+
+    # It takes a while to move into position
+    sim.hold(sim.pert(0.4, 0.5, 0.8))
+
+    # Safely at the quay, dismiss the tugs and unload
+    sim.pool_release(env.tugs, shp.tugs_needed)
+    sim.signal(env.harbormaster)
+    unload_avg = _ship_unload_avg(env, shp)
+    sim.hold(sim.pert(0.75 * unload_avg, unload_avg, 2.0 * unload_avg))
+
+    # Need the tugs again to get out of here
+    sim.pool_acquire(env.tugs, shp.tugs_needed)
+    sim.acquire(env.comms)
+    sim.hold(sim.gamma(5.0, 0.01))
+    sim.release(env.comms)
+
+    # Gently move out again, assisted by tugs
+    sim.hold(sim.pert(0.4, 0.5, 0.8))
+
+    # Cleared the berth, done with the tugs
+    sim.pool_release(berths, 1)
+    sim.pool_release(env.tugs, shp.tugs_needed)
+    sim.signal(env.harbormaster)
+
+    # Datasets are reset when the measurement window opens, which
+    # replaces the C version's explicit warmup-time check.
+    sim.tally(_ship_time_in_system(env, shp), sim.now() - shp.arrival)
+    sim.store_put(env.departed, me)
+
+
+@harbor.process
+def departures(env: Harbor):
     while True:
-        t_arr = sim.i2f(sim.store_take(anchorage))
-
-        # Wait for suitable conditions to dock. The loop catches spurious
-        # wakeups, such as several ships waiting for the tide and one of
-        # them grabbing the tugs before we can react.
-        while not _can_dock(env, berths, tugs_needed, max_wind, min_depth):
-            sim.wait_for(env.harbormaster, dockable, env)
-
-        # Cleared to dock: grab a berth and the tugs
-        sim.pool_acquire(berths, 1)
-        sim.pool_acquire(env.tugs, tugs_needed)
-
-        # Announce our intention to move
-        sim.acquire(env.comms)
-        sim.hold(sim.gamma(5.0, 0.01))
-        sim.release(env.comms)
-
-        # It takes a while to move into position
-        sim.hold(sim.pert(0.4, 0.5, 0.8))
-
-        # Safely at the quay, dismiss the tugs and unload
-        sim.pool_release(env.tugs, tugs_needed)
-        sim.signal(env.harbormaster)
-        sim.hold(sim.pert(0.75 * unload_avg, unload_avg, 2.0 * unload_avg))
-
-        # Need the tugs again to get out of here
-        sim.pool_acquire(env.tugs, tugs_needed)
-        sim.acquire(env.comms)
-        sim.hold(sim.gamma(5.0, 0.01))
-        sim.release(env.comms)
-
-        # Gently move out again, assisted by tugs
-        sim.hold(sim.pert(0.4, 0.5, 0.8))
-
-        # Cleared the berth, done with the tugs
-        sim.pool_release(berths, 1)
-        sim.pool_release(env.tugs, tugs_needed)
-        sim.signal(env.harbormaster)
-
-        # Datasets are reset when the measurement window opens, which
-        # replaces the C version's explicit warmup-time check
-        sim.tally(time_in_system, sim.now() - t_arr)
-
-
-@harbor.process(copies=N_HANDLERS[0])
-def ship_small(env: Harbor):
-    _ship_lifecycle(env, env.anchorage_small, env.berths_small,
-                    env.dockable_small, env.time_small,
-                    TUGS_NEEDED[0], MAX_WIND[0], MIN_DEPTH[0],
-                    env.unload_avg_small)
-
-
-@harbor.process(copies=N_HANDLERS[1])
-def ship_large(env: Harbor):
-    _ship_lifecycle(env, env.anchorage_large, env.berths_large,
-                    env.dockable_large, env.time_large,
-                    TUGS_NEEDED[1], MAX_WIND[1], MIN_DEPTH[1],
-                    env.unload_avg_large)
+        sim.despawn(sim.store_take(env.departed))
 
 
 @harbor.collect

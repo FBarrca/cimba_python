@@ -739,9 +739,12 @@ or https://www.cs.ucdavis.edu/~filkov/papers/assert-main.pdf
 Logging flags and bit masks
 ---------------------------
 
-The native logging design described here is still used underneath the Python
-wrapper, but Python-level logger flag toggles and user logger calls from
-``cimba.sim`` process bodies are not exposed yet.
+The native logging design described here is used underneath the Python wrapper.
+Python exposes logger flag toggles as ``cimba.logger_flags_on()`` and
+``cimba.logger_flags_off()``. Process bodies can log with fixed-signature
+``cimba.sim`` helpers using static message handles created by ``sim.log_text()``.
+This avoids Python callbacks, dynamic string allocation, and varargs formatting
+inside Numba-compiled process bodies.
 
 As explained in :ref:`the first tutorial <tut_1_logging>`, the key concept for the
 logger is the *logger flags*; a bit

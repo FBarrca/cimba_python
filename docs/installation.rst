@@ -35,7 +35,7 @@ On Ubuntu or WSL, the system packages needed for the native build are usually:
 
 .. code-block:: bash
 
-    sudo apt install build-essential nasm
+    sudo apt install build-essential nasm libhdf5-dev
 
 No manual virtual environment activation is needed. Use ``uv run`` for commands
 inside the project environment.
@@ -96,14 +96,44 @@ build and execute small ``cimba.sim`` models, exercise the random distributions,
 process signals, resources, queues, stores, priority queues, conditions, and the
 parallel experiment wrapper.
 
+Running the tutorials
+---------------------
+
+The Python tutorial sources mirror the upstream C tutorial names in the
+``tutorial`` directory. For example:
+
+.. code-block:: bash
+
+    uv run python tutorial/hello.py
+    uv run python tutorial/tut_1_7.py -n 10 -d 1000000 -w 1000 -t
+
+The larger tutorial ports reuse the maintained examples for resource
+preemption, amusement-park queues, and harbor conditions.
+
 Building a wheel
 ----------------
 
-Build a wheel with:
+Build the normal release-speed wheel with:
 
 .. code-block:: bash
 
     uv build --wheel
+
+Release wheels compile out Cimba's native INFO trace for speed. To build a
+tutorial/debugging wheel with those detailed native logs enabled, pass the
+``cimba_debug_logs`` Meson option. The command below uses the PyPA ``build``
+frontend; install it first if it is not already available in your environment:
+
+.. code-block:: bash
+
+    python -m pip install build
+    python -m build --wheel \
+      --config-setting=setup-args=-Dbuildtype=debugoptimized \
+      --config-setting=setup-args=-Dcimba_debug_logs=true
+
+That build keeps the bundled Cimba library optimized, but avoids the upstream
+``-DNLOGINFO`` release flag so ``cimba.LOGGER_INFO`` can show internal process,
+queue, timer, and dispatcher logs.
 
 The wheel statically embeds Cimba. You can verify it in a throwaway environment:
 

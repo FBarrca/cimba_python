@@ -741,6 +741,201 @@ def test_store_get_position_and_resource_held():
     assert exp["timeout_obj"][0] == 0.0
 
 
+def test_struct_declaration_and_inheritance():
+    class Base(sim.Struct):
+        a: float
+
+    class Derived(Base):
+        b: int
+
+    assert Base._dtype == np.dtype([("a", "<f8")])
+    assert Derived._dtype == np.dtype([("a", "<f8"), ("b", "<i8")])
+    assert Derived._alloc_size > Base._alloc_size
+
+    with pytest.raises(TypeError, match="model code"):
+        Base(0)     # views exist only inside compiled trials
+
+    with pytest.raises(TypeError, match="only float and int"):
+        class Bad(sim.Struct):
+            s: str
+
+    with pytest.raises(ValueError, match="no fields"):
+        class Empty(sim.Struct):
+            pass
+
+    model = sim.Model("nostruct")
+    with pytest.raises(ValueError, match="Struct subclass"):
+        @model.process(struct=int)
+        def proc(env):
+            sim.hold(1.0)
+
+    with pytest.raises(ValueError, match="last parameter"):
+        @model.process
+        def misplaced(env, tag: Base, idx: int):
+            sim.hold(1.0)
+
+    with pytest.raises(ValueError, match="disagree"):
+        @model.process(struct=Derived)
+        def mismatched(env, tag: Base):
+            sim.hold(1.0)
+
+
+def test_process_struct_cross_access():
+    # The derived-struct pattern of tut_3_1.c: per-process fields,
+    # injected into the owner as a view parameter, that other processes
+    # read and write through the process handle.
+    class Tag(sim.Struct):
+        ticket: int
+        stamp: float
+
+    class Office(sim.Model):
+        zero_ok: sim.Output
+        t0: sim.Output
+        t1: sim.Output
+        s0: sim.Output
+        s1: sim.Output
+        clerk: sim.Processes
+
+    model = Office()
+
+    @model.process(copies=2)
+    def clerk(env: Office, idx: int, tag: Tag):
+        ok = 1.0 if (tag.ticket == 0 and tag.stamp == 0.0) else 0.0
+        if idx == 0:
+            env.zero_ok = ok
+        tag.ticket = 10 + idx
+        sim.hold(2.0)           # the stamper writes our stamp at t=1
+        if idx == 0:
+            env.s0 = tag.stamp
+        else:
+            env.s1 = tag.stamp
+        sim.suspend()
+
+    @model.process
+    def stamper(env: Office, own: Tag):
+        own.ticket = 99         # plain (env, view) form, own fields
+        sim.hold(1.0)
+        env.t0 = 1.0 * Tag(env.clerk[0]).ticket
+        env.t1 = 1.0 * Tag(env.clerk[1]).ticket
+        Tag(env.clerk[0]).stamp = 0.5
+        Tag(env.clerk[1]).stamp = 1.5 + 0.01 * own.ticket
+        sim.suspend()
+
+    exp = model.experiment(replications=1, duration=10.0, warmup=0.0,
+                           seed=99)
+    assert exp.run() == 0
+    assert exp["zero_ok"][0] == 1.0    # fields start zeroed
+    assert exp["t0"][0] == 10.0        # each copy has its own record
+    assert exp["t1"][0] == 11.0
+    assert exp["s0"][0] == 0.5         # writes through the handle stick
+    assert exp["s1"][0] == 1.5 + 0.01 * 99
+
+
+def test_spawn_and_despawn():
+    # Dynamic process creation, the tut_3_1.c visitor lifecycle:
+    # spawn, initialize the struct before it runs, join, despawn.
+    class Item(sim.Struct):
+        weight: float
+
+    class Factory(sim.Model):
+        made: sim.Output
+        total: sim.Output
+        distinct: sim.Output
+        done: sim.State
+        acc: sim.FloatState
+        worker: sim.Spawnable
+
+    model = Factory()
+
+    @model.process
+    def worker(env: Factory, it: Item):
+        sim.hold(1.0)
+        env.done += 1
+        env.acc += it.weight
+
+    @model.process
+    def spawner(env: Factory):
+        h1 = sim.spawn(env.worker, env)
+        Item(h1).weight = 2.5      # runs only once we block: init first
+        h2 = sim.spawn(env.worker, env, 3)
+        Item(h2).weight = 4.0
+        env.distinct = 1.0 if h1 != h2 else 0.0
+        sim.wait_process(h1)
+        sim.wait_process(h2)
+        env.made = 1.0 * env.done
+        env.total = env.acc
+        sim.despawn(h1)
+        sim.despawn(h2)
+        sim.suspend()
+
+    exp = model.experiment(replications=1, duration=10.0, warmup=0.0,
+                           seed=5)
+    assert exp.run() == 0
+    assert exp["distinct"][0] == 1.0
+    assert exp["made"][0] == 2.0
+    assert exp["total"][0] == 6.5
+
+
+def test_spawned_leftovers_reclaimed():
+    # Spawned processes still alive at trial end are stopped and
+    # reclaimed like the static ones, and despawn is idempotent.
+    class Hive(sim.Model):
+        spawned: sim.Output
+        redespawn_ok: sim.Output
+        drone: sim.Spawnable
+
+    model = Hive()
+
+    @model.process
+    def drone(env: Hive):
+        sim.suspend()       # blocks forever; never despawned
+
+    @model.process
+    def queen(env: Hive):
+        for _ in range(50):
+            sim.spawn(env.drone, env)
+        h = sim.spawn(env.drone, env)
+        sim.hold(1.0)
+        sim.despawn(h)
+        sim.despawn(h)      # double despawn must be a no-op
+        env.redespawn_ok = 1.0
+        env.spawned = 51.0
+        sim.suspend()
+
+    exp = model.experiment(replications=20, duration=10.0, warmup=0.0,
+                           seed=11)
+    assert exp.run() == 0
+    assert (exp["spawned"] == 51.0).all()
+    assert (exp["redespawn_ok"] == 1.0).all()
+    assert exp.run() == 0   # rerun on the same compiled trial
+
+
+def test_spawnable_declaration_errors():
+    class Loose(sim.Model):
+        x: sim.Param
+        ghost: sim.Spawnable
+
+    model = Loose()
+
+    with pytest.raises(ValueError, match="cannot take copies"):
+        @model.process(copies=3)
+        def ghost(env):
+            sim.hold(1.0)
+
+    with pytest.raises(ValueError, match="copy index"):
+        @model.process
+        def ghost(env, idx):  # noqa: F811
+            sim.hold(1.0)
+
+    @model.process
+    def lonely(env):
+        sim.hold(1.0)
+
+    # the Spawnable field never got its @process
+    with pytest.raises(ValueError, match="ghost"):
+        model.experiment(x=1.0)
+
+
 def test_kwargs_model_still_works():
     model = sim.Model("legacy", params=["rho"], outputs=["out"],
                       queues=["q"])

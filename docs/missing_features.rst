@@ -5,47 +5,6 @@ Missing Python API Features
 
 This page mirrors ``MISSING_FEATURES.md`` for the Sphinx documentation.
 
-Logging
--------
-
-* Python process bodies cannot call native user logger helpers yet.
-* Logger flag controls such as ``cmb_logger_flags_on()`` and
-  ``cmb_logger_flags_off()`` are not exposed as public Python functions.
-* Python docs preserve the logging explanation, but examples that use native
-  ``cmb_logger_user()`` are C-only for now.
-
-Low-Level Events
-----------------
-
-* Arbitrary user event callbacks and direct ``cmb_event_schedule()`` wrappers
-  are not exposed.
-* Python models normally use ``Model.experiment(duration=...)``, ``sim.hold()``,
-  timers, ``sim.wait_event()``, and generated lifecycle events instead.
-
-Native Object Lifecycle
------------------------
-
-* Manual create/initialize/start/terminate/destroy APIs for native Cimba objects
-  are not public Python APIs.
-* Python models declare entities on ``sim.Model`` subclasses and the wrapper
-  generates the lifecycle plumbing.
-
-Derived C Structs And Process Subclasses
-----------------------------------------
-
-* The C tutorial derives ``struct visitor``, ``struct server``, and
-  ``struct ship`` from ``cmb_process``. Python does not expose native
-  subclassing of ``cmb_process``.
-* Use ``sim.Model`` state fields, ``sim.Processes``, process copy indexes, and
-  integer identifiers instead.
-
-Arbitrary Pointer Payloads
---------------------------
-
-* ``sim.Store`` and ``sim.PQueues`` carry opaque ``int64`` values in Python, not
-  arbitrary C pointers or Python objects.
-* Use integer IDs, model state fields, or ``sim.f2i()`` / ``sim.i2f()`` for
-  float timestamp payloads.
 
 Native Timeseries And Text Reports
 ----------------------------------
@@ -64,12 +23,6 @@ Alias Tables
   exposed.
 * Use ``sim.categorical()`` or ``sim.loaded_dice()`` for weighted discrete
   sampling.
-
-Internal ``cmi_*`` Building Blocks
-----------------------------------
-
-* Internal structures such as ``cmi_slist``, ``cmi_list``, ``cmi_hashheap``,
-  ``cmi_mempool``, and coroutine internals are not public Python APIs.
 
 Resource Guard Observer Registration
 ------------------------------------

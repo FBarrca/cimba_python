@@ -1,0 +1,6 @@
+option(
+    'cimba_debug_logs',
+    type: 'boolean',
+    value: false,
+    description: 'Build bundled Cimba with native INFO logging enabled for tutorials/debugging',
+)

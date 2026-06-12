@@ -22,14 +22,22 @@ visitor's timers when boarding and resumes it after the ride.
 
 Translation notes (C -> cimba.sim):
 
-* Visitors are dynamically malloc'ed processes in C; here a fixed crew of
-  handler processes pulls arrival tickets (entry time, bit-cast) from a
-  store, as in demo_harbor.py. Per-visitor attributes are locals.
-* The C server writes waiting/riding times into the visitor struct before
-  resuming it with SUCCESS. Here the server resumes each rider with the
-  boarding time bit-cast into the signal (sim.f2i), and the rider
-  reconstructs waiting = boarding - enqueue and riding = now - boarding.
-  Timer signals (small ints) can never collide with a bit-cast time.
+* Visitors are dynamic processes, as in C: arrivals sim.spawn()s one per
+  arrival through the sim.Spawnable `visitor` field and initializes its
+  Visitor fields before it starts running (C's visitor_initialize). The
+  per-visitor attributes are sim.Struct fields in the process's native
+  allocation -- the Python form of the C tutorial deriving struct visitor
+  from cmb_process -- and the process sees them through its annotated
+  `vip: Visitor` parameter.
+* As in C, the object a visitor posts in the ride queue is its own
+  process handle. The server views it with Visitor(handle), adds the
+  waiting and riding times to the visitor's fields, and resumes it with
+  sim.SUCCESS -- the same data flow as the C server.
+* A departing visitor tallies its statistics, hands its own handle to
+  the departures process through the `departed` store, and returns; the
+  departures process sim.despawn()s it (C's visitor_terminate/_destroy).
+  Early despawning just recycles memory during the day -- any spawned
+  process still alive at the end of the trial is reclaimed automatically.
 * The park layout lives in module-level numpy arrays, baked into the
   compiled code as constants; the per-attraction queues are a flat
   sim.PQueues array indexed by Q_FIRST/Q_COUNT, and the 14 servers are
@@ -38,8 +46,7 @@ Translation notes (C -> cimba.sim):
   cumulative transition row -- identical distribution, 11 outcomes.
 * The C version stops arrivals at closing time and lets the day drain.
   Here arrivals stop emitting at start+duration and the trial's cooldown
-  provides the draining window; visitors tally their own statistics on
-  the way out, which retires the departures process and object queue.
+  provides the draining window, so every visitor's day is complete.
 
 Usage: uv run python examples/demo_park.py
 """
@@ -122,7 +129,18 @@ TIMER_JOCKEYING = 17
 TIMER_RENEGING = 42
 
 PARK_OPEN = 16 * 60.0       # minutes
-NUM_VISITOR_PROCS = 192     # handler crew; ~60 visitors in park on average
+
+
+class Visitor(sim.Struct):
+    """Per-visitor fields, as in the C tutorial's struct visitor."""
+    patience: float
+    priority: int
+    entry_park: float
+    entry_queue: float
+    riding: float
+    waiting: float
+    walking: float
+    rides: int
 
 
 class Park(sim.Model):
@@ -143,7 +161,8 @@ class Park(sim.Model):
     reneges: sim.State
 
     # Entities
-    gate: sim.Store                     # arrival tickets (bit-cast times)
+    visitor: sim.Spawnable              # one spawned per arrival
+    departed: sim.Store                 # finished visitors to reclaim
     park_queues: sim.PQueues = sim.count(TOTAL_QUEUES)
     d_park: sim.Dataset                 # time in park
     d_riding: sim.Dataset
@@ -198,18 +217,21 @@ def server(env: Park, idx: int):
         while sim.pq_length(q) > 0 and cnt < batch_size:
             riders[cnt] = sim.pq_take(q)
             cnt = cnt + 1
-        # Boarding: no more jockeying or reneging for this batch
+        # Boarding: no more jockeying or reneging for this batch, and
+        # the waiting is over -- log it into each visitor's record
+        boarding = sim.now()
         for i in range(cnt):
             sim.timers_clear(riders[i])
+            vip = Visitor(riders[i])
+            vip.waiting += boarding - vip.entry_queue
 
-        boarding = sim.now()
-        sim.hold(sim.pert(dmin, dmode, dmax))
+        dur = sim.pert(dmin, dmode, dmax)
+        sim.hold(dur)
 
-        # Send the riders on their merry way, telling them when the
-        # waiting ended so they can split waiting from riding time
-        token = sim.f2i(boarding)
+        # Unload and send the riders on their merry way
         for i in range(cnt):
-            sim.resume(riders[i], token)
+            Visitor(riders[i]).riding += dur
+            sim.resume(riders[i], sim.SUCCESS)
 
 
 @park.process
@@ -220,85 +242,86 @@ def arrivals(env: Park):
         sim.hold(sim.exponential(mean_interarr))
         if sim.now() >= closing:
             break
-        sim.store_put(env.gate, sim.f2i(sim.now()))
+        # Spawn a new visitor and initialize it before it passes the
+        # turnstile (it starts running once we block on the next hold)
+        priority = 5 if sim.bernoulli(PERCENT_GOLDCARDS) == 1 else 0
+        v = sim.spawn(env.visitor, env, priority)
+        vip = Visitor(v)
+        vip.entry_park = sim.now()
+        vip.patience = sim.triangular(0.5, 1.0, 1.5)
+        vip.priority = priority
     while True:
         sim.suspend()       # park entrance closed for today
 
 
-@park.process(copies=NUM_VISITOR_PROCS)
-def visitor(env: Park):
+@park.process
+def visitor(env: Park, vip: Visitor):
     me = sim.current()
-    while True:
-        t_entry = sim.i2f(sim.store_take(env.gate))
-        patience = sim.triangular(0.5, 1.0, 1.5)
-        priority = 5 if sim.bernoulli(PERCENT_GOLDCARDS) == 1 else 0
-        sim.set_priority(me, priority)
-        riding = 0.0
-        waiting = 0.0
-        walking = 0.0
-        rides = 0
+    at = IDX_ENTRANCE
+    while at != IDX_EXIT:
+        nxt = _next_attraction(at)
 
-        at = IDX_ENTRANCE
-        while at != IDX_EXIT:
-            nxt = _next_attraction(at)
+        # Walk there
+        mwt = TRANSITION_TIMES[at, nxt]
+        wt = sim.pert(0.5 * mwt, mwt, 2.0 * mwt)
+        sim.hold(wt)
+        vip.walking += wt
+        at = nxt
+        if at == IDX_EXIT:
+            break
 
-            # Walk there
-            mwt = TRANSITION_TIMES[at, nxt]
-            wt = sim.pert(0.5 * mwt, mwt, 2.0 * mwt)
-            sim.hold(wt)
-            walking = walking + wt
-            at = nxt
-            if at == IDX_EXIT:
-                break
+        # Join the shortest queue if several
+        qi, qlen = _shortest_queue(env, at)
 
-            # Join the shortest queue if several
-            qi, qlen = _shortest_queue(env, at)
+        # Balking?
+        if qlen > vip.patience * BALKING_THRESHOLD:
+            env.balks += 1
+            continue        # too long a queue, go somewhere else
 
-            # Balking?
-            if qlen > patience * BALKING_THRESHOLD:
-                env.balks = env.balks + 1
-                continue        # too long a queue, go somewhere else
+        # Arm the jockeying and reneging timeouts, then queue up
+        sim.timer_set(me, vip.patience * JOCKEYING_THRESHOLD,
+                      TIMER_JOCKEYING)
+        sim.timer_add(me, vip.patience * RENEGING_THRESHOLD,
+                      TIMER_RENEGING)
+        q = env.park_queues[qi]
+        vip.entry_queue = sim.now()
+        entry = sim.pq_put(q, me, vip.priority)
 
-            # Arm the jockeying and reneging timeouts, then queue up
-            sim.timer_set(me, patience * JOCKEYING_THRESHOLD,
-                          TIMER_JOCKEYING)
-            sim.timer_add(me, patience * RENEGING_THRESHOLD,
-                          TIMER_RENEGING)
-            q = env.park_queues[qi]
-            t_queue = sim.now()
-            entry = sim.pq_put(q, me, priority)
-
-            # Suspend until we have finished both queue and ride; the
-            # server clears our timers at boarding and resumes us with
-            # the boarding time as the wake signal
-            while True:
-                sig = sim.suspend()
-                if sig == TIMER_JOCKEYING:
-                    my_pos = sim.pq_position(q, entry)
-                    new_qi, new_len = _shortest_queue(env, at)
-                    if new_len < my_pos:
-                        sim.pq_cancel(q, entry)
-                        q = env.park_queues[new_qi]
-                        entry = sim.pq_put(q, me, priority + 1)
-                        env.jockeys = env.jockeys + 1
-                elif sig == TIMER_RENEGING:
+        # Suspend until we have finished both queue and ride, trusting
+        # the server to clear our timers at boarding and to update our
+        # waiting and riding times, as in C
+        while True:
+            sig = sim.suspend()
+            if sig == TIMER_JOCKEYING:
+                my_pos = sim.pq_position(q, entry)
+                new_qi, new_len = _shortest_queue(env, at)
+                if new_len < my_pos:
                     sim.pq_cancel(q, entry)
-                    sim.timers_clear(me)
-                    env.reneges = env.reneges + 1
-                    break       # give up, go somewhere else
-                else:
-                    boarding = sim.i2f(sig)
-                    waiting = waiting + (boarding - t_queue)
-                    riding = riding + (sim.now() - boarding)
-                    rides = rides + 1
-                    break       # yay! slightly dizzy, do it again?
+                    q = env.park_queues[new_qi]
+                    entry = sim.pq_put(q, me, vip.priority + 1)
+                    env.jockeys += 1
+            elif sig == TIMER_RENEGING:
+                sim.pq_cancel(q, entry)
+                sim.timers_clear(me)
+                env.reneges += 1
+                break       # give up, go somewhere else
+            else:
+                vip.rides += 1
+                break       # yay! slightly dizzy, do it again?
 
-        # Enough for today
-        sim.tally(env.d_park, sim.now() - t_entry)
-        sim.tally(env.d_riding, riding)
-        sim.tally(env.d_waiting, waiting)
-        sim.tally(env.d_walking, walking)
-        sim.tally(env.d_rides, 1.0 * rides)
+    # Enough for today: tally up, then hand ourselves to departures
+    sim.tally(env.d_park, sim.now() - vip.entry_park)
+    sim.tally(env.d_riding, vip.riding)
+    sim.tally(env.d_waiting, vip.waiting)
+    sim.tally(env.d_walking, vip.walking)
+    sim.tally(env.d_rides, 1.0 * vip.rides)
+    sim.store_put(env.departed, me)
+
+
+@park.process
+def departures(env: Park):
+    while True:
+        sim.despawn(sim.store_take(env.departed))
 
 
 @park.collect

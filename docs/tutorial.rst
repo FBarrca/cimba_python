@@ -3,14 +3,6 @@
 Tutorial: Modeling with Cimba Python
 ====================================
 
-.. note::
-
-    This page is a Python API reproduction of the upstream Cimba tutorial. The
-    structure, examples, and explanatory text follow the original documentation
-    closely, but code that can be expressed through the current Python API is
-    shown with ``cimba.sim``. Sections that rely on C-only extension points are
-    preserved for conceptual continuity and cross-referenced from
-    :doc:`missing_features`.
 
 .. _tut_1:
 
@@ -118,96 +110,56 @@ many independent trials to run for each parameter combination, ``duration`` sets
 the simulated end time, ``warmup`` controls the measurement window, and ``seed``
 initializes the per-trial pseudo-random number generators reproducibly.
 
-The Python wrapper generates the native trial function that initializes the
-random number generator, event queue, queue object, process objects, recording
-window, and end-of-simulation event. It also terminates and destroys the native
-objects after each trial. In other words, the explicit C
-create/initialize/start/terminate/destroy lifecycle still exists underneath the
-Python API, but your model code normally does not write it by hand.
-
-We can now run our first simulation
-and see what happens. It will generate output like this:
+We can now run our first simulation and see what happens. Normal release wheels
+prioritize simulation speed and compile out Cimba's native INFO trace. To see
+the detailed native trace, install or build the debug-log wheel, or build from source with
+``--config-setting=setup-args=-Dbuildtype=debugoptimized`` and
+``--config-setting=setup-args=-Dcimba_debug_logs=true``. With that build, the
+program generates output like this:
 
 .. code-block:: none
 
-    [ambonvik@Threadripper cimba]$ build/tutorial/tut_1_1 | more
-        0.0000	dispatcher	cmb_event_queue_execute (294):  Starting simulation run
-        0.0000	Arrival	cmb_process_hold (278):  Holding for 2.317172 time units
-        0.0000	Arrival	cmb_process_timer_add (343):  Scheduled timeout event at 2.317172
-        0.0000	Service	cmb_buffer_get (207):  Gets 1 from Queue, level 0
-        0.0000	Service	cmb_buffer_get (244):  Waiting for more, level now 0
-        0.0000	Service	cmb_resourceguard_wait (149):  Waits for Queue
-        2.3172	dispatcher	wakeup_event_time (310):  Wakes Arrival signal 0
-        2.3172	Arrival	cmb_buffer_put (291):  Puts 1 into Queue, level 0
-        2.3172	Arrival	cmb_buffer_put (298):  Success, found room for 1, has 0 remaining
-        2.3172	Arrival	cmb_resourceguard_signal (219):  Scheduling wakeup event for Service
-        2.3172	Arrival	cmb_process_hold (278):  Holding for 1.262760 time units
-        2.3172	Arrival	cmb_process_timer_add (343):  Scheduled timeout event at 3.579932
-        2.3172	dispatcher	wakeup_event_resource (173):  Wakes Service signal 0
-        2.3172	Service	cmb_buffer_get (251):  Returned successfully from wait
-        2.3172	Service	cmb_buffer_get (207):  Gets 1 from Queue, level 1
-        2.3172	Service	cmb_buffer_get (214):  Success, 1 was available, got 1
-        2.3172	Service	cmb_process_hold (278):  Holding for 0.313617 time units
-        2.3172	Service	cmb_process_timer_add (343):  Scheduled timeout event at 2.630789
-        2.6308	dispatcher	wakeup_event_time (310):  Wakes Service signal 0
-        2.6308	Service	cmb_buffer_get (207):  Gets 1 from Queue, level 0
-        2.6308	Service	cmb_buffer_get (244):  Waiting for more, level now 0
-        2.6308	Service	cmb_resourceguard_wait (149):  Waits for Queue
-        3.5799	dispatcher	wakeup_event_time (310):  Wakes Arrival signal 0
-        3.5799	Arrival	cmb_buffer_put (291):  Puts 1 into Queue, level 0
-        3.5799	Arrival	cmb_buffer_put (298):  Success, found room for 1, has 0 remaining
-        3.5799	Arrival	cmb_resourceguard_signal (219):  Scheduling wakeup event for Service
-        3.5799	Arrival	cmb_process_hold (278):  Holding for 1.859304 time units
-        3.5799	Arrival	cmb_process_timer_add (343):  Scheduled timeout event at 5.439236
-        3.5799	dispatcher	wakeup_event_resource (173):  Wakes Service signal 0
-        3.5799	Service	cmb_buffer_get (251):  Returned successfully from wait
-        3.5799	Service	cmb_buffer_get (207):  Gets 1 from Queue, level 1
-        3.5799	Service	cmb_buffer_get (214):  Success, 1 was available, got 1
-        3.5799	Service	cmb_process_hold (278):  Holding for 0.079210 time units
-        3.5799	Service	cmb_process_timer_add (343):  Scheduled timeout event at 3.659142
-        3.6591	dispatcher	wakeup_event_time (310):  Wakes Service signal 0
-        3.6591	Service	cmb_buffer_get (207):  Gets 1 from Queue, level 0
-        3.6591	Service	cmb_buffer_get (244):  Waiting for more, level now 0
-        3.6591	Service	cmb_resourceguard_wait (149):  Waits for Queue
-        5.4392	dispatcher	wakeup_event_time (310):  Wakes Arrival signal 0
-        5.4392	Arrival	cmb_buffer_put (291):  Puts 1 into Queue, level 0
-        5.4392	Arrival	cmb_buffer_put (298):  Success, found room for 1, has 0 remaining
-        5.4392	Arrival	cmb_resourceguard_signal (219):  Scheduling wakeup event for Service
-        5.4392	Arrival	cmb_process_hold (278):  Holding for 0.473225 time units
-        ...
+    $ python tutorial/tut_1_1.py
+    0	    0.0000	dispatcher	cmb_event_queue_execute (263):  Starting simulation run
+    0	    0.0000	arrival	cmb_process_hold (266):  Holding for 3.067784 time units
+    0	    0.0000	arrival	cmb_process_timer_add (330):  Scheduled timeout event at 3.067784
+    0	    0.0000	service	cmb_buffer_get (207):  Gets 1 from queue, level 0
+    0	    0.0000	service	cmb_buffer_get (244):  Waiting for more, level now 0
+    0	    0.0000	service	cmb_resourceguard_wait (149):  Waits for queue
+    0	    3.0678	dispatcher	wakeup_event_time (297):  Wakes arrival signal 0
+    0	    3.0678	arrival	cmb_buffer_put (291):  Puts 1 into queue, level 0
+    0	    3.0678	arrival	cmb_buffer_put (298):  Success, found room for 1, has 0 remaining
+    0	    3.0678	arrival	cmb_resourceguard_signal (219):  Scheduling wakeup event for service
+    ...
+    0	    10.000	dispatcher	cmb_process_stop (703):  Stop arrival value (nil)
+    0	    10.000	dispatcher	cmb_process_stop (703):  Stop service value (nil)
+    0	    10.000	dispatcher	cmb_event_queue_execute (266):  No more events in queue
+    Average queue length over the first 10 time units: 0.939453
 
-...and will keep on doing that forever. We have to press Ctrl-C or similar
-to stop it. The good news is that it works. Each line in the trace contains the
-time stamp in simulated time, the name of the currently executing process, exactly
-what function and line number is logging, and a formatted message about what is
-happening. Our simulated processes seem to be doing what we asked them to do,
-but there is a wee bit too much information here.
+The good news is that it works and the experiment stops at simulated time
+10.0. Each log line contains the trial index, time stamp in simulated time, the
+name of the currently executing process, the native function and line number,
+and a message about what is happening. Our simulated processes seem to be doing
+what we asked them to do, but there is a wee bit too much information here.
 
 Stopping a simulation
 ^^^^^^^^^^^^^^^^^^^^^
 
-In the Python API, the common stopping pattern is built into
-``Model.experiment()``. The ``duration`` argument schedules the end of each
-trial, stops generated processes, and lets the native event queue terminate. The
-manual event-scheduling pattern below is the native C mechanism that the wrapper
-uses internally.
-
-We will address stopping first. The processes are *coroutines*, executing
-concurrently on a separate stack for each process. Only one process can execute
-at a time. It continues executing until it voluntarily *yields* the CPU to some
-other coroutine. Calling :c:func:`cmb_process_hold()` will do exactly
-that, transferring
-control to the hidden dispatcher process that determines what to do next.
+Next, let us look more closely at how that stopping works. The processes are
+*coroutines*, executing concurrently on a separate stack for each process. Only
+one process can execute at a time. It continues executing until it voluntarily
+*yields* the CPU to some other coroutine. Calling ``sim.hold()`` will do
+exactly that, transferring control to the hidden dispatcher process that
+determines what to do next.
 
 However, the dispatcher only knows about events, not coroutines or processes. It will
-run as long as there are scheduled events to execute. Our little simulation will always
-have scheduled events, and the dispatcher will not stop on its own. These events
+run as long as there are scheduled events to execute. Without an end condition,
+our little simulation would always have scheduled events, and the dispatcher
+would not stop on its own. These events
 originate from our two processes: To ensure that a process returns to the other end of
-its :c:func:`cmb_process_hold()` call, it will schedule a wakeup event
-at the expected time
+its ``sim.hold()`` call, it will schedule a wakeup event at the expected time
 before it yields control to the dispatcher. When executed, this event will *resume*
-the coroutine where it left off, returning through the
-:c:func:`cmb_process_hold()` call
+the coroutine where it left off, returning through the ``sim.hold()`` call
 with a return value that indicates normal or abnormal return. (We have ignored the
 return values for now in the example above.) So, whenever there are more than
 one process running, there may be future events scheduled in the event queue.
@@ -215,70 +167,70 @@ one process running, there may be future events scheduled in the event queue.
 To stop the simulation, we can schedule an "end simulation" event, which
 stops any running processes at that point. The dispatcher then ends the run.
 
-This is perhaps easier to do in code than to describe in text. We define a
-``struct simulation`` that contains pointers to the entities of our simulated world and
-the function for an end simulation event:
+In the Python API, this stopping pattern is built into ``Model.experiment()``:
+the ``duration`` argument schedules exactly such an end event for each trial,
+stops the model's processes, and lets the native event queue terminate. That is
+all ``tutorial/tut_1_2.py`` needs:
 
-.. code-block:: c
+.. code-block:: python
 
-    struct simulation {
-        struct cmb_process *arr;
-        struct cmb_buffer *que;
-        struct cmb_process *srv;
-    };
+    exp = model.experiment(
+        utilization=[0.75],
+        replications=1,
+        duration=10.0,    # schedules the end-simulation event at t = 10.0
+        warmup=0.0,
+        seed=43,
+    )
+    exp.run()
 
-    void end_sim(void *subject, void *object)
-    {
-        struct simulation *sim = object;
-        cmb_process_stop(sim->arr, NULL);
-        cmb_process_stop(sim->srv, NULL);
-    }
+We can also write the end event by hand. We declare the process handles
+and the event callback as model fields, register the callback with ``@model.event``,
+and let a small starter process schedule it:
 
-We then store pointers to the simulation entities in the ``struct simulation``
-and schedule an ``end_sim`` event before executing the event queue:
+.. code-block:: python
 
-.. code-block:: c
+    class MM1(sim.Model):
+        utilization: sim.Param
+        queue: sim.Queue
+        arrival: sim.Processes    # handles of the same-named @model.process
+        service: sim.Processes
+        end_sim: sim.Event        # address of the @model.event callback
 
-    int main(void)
-    {
-        const uint64_t seed = cmb_random_hwseed();
-        cmb_random_initialize(seed);
-        cmb_event_queue_initialize(0.0);
+    model = MM1()
 
-        struct simulation sim = {};
-        sim.que = cmb_buffer_create();
-        cmb_buffer_initialize(sim.que, "Queue", CMB_UNLIMITED);
+    @model.event
+    def end_sim(env: MM1):
+        sim.stop(env.arrival[0], 0)
+        sim.stop(env.service[0], 0)
+        sim.clear_events()        # also drop the generated lifecycle events
 
-        sim.arr = cmb_process_create();
-        cmb_process_initialize(sim.arr, "Arrival", arrival, sim.que, 0);
-        cmb_process_start(sim.arr);
+    @model.process
+    def starter(env: MM1):
+        sim.schedule(env.end_sim, env, 10.0)
 
-        sim.srv = cmb_process_create();
-        cmb_process_initialize(sim.srv, "Service", service, sim.que, 0);
-        cmb_process_start(sim.srv);
+    exp = model.experiment(
+        utilization=[0.75],
+        replications=1,
+        duration=1000.0,    # superseded by the hand-written event
+        warmup=0.0,
+        seed=43,
+    )
+    exp.run()               # the run ends at t = 10.0
 
-        cmb_event_schedule(end_sim, NULL, &sim, 10.0, 0);
-        cmb_event_queue_execute();
+The ``arrival`` and ``service`` processes stay exactly as before.
+``Model.experiment()`` also schedules its own end event from ``duration``; the
+trailing ``sim.clear_events()`` cancels that one, so our hand-written event is
+the one that ends the run, at simulated time 10.0 rather than 1000.0. (It also
+cancels the events that close the statistics recording window, so when a model
+collects time-weighted statistics, prefer ending trials with ``duration``.)
 
-        cmb_process_terminate(sim.srv);
-        cmb_process_destroy(sim.srv);
-
-        cmb_process_terminate(sim.arr);
-        cmb_process_destroy(sim.arr);
-
-        cmb_buffer_terminate(sim.que);
-        cmb_buffer_destroy(sim.que);
-
-        cmb_event_queue_terminate();
-        cmb_random_terminate();
-
-        return 0;
-    }
-
-The arguments to :c:func:`cmb_event_schedule()` are the event function, its subject and
-object pointers, the simulated time when this event will happen, and an event
-priority. We have set end time 10.0 here. It could also be expressed as
-``cmb_time() + 10.0`` for "in 10.0 time units from now".
+The arguments to ``sim.schedule()`` are the event callback (the env field
+published by ``@model.event``), the env record passed to the callback, the
+delay until the event happens, an optional integer ``data`` word handed on to
+callbacks declared as ``def fn(env, data)``, and an optional event
+``priority``. We let the starter process schedule the event 10.0 time units
+ahead. The delay is relative to ``sim.now()``; ``sim.schedule_at()`` takes an
+absolute simulation time instead.
 
 The simulation end event does not need to be at a predetermined time. It is
 equally valid for some process in the simulation to schedule an end simulation
@@ -287,12 +239,11 @@ number of customers having been serviced, a statistics collector having a
 certain number of samples, or something else. Or, perhaps even easier for this simple
 simulation, the arrival
 process could just stop generating new arrivals after a certain count, the event queue
-would clear, and the simulation would stop. (See
-`benchmark/MM1_single.c <https://github.com/ambonvik/cimba/blob/main/benchmark/MM1_single.c>`__
+would clear, and the simulation would stop. (See ``examples/benchmarks/mm1.py``
 for an example doing exactly that.)
 
-We gave the end simulation event a default priority of 0 as the last argument to
-:c:func:`cmb_event_schedule()`. Priorities are signed 64-bit integers, ``int64_t``. The
+We left the end simulation event at the default ``priority`` of 0. Priorities
+are signed 64-bit integers. The
 Cimba dispatcher will always select the scheduled event with the lowest
 scheduled time as the next event. The simulation clock then jumps to that time and that
 event will be executed. If several events
@@ -300,88 +251,47 @@ have the *same* scheduled time, the dispatcher will execute the one with the
 highest priority first. If several events have the same scheduled time *and*
 the same priority, it will execute them in first in first out order.
 
-Again, we ignored the event handle returned by :c:func:`cmb_event_schedule()`,
+Again, we ignored the event handle returned by ``sim.schedule()``,
 since we will not be using it in this example. If we wanted to keep it, it is an
-unsigned 64-bit integer (``uint64_t``).
+unsigned 64-bit integer that the other event verbs accept:
+``sim.event_cancel()``, ``sim.event_reschedule()``,
+``sim.event_reprioritize()``, ``sim.event_scheduled()``, ``sim.event_time()``,
+and ``sim.event_priority()`` manage the scheduled event, and a process can
+block on it with ``sim.wait_event()`` until it fires (or is cancelled).
+``sim.event_count()`` and ``sim.current_event()`` expose the event queue
+itself.
 
-When initializing our arrivals and service processes, we quietly set the last
-argument to :c:func:`cmb_process_initialize()` to 0. This is the inherent process
+When registering our arrival and service processes, we quietly left the
+``priority`` argument of ``@model.process`` at 0. This is the inherent process
 priority for scheduling any events pertaining to this process, its
 priority when waiting for some resource, and so on. The processes can adjust
-their own (or each other's) priorities during the simulation, dynamically
+their own (or each other's) priorities during the simulation with
+``sim.set_priority()``, dynamically
 moving themselves up or down in various queues. Cimba does not attempt to
 adjust any priorities by itself, it just acts on whatever the priorities are,
 and reshuffles any existing queues as needed if priorities change.
 
-We compile and run
-`our revised code <https://github.com/ambonvik/cimba/blob/main/tutorial/tut_1_2.c>`_
-and get something like this:
+We run our revised code (``tutorial/tut_1_2.py``) and the trace reaches the
+same 10.0 end time:
 
 .. code-block:: none
 
-    [ambonvik@Threadripper cimba]$ build/tutorial/tut_1_2
-        0.0000	dispatcher	cmb_event_queue_execute (294):  Starting simulation run
-        0.0000	Arrival	cmb_process_hold (278):  Holding for 0.013427 time units
-        0.0000	Arrival	cmb_process_timer_add (343):  Scheduled timeout event at 0.013427
-        0.0000	Service	cmb_buffer_get (207):  Gets 1 from Queue, level 0
-        0.0000	Service	cmb_buffer_get (244):  Waiting for more, level now 0
-        0.0000	Service	cmb_resourceguard_wait (149):  Waits for Queue
-      0.013427	dispatcher	wakeup_event_time (310):  Wakes Arrival signal 0
-      0.013427	Arrival	cmb_buffer_put (291):  Puts 1 into Queue, level 0
-      0.013427	Arrival	cmb_buffer_put (298):  Success, found room for 1, has 0 remaining
-      0.013427	Arrival	cmb_resourceguard_signal (219):  Scheduling wakeup event for Service
-      0.013427	Arrival	cmb_process_hold (278):  Holding for 1.117654 time units
-      0.013427	Arrival	cmb_process_timer_add (343):  Scheduled timeout event at 1.131082
-      0.013427	dispatcher	wakeup_event_resource (173):  Wakes Service signal 0
-      0.013427	Service	cmb_buffer_get (251):  Returned successfully from wait
-      0.013427	Service	cmb_buffer_get (207):  Gets 1 from Queue, level 1
-      0.013427	Service	cmb_buffer_get (214):  Success, 1 was available, got 1
-      0.013427	Service	cmb_process_hold (278):  Holding for 0.907590 time units
-      0.013427	Service	cmb_process_timer_add (343):  Scheduled timeout event at 0.921017
-       0.92102	dispatcher	wakeup_event_time (310):  Wakes Service signal 0
-       0.92102	Service	cmb_buffer_get (207):  Gets 1 from Queue, level 0
-       0.92102	Service	cmb_buffer_get (244):  Waiting for more, level now 0
-       0.92102	Service	cmb_resourceguard_wait (149):  Waits for Queue
-        1.1311	dispatcher	wakeup_event_time (310):  Wakes Arrival signal 0
-        1.1311	Arrival	cmb_buffer_put (291):  Puts 1 into Queue, level 0
-        1.1311	Arrival	cmb_buffer_put (298):  Success, found room for 1, has 0 remaining
-        1.1311	Arrival	cmb_resourceguard_signal (219):  Scheduling wakeup event for Service
-        1.1311	Arrival	cmb_process_hold (278):  Holding for 0.525121 time units
-        1.1311	Arrival	cmb_process_timer_add (343):  Scheduled timeout event at 1.656202
-        1.1311	dispatcher	wakeup_event_resource (173):  Wakes Service signal 0
-        1.1311	Service	cmb_buffer_get (251):  Returned successfully from wait
-        1.1311	Service	cmb_buffer_get (207):  Gets 1 from Queue, level 1
-        1.1311	Service	cmb_buffer_get (214):  Success, 1 was available, got 1
-        1.1311	Service	cmb_process_hold (278):  Holding for 0.176342 time units
-        1.1311	Service	cmb_process_timer_add (343):  Scheduled timeout event at 1.307423
-        1.3074	dispatcher	wakeup_event_time (310):  Wakes Service signal 0
-        1.3074	Service	cmb_buffer_get (207):  Gets 1 from Queue, level 0
-        1.3074	Service	cmb_buffer_get (244):  Waiting for more, level now 0
-        1.3074	Service	cmb_resourceguard_wait (149):  Waits for Queue
-        1.6562	dispatcher	wakeup_event_time (310):  Wakes Arrival signal 0
-        1.6562	Arrival	cmb_buffer_put (291):  Puts 1 into Queue, level 0
-        1.6562	Arrival	cmb_buffer_put (298):  Success, found room for 1, has 0 remaining
-        1.6562	Arrival	cmb_resourceguard_signal (219):  Scheduling wakeup event for Service
-        1.6562	Arrival	cmb_process_hold (278):  Holding for 1.383170 time units
-        1.6562	Arrival	cmb_process_timer_add (343):  Scheduled timeout event at 3.039372
-
-        ...
-
-        9.4105	dispatcher	wakeup_event_time (310):  Wakes Arrival signal 0
-        9.4105	Arrival	cmb_buffer_put (291):  Puts 1 into Queue, level 0
-        9.4105	Arrival	cmb_buffer_put (298):  Success, found room for 1, has 0 remaining
-        9.4105	Arrival	cmb_resourceguard_signal (219):  Scheduling wakeup event for Service
-        9.4105	Arrival	cmb_process_hold (278):  Holding for 3.841477 time units
-        9.4105	Arrival	cmb_process_timer_add (343):  Scheduled timeout event at 13.252013
-        9.4105	dispatcher	wakeup_event_resource (173):  Wakes Service signal 0
-        9.4105	Service	cmb_buffer_get (251):  Returned successfully from wait
-        9.4105	Service	cmb_buffer_get (207):  Gets 1 from Queue, level 1
-        9.4105	Service	cmb_buffer_get (214):  Success, 1 was available, got 1
-        9.4105	Service	cmb_process_hold (278):  Holding for 1.190526 time units
-        9.4105	Service	cmb_process_timer_add (343):  Scheduled timeout event at 10.601062
-        10.000	dispatcher	cmb_process_stop (705):  Stop Arrival value (nil)
-        10.000	dispatcher	cmb_process_stop (705):  Stop Service value (nil)
-        10.000	dispatcher	cmb_event_queue_execute (297):  No more events in queue
+    $ python tutorial/tut_1_2.py
+    0	    0.0000	dispatcher	cmb_event_queue_execute (263):  Starting simulation run
+    0	    0.0000	arrival	cmb_process_hold (266):  Holding for 1.497817 time units
+    0	    0.0000	arrival	cmb_process_timer_add (330):  Scheduled timeout event at 1.497817
+    0	    0.0000	service	cmb_buffer_get (207):  Gets 1 from queue, level 0
+    0	    0.0000	service	cmb_buffer_get (244):  Waiting for more, level now 0
+    0	    0.0000	service	cmb_resourceguard_wait (149):  Waits for queue
+    0	    1.4978	dispatcher	wakeup_event_time (297):  Wakes arrival signal 0
+    0	    1.4978	arrival	cmb_buffer_put (291):  Puts 1 into queue, level 0
+    0	    1.4978	arrival	cmb_buffer_put (298):  Success, found room for 1, has 0 remaining
+    0	    1.4978	arrival	cmb_resourceguard_signal (219):  Scheduling wakeup event for service
+    ...
+    0	    10.000	dispatcher	cmb_process_stop (703):  Stop arrival value (nil)
+    0	    10.000	dispatcher	cmb_process_stop (703):  Stop service value (nil)
+    0	    10.000	dispatcher	cmb_event_queue_execute (266):  No more events in queue
+    Simulation stopped at t=10.0, average queue length: 0.000000
 
 Progress: It started, ran, and now also stopped.
 
@@ -392,129 +302,144 @@ Setting logging levels
 
 .. note::
 
-    Native Cimba has powerful logger flag controls. The current Python API does
-    not yet expose logger flag toggles or user logger calls inside
-    ``cimba.sim`` process bodies. This section is preserved as the original
-    conceptual description; see :doc:`missing_features`.
+    The Python API exposes native logger flag controls as
+    ``cimba.logger_flags_on()`` and ``cimba.logger_flags_off()``. Process bodies
+    can call the fixed-signature ``cimba.sim`` helpers ``sim.log_user()``,
+    ``sim.log_user_i64()``, and ``sim.log_user_f64()`` with static message or
+    label handles created outside process bodies by ``sim.log_text()``.
+    Arbitrary formatted strings are intentionally not exposed in process bodies
+    because they would be fragile in Numba and would risk runtime overhead.
+    Logging is opt-in: models that do not call logging helpers do not pay for
+    them in the process hot path.
 
 Next, the verbiage. Cimba has powerful and flexible logging that gives you fine-grained
 control of what to log.
 
-The core logging function is called :c:func:`cmb_logger_vfprintf()`. As the name says,
-it is similar to the standard function ``vfprintf()`` but with some Cimba-specific added
-features. You will rarely interact directly with this function, but instead call
-wrapper functions (actually macros) like :c:macro:`cmb_logger_user()` or
-:c:macro:`cmb_logger_error()`.
+The key concept is *logger flags*. Cimba uses a 32-bit unsigned integer as a bit
+mask to determine what log entries to print and which to ignore. Cimba reserves
+the top four bits for its own use, identifying messages of various severities,
+leaving the 28 remaining bits for the user application.
 
-The key concept to understand here is the *logger flags*. Cimba uses a 32-bit
-unsigned integer (``uint32_t``) as a bit mask to determine what log entries to print
-and which to ignore. Cimba reserves the top four bits for its own use, identifying
-messages of various severities, leaving the 28 remaining bits for the user application.
+There is a thread-local flag field and a bit mask in each call. If a simple
+bitwise and (``&``) between the global field and the caller's bit mask gives a
+non-zero result, that line is printed, otherwise not. Initially, all bits are
+on, ``0xFFFFFFFF``. You can turn selected bits on and off with
+``cimba.logger_flags_on()`` and ``cimba.logger_flags_off()``.
 
-There is a global (actually thread local) bit field and a bit mask in each call. If a
-simple bitwise and (``&``) between the global bit field and the caller's bit mask gives a
-non-zero result, that line is printed, otherwise not. Initially, all bits in the global
-bit field are on, ``0xFFFFFFFF``. You can turn selected bits on and off with
-:c:func:`cmb_logger_flags_on()` and :c:func:`cmb_logger_flags_off()`.
+Again, it may be easier to show this in code than to explain. We add
+user-defined logging messages to the stop process and the two queue processes.
+The Python process-body helpers are deliberately fixed-signature: use
+``sim.log_user()`` for a static message, ``sim.log_user_i64()`` for an integer
+value, and ``sim.log_user_f64()`` for a floating-point value. Static messages
+and labels are converted once with ``sim.log_text()`` outside the process body:
 
-Again, it may be easier to show this in code than to explain. We add user-defined logging
-messages to the end event and the two processes. The messages take ``printf``-style
-format strings and arguments:
+.. code-block:: python
 
-.. code-block:: c
+    import cimba
+    import cimba.sim as sim
 
-    #include <cimba.h>
-    #include <stdio.h>
+    USERFLAG1 = 0x00000001
 
-    #define USERFLAG1 0x00000001
+    MSG_GAME_OVER = sim.log_text("--- Game Over ---")
+    MSG_PUT = sim.log_text("Puts one into the queue")
+    MSG_GET = sim.log_text("Gets one from the queue")
+    LBL_HOLD = sim.log_text("Holds for")
+    LBL_SERVICE = sim.log_text("Got one, services it for")
 
-    struct simulation {
-        struct cmb_process *arr;
-        struct cmb_buffer *que;
-        struct cmb_process *srv;
-    };
+    class MM1Log(sim.Model):
+        utilization: sim.Param
+        arrival: sim.Processes
+        service: sim.Processes
+        queue: sim.Queue
 
-    void end_sim(void *subject, void *object)
-    {
-        struct simulation *sim = object;
+    model = MM1Log()
 
-        cmb_logger_user(stdout, USERFLAG1, "--- Game Over ---");
-        cmb_process_stop(sim->arr, NULL);
-        cmb_process_stop(sim->srv, NULL);
-    }
+    @model.process
+    def arrival(env: MM1Log):
+        while True:
+            t_ia = sim.exponential(1.0 / env.utilization)
+            sim.log_user_f64(USERFLAG1, LBL_HOLD, t_ia)
+            sim.hold(t_ia)
+            sim.log_user(USERFLAG1, MSG_PUT)
+            sim.put(env.queue, 1)
 
-    void *arrival(struct cmb_process *me, void *ctx)
-    {
-        struct cmb_buffer *bp = ctx;
-        while (true) {
-            const double rate = 0.75;
-            const double mean = 1.0 / rate;
-            const double t_ia = cmb_random_exponential(mean);
-            cmb_logger_user(stdout, USERFLAG1, "Holds for %f time units", t_ia);
-            cmb_process_hold(t_ia);
-            uint64_t n = 1;
-            cmb_logger_user(stdout, USERFLAG1, "Puts one into the queue");
-            cmb_buffer_put(bp, &n);
-        }
-    }
+    @model.process
+    def service(env: MM1Log):
+        while True:
+            sim.log_user(USERFLAG1, MSG_GET)
+            sim.get(env.queue, 1)
+            t_srv = sim.exponential(1.0)
+            sim.log_user_f64(USERFLAG1, LBL_SERVICE, t_srv)
+            sim.hold(t_srv)
 
-    void *service(struct cmb_process *me, void *ctx)
-    {
-        struct cmb_buffer *bp = ctx;
-        while (true) {
-            const double rate = 1.0;
-            const double mean = 1.0 / rate;
-            uint64_t m = 1;
-            cmb_logger_user(stdout, USERFLAG1, "Gets one from the queue");
-            cmb_buffer_get(bp, &m);
-            double t_srv = cmb_random_exponential(mean);
-            cmb_logger_user(stdout, USERFLAG1, "Got one, services it for %f time units", t_srv);
-            cmb_process_hold(t_srv);
-        }
-    }
+    @model.process
+    def stop_at_10(env: MM1Log):
+        sim.hold(10.0)
+        sim.log_user(USERFLAG1, MSG_GAME_OVER)
+        sim.stop(env.arrival[0], 0)
+        sim.stop(env.service[0], 0)
+        sim.suspend()
 
-We also suppress the Cimba informationals from the main function:
+We also suppress the Cimba informationals before running the experiment:
 
-.. code-block:: c
+.. code-block:: python
 
-        cmb_logger_flags_off(CMB_LOGGER_INFO);
+    cimba.logger_flags_off(cimba.LOGGER_INFO)
+    cimba.logger_flags_on(USERFLAG1)
 
-We compile and run, and get something like this:
+    exp = model.experiment(
+        utilization=[0.75],
+        replications=1,
+        duration=20.0,
+        warmup=0.0,
+        seed=42,
+    )
+    exp.run()
+
+We run it, and get something like this:
 
 .. code-block:: none
 
-    [ambonvik@Threadripper cimba]$ build/tutorial/tut_1_3
-    0.0000	Arrival	arrival (25):  Holds for 5.990663 time units
-    0.0000	Service	service (38):  Gets one from the queue
-    5.9907	Arrival	arrival (28):  Puts one into the queue
-    5.9907	Arrival	arrival (25):  Holds for 0.687769 time units
-    5.9907	Service	service (41):  Got one, services it for 0.758971 time units
-    6.6784	Arrival	arrival (28):  Puts one into the queue
-    6.6784	Arrival	arrival (25):  Holds for 2.199251 time units
-    6.7496	Service	service (38):  Gets one from the queue
-    6.7496	Service	service (41):  Got one, services it for 0.589826 time units
-    7.3395	Service	service (38):  Gets one from the queue
-    8.8777	Arrival	arrival (28):  Puts one into the queue
-    8.8777	Arrival	arrival (25):  Holds for 0.523423 time units
-    8.8777	Service	service (41):  Got one, services it for 1.277856 time units
-    9.4011	Arrival	arrival (28):  Puts one into the queue
-    9.4011	Arrival	arrival (25):  Holds for 1.751825 time units
-    10.000	dispatcher	end_sim (15):  --- Game Over ---
+    0	    0.0000	arrival	python (0):  Holds for 3.067784
+    0	    0.0000	service	python (0):  Gets one from the queue
+    0	    3.0678	arrival	python (0):  Puts one into the queue
+    0	    3.0678	arrival	python (0):  Holds for 1.680963
+    0	    3.0678	service	python (0):  Got one, services it for 0.273676
+    0	    3.3415	service	python (0):  Gets one from the queue
+    0	    4.7487	arrival	python (0):  Puts one into the queue
+    0	    4.7487	arrival	python (0):  Holds for 0.275269
+    0	    4.7487	service	python (0):  Got one, services it for 0.151682
+    0	    4.9004	service	python (0):  Gets one from the queue
+    0	    5.0240	arrival	python (0):  Puts one into the queue
+    0	    5.0240	arrival	python (0):  Holds for 1.470240
+    0	    5.0240	service	python (0):  Got one, services it for 1.470766
+    0	    6.4943	arrival	python (0):  Puts one into the queue
+    0	    6.4943	arrival	python (0):  Holds for 0.650314
+    0	    6.4948	service	python (0):  Gets one from the queue
+    0	    6.4948	service	python (0):  Got one, services it for 5.394095
+    0	    7.1446	arrival	python (0):  Puts one into the queue
+    0	    7.1446	arrival	python (0):  Holds for 0.166678
+    0	    7.3112	arrival	python (0):  Puts one into the queue
+    0	    7.3112	arrival	python (0):  Holds for 0.221409
+    0	    7.5327	arrival	python (0):  Puts one into the queue
+    0	    7.5327	arrival	python (0):  Holds for 1.084869
+    0	    8.6175	arrival	python (0):  Puts one into the queue
+    0	    8.6175	arrival	python (0):  Holds for 2.631605
+    0	    10.000	stop_at_10	python (0):  --- Game Over ---
 
-Only our user-defined logging messages are printed. Note how the simulation time,
-the name of the active process, the calling function, and the line number are
-automagically prepended to the user-defined message.
+Only our user-defined logging messages are printed. Note how the trial index,
+simulation time, the name of the active process, the shim function name, and
+line placeholder are prepended to the user-defined message.
 
 We turn off our user-defined messages like this:
 
-.. code-block:: c
+.. code-block:: python
 
-    cmb_logger_flags_off(CMB_LOGGER_INFO);
-    cmb_logger_flags_off(USERFLAG1);
+    cimba.logger_flags_off(cimba.LOGGER_INFO)
+    cimba.logger_flags_off(USERFLAG1)
 
-As you would expect,
-`this version of the program <https://github.com/ambonvik/cimba/blob/main/tutorial/tut_1_3.c>`_
-produces no output.
+As you would expect, this produces no logging output from either Cimba
+informationals or the user-defined Python logging calls.
 
 Collecting and reporting statistics
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -637,191 +562,139 @@ queue length of 2.25 for a M/M/1 queue at 75 % utilization. We just got 2.249.
 
 Close, but is it close enough? We need more resolving power.
 
+    $ python tutorial/tut_1_4.py
+    Theory predicts an average M/M/1 waiting-queue length of 2.25
+    Simulation result: 2.249000
+
+The Python API exposes time-weighted summary accessors such as
+``sim.mean_level()``. Raw time-series histories, histograms, correlograms, and
+text-mode buffer reports are not exposed yet; see :doc:`missing_features`.
+
+Runnable code for this stage is in ``tutorial/tut_1_4.py``. Theory predicts an
+average queue length of 2.25 for a M/M/1 queue at 75 % utilization. A result
+near 2.249 is encouraging, but is it close enough? We need more resolving power.
+
 Refactoring for parallelism
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-In Python, most of this refactoring is expressed declaratively on the model
-class. Parameters are ``sim.Param`` fields, result values are ``sim.Output``
-fields, and native objects are entity fields like ``sim.Queue``.
+Most of this refactoring is expressed declaratively on the model class.
+Parameters are ``sim.Param`` fields, result values are ``sim.Output`` fields,
+and simulation entities are fields like ``sim.Queue``. The wrapper generates
+the trial record, lifecycle events, and recording schedule from that
+declaration, so you do not wire them up by hand.
+
+Next, we tidy up the hard-coded parameters. Model parameters and outputs are
+declared on the class, and the experiment call supplies utilization, warmup,
+and duration:
 
 .. code-block:: python
+
+    import cimba.sim as sim
 
     class MM1(sim.Model):
         utilization: sim.Param
         avg_queue_length: sim.Output
         queue: sim.Queue
 
-    @model.collect
-    def collect_stats(env: MM1):
-        env.avg_queue_length = sim.mean_level(env.queue)
+    def build_model() -> MM1:
+        model = MM1("MM1")
 
-The wrapper generates the context struct, simulation struct, trial struct, and
-recording events described in the original C text below.
+        @model.process
+        def arrival(env: MM1):
+            while True:
+                t_ia = sim.exponential(1.0 / env.utilization)
+                sim.hold(t_ia)
+                sim.put(env.queue, 1)
 
-Before we go there, we will clean up a few rough edges. The compiler keeps warning
-us about unused function arguments. Unused arguments is not unusual with Cimba,
-since we often do not need all arguments to event and process functions. However,
-we do not want to turn off the warning altogether, but will inform the compiler
-(and human readers of the code) that this is intentional by using the
-:c:macro:`cmb_unused()` macro:
+        @model.process
+        def service(env: MM1):
+            while True:
+                sim.get(env.queue, 1)
+                t_srv = sim.exponential(1.0)
+                sim.hold(t_srv)
 
-.. code-block:: c
+        @model.collect
+        def collect_stats(env: MM1):
+            env.avg_queue_length = sim.mean_level(env.queue)
 
-    void end_sim(void *subject, void *object)
-    {
-        cmb_unused(subject);
-        struct simulation *sim = object;
+        return model
 
-        cmb_logger_user(stdout, USERFLAG1, "--- Game Over ---");
-        cmb_process_stop(sim->arr, NULL);
-        cmb_process_stop(sim->srv, NULL);
-    }
-
-Warnings gone. Next, we want to tidy up the hard-coded parameters to a proper
-data structure. We define a ``struct trial`` to contain parameters and output
-values, and bundle both our existing ``struct simulation`` and ``struct trial`` in
-a ``struct context``, and pass that between the functions.
-
-.. code-block:: c
-
-    struct simulation {
-        struct cmb_process *arr;
-        struct cmb_buffer *que;
-        struct cmb_process *srv;
-    };
-
-    struct trial {
-        /* Parameters */
-        double arr_rate;
-        double srv_rate;
-        double warmup_time;
-        double duration;
-        /* Results */
-        double avg_queue_length;
-    };
-
-    struct context {
-        struct simulation *sim;
-        struct trial *trl;
-    };
-
-For now, we just declare these structs as local variables on the stack.
-
-We define a small helper function to load the parameters into the ``trial``:
-
-.. code-block:: c
-
-    void load_params(struct trial *trl)
-    {
-        cmb_assert_release(trl != NULL);
-
-        trl->arr_rate = 0.75;
-        trl->srv_rate = 1.0;
-        trl->warmup_time = 1000.0;
-        trl->duration = 1e6;
-    }
+Each process and collector receives a typed ``env`` trial record that already
+contains parameters, outputs, and entity handles.
 
 .. _tut_1_assert:
 
 .. admonition:: Asserts and debuggers
 
-    Notice the :c:macro:`cmb_assert_release()` in this code
-    fragment. It is a custom version of the standard ``assert()`` macro, triggering
-    a hard stop if the condition evaluates to ``false``. Our custom asserts come in
-    two flavors, :c:macro:`cmb_assert_debug()` and :c:macro:`cmb_assert_release()`.
-    The ``_debug`` assert
-    behaves like the standard one and goes away if the preprocessor symbol ``NDEBUG``
-    is ``#defined``. The ``_release`` assert is still there, but also goes away if ``NASSERT``
-    is ``#defined``. See :ref:`the background section <background_error>` for details.
+    The runtime enforces preconditions with hard-stop assertions. See
+    :ref:`the background section <background_error>` for details.
 
-    We will trip one and see how it looks. We temporarily replace the
-    exponentially distributed service time with a normally distributed one, mean
-    1.0 and sigma 0.25. This will almost surely generate a negative value
-    sooner or later, which will cause the service process to try to hold for a
-    negative time, resuming in its own past. That should not be possible:
+    We can trip one and see how it looks. Temporarily replace the exponentially
+    distributed service time with a normally distributed one, mean 1.0 and sigma
+    0.25. This will almost surely generate a negative value sooner or later,
+    which will cause the service process to try to hold for a negative time,
+    resuming in its own past. That should not be possible:
 
-    .. code-block:: c
+    .. code-block:: python
 
-                // const double t_srv = cmb_random_exponential(t_srv_mean);
-                const double t_srv = cmb_random_normal(1.0, 0.25);
+        # t_srv = sim.exponential(1.0)
+        t_srv = sim.normal(1.0, 0.25)
 
-    Sure enough::
-
-        /home/ambonvik/github/cimba/build/tutorial/tut_1_5
-        9359.5	Service	cmb_process_hold (272):  Fatal: Assert "dur >= 0.0" failed, source file cmb_process.c, seed 0x9bec8a16f0aa802a
-
-        Process finished with exit code 134 (interrupted by signal 6:SIGABRT)
-
-    The output line lists the simulated time, the process, the function and line of code,
-    the condition that failed, the source code file where it blew up, and the random
-    number seed that was used to initialize the run.
-
-    If using a debugger, place a breakpoint  in :c:func:`cmi_assert_failed()`.
-    If some assert trips, control will always
-    go there. You can then page up the stack and see exactly what happened.
+    Sure enough, the run aborts with a diagnostic that names the simulated time,
+    the active process, the failed condition, and the random seed used for that
+    trial.
 
     .. image:: ../subprojects/cimba/images/debugger_assert.png
 
+Recording on the queue is turned on and off at specified times automatically.
+The wrapper schedules those events from the ``warmup`` and ``duration`` arguments
+to ``experiment()``, relative to each trial's ``start_time``.
 
-We also need a pair of events to turn data recording on and off at specified times:
+As the last refactoring step before we parallelize, we move the simulation
+driver out of a monolithic ``main()`` into a reusable trial function.
+``experiment().run()`` compiles a native trial function and hands it to the
+dispatcher:
 
-.. code-block:: c
+.. code-block:: python
 
-    static void start_rec(void *subject, void *object)
-    {
-        cmb_unused(subject);
-        const struct context *ctx = object;
+    def run_mm1_trial(
+        *,
+        utilization: float,
+        duration: float,
+        warmup: float,
+        seed: int,
+    ) -> float:
+        exp = build_model().experiment(
+            utilization=[utilization],
+            replications=1,
+            duration=duration,
+            warmup=warmup,
+            seed=seed,
+        )
+        failures = exp.run()
+        if failures:
+            raise RuntimeError(f"{failures} trial(s) failed")
+        return float(exp["avg_queue_length"][0])
 
-        const struct simulation *sim = ctx->sim;
-        cmb_buffer_start_recording(sim->que);
-    }
+    def main() -> None:
+        avg = run_mm1_trial(
+            utilization=0.75,
+            duration=1.0e6,
+            warmup=1.0e3,
+            seed=46,
+        )
+        print(f"Avg {avg:.6f}")
 
-    static void stop_rec(void *subject, void *object)
-    {
-        cmb_unused(subject);
-        const struct context *ctx = object;
+The ``@model.collect`` callback writes the time-weighted mean queue length
+directly into ``env.avg_queue_length``, which ``experiment()`` exposes as a
+column after the run.
 
-        const struct simulation *sim = ctx->sim;
-        cmb_buffer_stop_recording(sim->que);
-    }
-
-As the last refactoring step before we parallelize, we move the simulation driver
-code from ``main()`` to a separate function ``run_MM1_trial()`` and call it from
-``main()``. For reasons that soon will be evident, its argument is a single pointer
-to void, even if we immediately cast this to our ``struct trial *`` once inside the
-function. We remove the call to :c:func:`cmb_buffer_report`, calculate the average
-queue length, and store it in the ``trial`` results field:
-
-.. code-block:: c
-
-        struct cmb_wtdsummary wtdsum;
-        const struct cmb_timeseries *ts = cmb_buffer_history(ctx.sim->que);
-        cmb_timeseries_summarize(ts, &wtdsum);
-        ctx.trl->avg_queue_length = cmb_wtdsummary_mean(&wtdsum);
-
-The ``main()`` function is now reduced to this:
-
-.. code-block:: c
-
-    int main(void)
-    {
-        struct trial trl = {};
-        load_params(&trl);
-
-        run_MM1_trial(&trl);
-
-        printf("Avg %f\n", trl.avg_queue_length);
-
-        return 0;
-    }
-
-We will not repeat the rest of the code here. You can find it in
-`tutorial/tut_1_5.c <https://github.com/ambonvik/cimba/blob/main/tutorial/tut_1_5.c>`__.
-Instead, we compile and run it, receiving output similar to this:
+Runnable code for this stage is in ``tutorial/tut_1_5.py``. When we run it,
+output is similar to this:
 
 .. code-block:: none
 
-    /home/ambonvik/github/cimba/build/tutorial/tut_1_5
+    $ python tutorial/tut_1_5.py
     Avg 2.234060
 
 .. _tut_1_parallel:
@@ -855,13 +728,12 @@ There is no interaction between the trials, and they can be trivially paralleliz
 by just running them at the same time and collecting the output.
 
 Cimba creates a pool of worker threads, one per (logical) CPU core on the system.
-In Python, you describe your experiment as parameter arrays and replication
-counts, and ``Model.experiment()`` creates the native trial array and compiled
-trial function that are passed to :c:func:`cimba_run_experiment()`.
-The worker threads will pull trials from the experiment array and run them,
-storing the results back in your trial struct, before moving to the next un-executed
-trial in the array. This gives an inherent load balancing with minimal overhead. When all
-trials have been executed, it stops.
+You describe your experiment as parameter arrays and replication counts.
+``Model.experiment()`` builds the trial table and compiled trial function, and
+``experiment.run()`` dispatches work to the worker pool. Each thread pulls the
+next unexecuted trial, runs it, writes results back into that trial record, and
+continues until the table is finished. That gives inherent load balancing with
+minimal overhead.
 
 Returning to our M/M/1 queue, suppose that we want to test the commonly accepted
 queuing theory by testing utilization factors from 0.025 to 0.975 in steps of 0.025,
@@ -891,22 +763,15 @@ input file or as interactive input in real usage.
 
 .. note::
 
-    Do not use any writeable global variables in your model. The entire parallelized
-    experiment exists in a shared memory space. Threads will be sharing CPU cores
-    in unpredictable ways. A global variable accessible to several threads can be
-    read and written by any thread, creating potential hard-to-diagnose bugs.
+    Do not use writable module-level variables that model code mutates during a
+    trial. The entire parallelized experiment exists in shared memory. Worker
+    threads are scheduled unpredictably, so state visible to several threads can
+    be read and written by any of them, creating hard-to-diagnose bugs.
 
-    Do not use any static local variables in your model either. Your model
-    functions will be called by all threads. A static local variable remembers its
-    value from the last call, which may have been a completely different thread.
-    Diagnosing those bugs will not be any easier.
-
-    Regular local variables, function arguments, and heap memory (``malloc()`` /
-    ``free()``) is thread safe.
-
-    If you absolutely *must* have a global or static variable, consider prefixing
-    it by :c:macro:`CMB_THREAD_LOCAL` to make it global or static *within that thread only*,
-    creating separate copies per thread.
+    Do not stash mutable state in function attributes or other objects shared
+    across trials either. Keep working data in the ``env`` record, in local
+    variables, or in entities declared on the model. Regular locals, arguments,
+    and per-trial ``env`` fields are safe.
 
 We can then run the experiment:
 
@@ -915,127 +780,60 @@ We can then run the experiment:
     failures = exp.run()
     assert failures == 0
 
-Internally, the generated Python wrapper gives :c:func:`cimba_run_experiment()`
-the experiment array, number of trials, trial record size, and compiled native
-trial function.
-
-When done, we can collect the results like this:
+When done, reshape the output column by utilization and replication, summarize
+each parameter setting, and compare against the analytic M/M/1 formula
+:math:`\rho^2 / (1 - \rho)`:
 
 .. code-block:: python
 
-    rows = []
+    import cimba
+
     values = exp["avg_queue_length"].reshape(len(rhos), 10)
+
+    print(f"cimba {cimba.native_version()}")
+    print(f"{'rho':>8} {'simulated':>10} {'+/-95%':>10} {'theory':>10}")
     for rho, samples in zip(rhos, values):
-        sample_avg = samples.mean()
-        sample_sd = samples.std(ddof=1)
-        t_crit = 2.228
-        rows.append((rho, sample_avg, t_crit * sample_sd))
+        mean = float(samples.mean())
+        ci = 1.96 * samples.std(ddof=1) / np.sqrt(samples.size)
+        theory = rho * rho / (1.0 - rho)
+        print(f"{rho:8.3f} {mean:10.4f} {ci:10.4f} {theory:10.4f}")
 
-    np.savetxt(
-        "tut_1_6.dat",
-        np.asarray(rows),
-        header="utilization\tavg_queue_length\tconf_interval",
-    )
-
-We use a :c:struct:`cmb_datasummary` to simplify the calculation of confidence intervals,
-knowing that it will calculate correct moments in a single pass of the data. We
-then write the results to an output file, write a gnuplot command file to plot
-the results, and spawn a gnuplot window to display the chart.
-
-Also, we would like to know the progress of our experiment, so we define a
-separate level of logger messages like this:
-
-.. code-block:: c
-
-    #define USERFLAG1 0x00000001
-    #define USERFLAG2 0x00000002
-
-.. note::
-
-    The logging flags are bitmasks, not consecutive numbers. The next three
-    values would be ``0x00000004``, ``0x00000008``, and ``0x00000010``. You can
-    combine flag values bit-wise. For instance, a call to ``cmb_logger_user()``
-    with flag level 63 (``0xFF``) will print a line if *any* of the lowest 8 bits
-    are set.
-
-
-We add a logging call to our ``run_MM1_trial()``:
-
-.. code-block:: c
-
-    cmb_logger_user(stdout, USERFLAG2,
-                    "seed: 0x%016" PRIx64 " rho: %f",
-                    trl->seed_used, trl->arr_rate / trl->srv_rate);
-
-We use the macro ``PRIx64`` from ``#include <inttypes.h>`` for portable formatting
-of the ``uint64_t`` seed value.
-
-We add some code to measure run time and some extra ``printf()`` calls, compile
-and run, and get output similar to this:
+Runnable code for this stage is in ``tutorial/tut_1_6.py``. When we run it,
+output begins like this:
 
 .. code-block:: none
 
-    /home/ambonvik/github/cimba/build/tutorial/tut_1_6
-    Cimba version 3.0.0-beta
-    Setting up experiment
-    Executing experiment
-    0	    0.0000	dispatcher	run_MM1_trial (120):  seed: 0xc81e7ac2d54abef1 rho: 0.025000
-    2	    0.0000	dispatcher	run_MM1_trial (120):  seed: 0xb995a846d37f1522 rho: 0.025000
-    1	    0.0000	dispatcher	run_MM1_trial (120):  seed: 0x246364a107f945e7 rho: 0.025000
-    5	    0.0000	dispatcher	run_MM1_trial (120):  seed: 0xa7b5e743900ccc53 rho: 0.025000
-    4	    0.0000	dispatcher	run_MM1_trial (120):  seed: 0x775e54d85c8760eb rho: 0.025000
-    3	    0.0000	dispatcher	run_MM1_trial (120):  seed: 0x6d4f0bb78fab7321 rho: 0.025000
-    6	    0.0000	dispatcher	run_MM1_trial (120):  seed: 0xa0d4d65c953e6ba9 rho: 0.025000
-    7	    0.0000	dispatcher	run_MM1_trial (120):  seed: 0xc66885b9c3e01198 rho: 0.025000
-    10	    0.0000	dispatcher	run_MM1_trial (120):  seed: 0x0d0324ac1ad47314 rho: 0.050000
-    9	    0.0000	dispatcher	run_MM1_trial (120):  seed: 0x60ea3e25c23886cd rho: 0.025000
-    8	    0.0000	dispatcher	run_MM1_trial (120):  seed: 0xb2cf2d84fb2cd36e rho: 0.025000
-    11	    0.0000	dispatcher	run_MM1_trial (120):  seed: 0x04b83d03be4d5393 rho: 0.050000
-    12	    0.0000	dispatcher	run_MM1_trial (120):  seed: 0x6a3c8c7d7657b5a2 rho: 0.050000
-    13	    0.0000	dispatcher	run_MM1_trial (120):  seed: 0x79e878ab601d9ba9 rho: 0.050000
-    14	    0.0000	dispatcher	run_MM1_trial (120):  seed: 0xcd50fbb55578f7d2 rho: 0.050000
-    15	    0.0000	dispatcher	run_MM1_trial (120):  seed: 0xfabb1c5f934c9aad rho: 0.050000
+    $ python tutorial/tut_1_6.py
+    cimba 3.0.0-beta
+       rho  simulated     +/-95%     theory
+     0.025     0.0012     0.0004     0.0006
+     0.050     0.0028     0.0007     0.0026
+     0.075     0.0064     0.0014     0.0061
+     ...
 
-    ...
-
-    384	    0.0000	dispatcher	run_MM1_trial (120):  seed: 0x8aa3bb76ccc324a6 rho: 0.975000
-    385	    0.0000	dispatcher	run_MM1_trial (120):  seed: 0x9290801927a4f348 rho: 0.975000
-    386	    0.0000	dispatcher	run_MM1_trial (120):  seed: 0xeaff225d8d61a4ad rho: 0.975000
-    387	    0.0000	dispatcher	run_MM1_trial (120):  seed: 0xc2c20c0bef3959b7 rho: 0.975000
-    388	    0.0000	dispatcher	run_MM1_trial (120):  seed: 0xc11445ad99b4a5c9 rho: 0.975000
-    389	    0.0000	dispatcher	run_MM1_trial (120):  seed: 0x5faccc75f803deef rho: 0.975000
-    Finished experiment, writing results to file
-    It took 3.41133 sec
-
-Note that the Cimba logger understands that it is now running multithreaded and
-prepends each logging line with the trial index in your experiment array. Note
-also that the trials may not be executed in strict sequence, since we do not
-control the detailed interleaving of the threads. That is up to the operating
-system.
-
-We also get this image in a separate window:
+Plotting simulated means with confidence bands against the analytic curve gives a
+chart like this:
 
     .. image:: ../subprojects/cimba/images/tut_1_6.png
+
+If you enable user logging during a parallel run, as in :ref:`tut_1_logging`, the
+logger prepends each line with the trial index. Trials may not finish in strict
+sequence because the operating system schedules the worker threads.
 
 Evidently, we cannot reject the null hypothesis that conventional queuing theory
 may be correct. Nor can we reject the hypothesis that Cimba may be working correctly.
 
 This concludes our first tutorial. We have followed the development steps from a
 first minimal model to demonstrate process interactions to a complete parallelized
-experiment with graphical output. The files ``tutorial/tut_1_*.c`` include working
-code for each stage of development. The version
-`tutorial/tut_1_7.c <https://github.com/ambonvik/cimba/blob/main/tutorial/tut_1_7.c>`__
-is functionally the same as our final
-`tutorial/tut_1_6.c <https://github.com/ambonvik/cimba/blob/main/tutorial/tut_1_6.c>`__
-but with additional inline explanatory comments and simulation parameters settable from
-the command line using 'getopt()' for argument parsing.
+experiment with summarized output. The files ``tutorial/tut_1_*.py`` include
+working code for each stage of development. ``tutorial/tut_1_7.py`` is the same
+sweep with ``argparse`` options for replications, duration, warmup, seed, and
+optional timing output.
 
-For additional variations of this theme, see also
-`benchmark/MM1_multi.c <https://github.com/ambonvik/cimba/blob/main/benchmark/MM1_multi.c>`__
-where the queue is modeled as a :c:struct:`cmb_objectqueue` with individual customers
-tracking their time in the system, and
-`test/test_cimba.c <https://github.com/ambonvik/cimba/blob/main/test/test_cimba.c>`__
-modeling a M/G/1 queue with different utilizations and service time varibilities.
+For additional variations of this theme, see ``examples/benchmarks/mm1_multi.py``,
+which models the queue with individual customer objects, and
+``examples/demo_mg1_simapi.py``, which sweeps utilization with non-exponential
+service times.
 
 .. _tut_2:
 
@@ -1584,8 +1382,24 @@ also create a derived ``struct server`` as a derived class from the
     };
 
 It is important to note that the first member of the struct is the parent class struct
-itself, not a pointer to an object of that class. We can now define the core methods of
-the server class:
+itself, not a pointer to an object of that class.
+
+.. note::
+
+    The Python API supports this derived-struct pattern directly: declare the
+    extra fields (``float`` or ``int``) on a ``sim.Struct`` subclass, and let
+    the process function ask for its own view with a final annotated
+    parameter, ``def visitor(env, vip: Visitor)``. The fields share the
+    process's native allocation, exactly as in C, and any process holding the
+    process handle can view them with ``Visitor(handle)`` -- the counterpart
+    of the C downcast ``(struct visitor *)pp``. The dynamic lifecycle is
+    available too: a process declared in a ``sim.Spawnable`` field is created
+    at runtime with ``sim.spawn()`` (this chapter's ``visitor_create`` /
+    ``_initialize`` / ``_start``) and reclaimed with ``sim.despawn()``
+    (``visitor_terminate`` / ``_destroy``). See ``examples/demo_park.py`` for
+    this tutorial's model written that way.
+
+We can now define the core methods of the server class:
 
 .. code-block:: c
 
