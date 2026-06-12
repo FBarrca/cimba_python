@@ -356,6 +356,15 @@ uint64_t cpy_priorityqueue_put(void *pqp, const intptr_t object,
     return hndl;
 }
 
+/* Blocking get; the received object value is stored to *objloc */
+int64_t cpy_priorityqueue_get(void *pqp, intptr_t *objloc)
+{
+    void *obj = NULL;
+    const int64_t r = cmb_priorityqueue_get(pqp, &obj);
+    *objloc = (intptr_t)obj;
+    return r;
+}
+
 /* Blocking get returning the object value directly (0 if interrupted) */
 intptr_t cpy_priorityqueue_take(void *pqp)
 {

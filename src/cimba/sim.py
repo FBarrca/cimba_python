@@ -82,7 +82,7 @@ __all__ = [
     "suspend", "status", "set_priority",
     "timer_set", "timer_add", "timer_cancel", "timers_clear",
     "flip", "held", "pool_held",
-    "pq_put", "pq_take", "pq_length", "pq_space", "pq_position",
+    "pq_put", "pq_get", "pq_take", "pq_length", "pq_space", "pq_position",
     "pq_reprioritize", "pq_cancel", "pq_mean_length",
     "put", "get", "level", "space", "mean_level",
     "acquire", "release", "preempt", "available", "in_use", "mean_in_use",
@@ -99,6 +99,7 @@ __all__ = [
     "std_normal", "std_exponential", "std_gamma", "std_beta", "pert_mod",
     "logistic", "cauchy", "pareto", "chisquared", "f_dist", "std_t",
     "t_dist", "geometric", "binomial", "negative_binomial", "pascal",
+    "hypoexponential", "hyperexponential", "categorical", "loaded_dice",
     "f2i", "i2f",
 ]
 
@@ -295,6 +296,10 @@ if TYPE_CHECKING:
         returns the entry handle for pq_position()/pq_cancel()."""
         ...
 
+    def pq_get(pqueue: Handle) -> tuple[int, int]:
+        """Remove the highest-priority object, returning (status, object)."""
+        ...
+
     def pq_take(pqueue: Handle) -> int:
         """Remove and return the highest-priority object, blocking while
         the queue is empty."""
@@ -479,6 +484,23 @@ if TYPE_CHECKING:
         """Alias for negative_binomial."""
         ...
 
+    def hypoexponential(means: Any) -> float:
+        """Hypoexponential draw from a non-empty sequence of means."""
+        ...
+
+    def hyperexponential(means: Any, weights: Any) -> float:
+        """Hyperexponential draw from matching mean and weight sequences."""
+        ...
+
+    def categorical(weights: Any) -> int:
+        """Return an index sampled in proportion to a non-empty sequence
+        of nonnegative weights."""
+        ...
+
+    def loaded_dice(probabilities: Any) -> int:
+        """Alias for categorical(probabilities)."""
+        ...
+
     # --- Conditions (cmb_condition) ---------------------------------------------
     def signal(condition: Handle) -> int:
         """Wake the condition's waiters to re-evaluate their predicates."""
@@ -499,7 +521,7 @@ if TYPE_CHECKING:
         ...
 
 else:
-    from ._intrinsics import f2i, i2f, store_get
+    from ._intrinsics import f2i, i2f, pq_get, store_get
 
     # Process verbs
     hold = _b.process_hold
@@ -602,6 +624,50 @@ else:
     binomial = _b.random_binomial
     negative_binomial = _b.random_negative_binomial
     pascal = _b.random_pascal
+
+    @njit
+    def hypoexponential(means):
+        """Hypoexponential draw from a non-empty sequence of means."""
+        if len(means) == 0:
+            raise ValueError("hypoexponential() expects at least one mean")
+        x = 0.0
+        for mean in means:
+            x += exponential(mean)
+        return x
+
+    @njit
+    def categorical(weights):
+        """Return an index sampled in proportion to nonnegative weights."""
+        if len(weights) == 0:
+            raise ValueError("categorical() expects at least one weight")
+        total = 0.0
+        for weight in weights:
+            total += weight
+        if total <= 0.0:
+            raise ValueError("categorical() expects positive total weight")
+
+        target = random01() * total
+        cumulative = 0.0
+        last = 0
+        for i, weight in enumerate(weights):
+            cumulative += weight
+            last = i
+            if target < cumulative:
+                return i
+        return last
+
+    @njit
+    def loaded_dice(probabilities):
+        """Alias for categorical(probabilities)."""
+        return categorical(probabilities)
+
+    @njit
+    def hyperexponential(means, weights):
+        """Hyperexponential draw from matching mean and weight sequences."""
+        if len(means) != len(weights):
+            raise ValueError(
+                "hyperexponential() means and weights must match")
+        return exponential(means[categorical(weights)])
 
     # Conditions (cmb_condition)
     signal = _b.condition_signal

@@ -81,6 +81,30 @@ def store_get(typingctx, store):
 
 
 @intrinsic
+def pq_get(typingctx, pqueue):
+    """Blocking priorityqueue get returning (status, object)."""
+    if not isinstance(pqueue, types.Integer):
+        raise TypeError("pq_get() expects a priority queue handle")
+
+    ret_type = types.Tuple((types.int64, types.intp))
+
+    def codegen(context, builder, signature, args):
+        intp_t = context.get_value_type(types.intp)
+        int64_t = context.get_value_type(types.int64)
+        objloc = cgutils.alloca_once(builder, intp_t)
+        builder.store(context.get_constant(types.intp, 0), objloc)
+
+        fnty = ir.FunctionType(int64_t, [intp_t, intp_t.as_pointer()])
+        fn = cgutils.get_or_insert_function(
+            builder.module, fnty, "cpy_priorityqueue_get")
+        status = builder.call(fn, [args[0], objloc])
+        obj = builder.load(objloc)
+        return context.make_tuple(builder, ret_type, [status, obj])
+
+    return ret_type(pqueue), codegen
+
+
+@intrinsic
 def f2i(typingctx, x):
     """Bit-cast a float64 to int64."""
     if x != types.float64:

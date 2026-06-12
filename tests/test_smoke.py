@@ -6,6 +6,8 @@ import pytest
 import cimba
 import cimba.sim as sim
 
+CAT_WEIGHTS = np.array([2.0, 3.0, 5.0], dtype=np.float64)
+
 
 def test_wrapper_version():
     assert cimba.__version__ == "0.1.0"
@@ -203,6 +205,10 @@ def test_extra_random_distributions():
         binom: sim.Output
         nbinom: sim.Output
         pas: sim.Output
+        hypo: sim.Output
+        hyper: sim.Output
+        loaded: sim.Output
+        cat: sim.Output
 
     model = ExtraDraws()
 
@@ -224,6 +230,11 @@ def test_extra_random_distributions():
         env.binom = sim.binomial(10, 0.4)
         env.nbinom = sim.negative_binomial(3, 0.4)
         env.pas = sim.pascal(3, 0.4)
+        env.hypo = sim.hypoexponential((1.0, 2.0, 4.0, 8.0))
+        env.hyper = sim.hyperexponential(
+            (1.0, 2.0, 4.0, 8.0), (1.0, 2.0, 3.0, 4.0))
+        env.loaded = sim.loaded_dice([0.2, 0.3, 0.5])
+        env.cat = sim.categorical(CAT_WEIGHTS)
         sim.suspend()
 
     exp = model.experiment(replications=1, duration=10.0, warmup=0.0,
@@ -242,6 +253,10 @@ def test_extra_random_distributions():
     assert 0.0 <= exp["binom"][0] <= 10.0
     assert exp["nbinom"][0] >= 0.0
     assert exp["pas"][0] >= 0.0
+    assert exp["hypo"][0] >= 0.0
+    assert exp["hyper"][0] >= 0.0
+    assert 0.0 <= exp["loaded"][0] <= 2.0
+    assert 0.0 <= exp["cat"][0] <= 2.0
 
 
 def test_process_handles_and_interrupt():
@@ -350,6 +365,46 @@ def test_pqueues_and_timers():
     # the consumer at t=0.5 must get the priority-5 object
     assert exp["served_first"][0] == 7.0  # producer drained the leftover
     assert exp["timed_out"][0] == 99.0
+
+
+def test_pqueue_get_status_and_object():
+    class PQGet(sim.Model):
+        first_status: sim.Output
+        first_obj: sim.Output
+        take_obj: sim.Output
+        timeout_status: sim.Output
+        timeout_obj: sim.Output
+        qs: sim.PQueues = sim.count(1)
+
+    model = PQGet()
+
+    @model.process
+    def actor(env: PQGet):
+        q = env.qs[0]
+        sim.pq_put(q, 7, 0)
+        sim.pq_put(q, 8, 5)
+
+        status, obj = sim.pq_get(q)
+        env.first_status = status
+        env.first_obj = obj
+        env.take_obj = sim.pq_take(q)
+
+        me = sim.current()
+        sim.timer_set(me, 1.0, sim.TIMEOUT)
+        status, obj = sim.pq_get(q)
+        env.timeout_status = status
+        env.timeout_obj = obj
+        while True:
+            sim.hold(1000.0)
+
+    exp = model.experiment(replications=1, duration=10.0, warmup=0.0,
+                           seed=29)
+    assert exp.run() == 0
+    assert exp["first_status"][0] == sim.SUCCESS
+    assert exp["first_obj"][0] == 8.0
+    assert exp["take_obj"][0] == 7.0
+    assert exp["timeout_status"][0] == sim.TIMEOUT
+    assert exp["timeout_obj"][0] == 0.0
 
 
 def test_pqueue_space_reprioritize_and_mean_length():
