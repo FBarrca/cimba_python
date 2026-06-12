@@ -38,6 +38,21 @@ double cpy_random_normal(const double mu, const double sigma)
     return cmb_random_normal(mu, sigma);
 }
 
+double cpy_random_rayleigh(const double s)
+{
+    return cmb_random_rayleigh(s);
+}
+
+double cpy_random_PERT(const double min, const double mode, const double max)
+{
+    return cmb_random_PERT(min, mode, max);
+}
+
+uint64_t cpy_random_bernoulli(const double p)
+{
+    return cmb_random_bernoulli(p);
+}
+
 uint64_t cpy_wtdsummary_sizeof(void)
 {
     return sizeof(struct cmb_wtdsummary);
@@ -115,6 +130,11 @@ int64_t cpy_objectqueue_get(void *oqp, intptr_t *objloc)
 uint64_t cpy_resource_in_use(const void *rp)
 {
     return cmb_resource_in_use(rp);
+}
+
+uint64_t cpy_resourcepool_available(const void *rpp)
+{
+    return cmb_resourcepool_available((void *)rpp);
 }
 
 uint64_t cpy_resourcepool_in_use(const void *rpp)

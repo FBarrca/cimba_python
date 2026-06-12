@@ -34,17 +34,23 @@ N_MACHINES = 8
 
 # --- 1. Machine repair shop ---------------------------------------------------
 
-shop = sim.Model("repairshop",
-                 params=["mtbf", "repair_time"],
-                 outputs=["avg_broken", "repair_util",
-                          "mean_downtime", "failures"],
-                 queues=["broken"],          # counter of broken machines
-                 resources=["repairman"],
-                 datasets=["downtime"])
+class RepairShop(sim.Model):
+    mtbf: sim.Param
+    repair_time: sim.Param
+    avg_broken: sim.Output
+    repair_util: sim.Output
+    mean_downtime: sim.Output
+    failures: sim.Output
+    broken: sim.Queue           # counter of broken machines
+    repairman: sim.Resource
+    downtime: sim.Dataset
+
+
+shop = RepairShop()
 
 
 @shop.process(copies=N_MACHINES)
-def machine(env, idx):
+def machine(env: RepairShop, idx: int):
     # idx identifies the machine; here all machines are identical
     while True:
         sim.hold(sim.exponential(env.mtbf))
@@ -58,7 +64,7 @@ def machine(env, idx):
 
 
 @shop.collect
-def shop_stats(env):
+def shop_stats(env: RepairShop):
     env.avg_broken = sim.mean_level(env.broken)
     env.repair_util = sim.mean_in_use(env.repairman)
     env.mean_downtime = sim.dataset_mean(env.downtime)
@@ -80,15 +86,19 @@ def repairshop_theory(n, mtbf, repair_time):
 
 # --- 2. M/M/1 waiting times through a store ----------------------------------
 
-mm1w = sim.Model("mm1_waits",
-                 params=["utilization"],
-                 outputs=["avg_wait", "avg_jobs_waiting"],
-                 stores=["jobs"],
-                 datasets=["waits"])
+class MM1Waits(sim.Model):
+    utilization: sim.Param
+    avg_wait: sim.Output
+    avg_jobs_waiting: sim.Output
+    jobs: sim.Store             # carries arrival times as bit-cast doubles
+    waits: sim.Dataset
+
+
+mm1w = MM1Waits()
 
 
 @mm1w.process
-def mm1_arrivals(env):
+def mm1_arrivals(env: MM1Waits):
     mean_interarr = 1.0 / env.utilization
     while True:
         sim.hold(sim.exponential(mean_interarr))
@@ -96,7 +106,7 @@ def mm1_arrivals(env):
 
 
 @mm1w.process
-def mm1_server(env):
+def mm1_server(env: MM1Waits):
     while True:
         job = sim.store_take(env.jobs)
         sim.tally(env.waits, sim.now() - sim.i2f(job))
@@ -104,27 +114,31 @@ def mm1_server(env):
 
 
 @mm1w.collect
-def mm1w_stats(env):
+def mm1w_stats(env: MM1Waits):
     env.avg_wait = sim.dataset_mean(env.waits)
     env.avg_jobs_waiting = sim.store_mean_length(env.jobs)
 
 
 # --- 3. Counting gate with a condition variable --------------------------------
 
-gate = sim.Model("gate",
-                 params=["target"],
-                 outputs=["t_done"],
-                 conditions=["enough"],
-                 state=["count"])
+class Gate(sim.Model):
+    target: sim.Param
+    t_done: sim.Output
+    enough: sim.Condition
+    count: sim.State
+    reached: sim.Predicate      # bound by the @gate.predicate below
+
+
+gate = Gate()
 
 
 @gate.predicate
-def reached(env):
+def reached(env: Gate) -> bool:
     return env.count >= env.target
 
 
 @gate.process
-def producer(env):
+def producer(env: Gate):
     while True:
         sim.hold(sim.exponential(1.0))
         env.count = env.count + 1
@@ -132,8 +146,8 @@ def producer(env):
 
 
 @gate.process
-def waiter(env):
-    sim.wait_for(env.enough, env._pred_reached, env)
+def waiter(env: Gate):
+    sim.wait_for(env.enough, env.reached, env)
     env.t_done = sim.now()
     while True:                 # idle until the trial ends
         sim.hold(1.0e12)

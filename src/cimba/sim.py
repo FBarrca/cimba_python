@@ -8,43 +8,49 @@ of the call stack. Each process is compiled with Numba into machine code,
 so models run at native speed on all cores; process bodies must stay in
 nopython-compilable Python (numbers, loops, and sim.* calls).
 
+A model is a Model subclass whose annotated fields declare the trial
+record (the `env` seen by process bodies); the subclass doubles as the
+static type of `env`, so fields are checked and completed:
+
+    class MG1(sim.Model):
+        utilization: sim.Param          # swept input
+        avg_queue_length: sim.Output    # result
+        queue: sim.Queue                # cmb_buffer handle
+
+    mg1 = MG1()
+
+    @mg1.process
+    def arrivals(env: MG1):
+        while True:
+            sim.hold(sim.exponential(1.0 / env.utilization))
+            sim.put(env.queue, 1)
+
 Concept translation (cimba -> sim API):
 
     cmb_process       @model.process (copies=, priority=), sim.hold(),
                       sim.current(), sim.interrupt(), sim.stop(),
                       sim.wait_process(), sim.resume()
-    cmb_buffer        Model(queues=[...]), sim.put()/sim.get()/sim.level()
-    cmb_resource      Model(resources=[...]), sim.acquire()/sim.release()/
+    cmb_buffer        sim.Queue, sim.put()/sim.get()/sim.level()
+    cmb_resource      sim.Resource, sim.acquire()/sim.release()/
                       sim.preempt()
-    cmb_resourcepool  Model(pools={name: capacity}), sim.pool_acquire()/
-                      sim.pool_release()/sim.pool_preempt()
-    cmb_objectqueue   Model(stores={name: capacity}), sim.store_put()/
-                      sim.store_take() (objects are opaque int64 values;
-                      sim.f2i()/sim.i2f() bit-cast timestamps in and out)
-    cmb_condition     Model(conditions=[...]), @model.predicate,
+    cmb_resourcepool  sim.Pool (= n or sim.capacity(param)),
+                      sim.pool_acquire()/sim.pool_release()/
+                      sim.pool_preempt()
+    cmb_objectqueue   sim.Store, sim.store_put()/sim.store_take()
+                      (objects are opaque int64 values; sim.f2i()/
+                      sim.i2f() bit-cast timestamps in and out)
+    cmb_condition     sim.Condition + sim.Predicate + @model.predicate,
                       sim.wait_for()/sim.signal()
-    cmb_dataset       Model(datasets=[...]), sim.tally(),
-                      sim.dataset_mean()/sim.dataset_count()
+    cmb_dataset       sim.Dataset, sim.tally(), sim.dataset_mean()/
+                      sim.dataset_count()
     statistics        recorded automatically over the measurement window:
                       sim.mean_level(), sim.mean_in_use(),
                       sim.pool_mean_in_use(), sim.store_mean_length()
 
-A minimal model:
-
-    mg1 = sim.Model("mg1", params=["utilization"], queues=["queue"],
-                    outputs=["avg_queue_length"])
-
-    @mg1.process
-    def arrivals(env):
-        while True:
-            sim.hold(sim.exponential(1.0 / env.utilization))
-            sim.put(env.queue, 1)
-
-The `env` argument is the trial record: params, outputs, entity handles,
-and declared state fields as attributes. Multi-copy processes may take a
-second argument to learn their index: `def machine(env, idx)`. The trial
-function, recording lifecycle, and all create/start/stop/destroy plumbing
-are generated and compiled by Model.
+Mutable per-trial counters are declared with sim.State. Multi-copy
+processes may take a second argument to learn their index:
+`def machine(env, idx)`. The trial function, recording lifecycle, and all
+create/start/stop/destroy plumbing are generated and compiled by Model.
 
 Module layout: the verbs below alias the raw symbol bindings in
 ``_bindings``; the cast helpers live in ``_intrinsics``; Model/Experiment
@@ -57,19 +63,24 @@ from numba import njit
 
 from . import _bindings as _b
 from ._intrinsics import record_addr as _record_addr
-from ._model import Env, Experiment, Handle, Model
+from ._model import (Condition, Dataset, Env, Experiment, FloatState,
+                     Handle, Model, Output, Param, Pool, Predicate, Queue,
+                     Resource, State, Store, capacity)
 
 __all__ = [
     "Model", "Experiment", "Env", "Handle",
+    "Param", "Output", "State", "FloatState", "Queue", "Resource", "Pool",
+    "Store", "Dataset", "Condition", "Predicate", "capacity",
     "hold", "now", "current", "interrupt", "stop", "wait_process", "resume",
     "put", "get", "level", "mean_level",
     "acquire", "release", "preempt", "in_use", "mean_in_use",
-    "pool_acquire", "pool_release", "pool_preempt", "pool_in_use",
-    "pool_mean_in_use",
+    "pool_acquire", "pool_release", "pool_preempt", "pool_available",
+    "pool_in_use", "pool_mean_in_use",
     "store_put", "store_take", "store_length", "store_mean_length",
     "tally", "dataset_mean", "dataset_count",
     "wait_for", "signal",
     "exponential", "gamma", "uniform", "normal", "random01",
+    "rayleigh", "pert", "bernoulli",
     "f2i", "i2f",
 ]
 
@@ -160,6 +171,10 @@ if TYPE_CHECKING:
         """Acquire `amount` units, preempting lower-priority holders."""
         ...
 
+    def pool_available(pool: Handle) -> int:
+        """Number of pool units currently free."""
+        ...
+
     def pool_in_use(pool: Handle) -> int:
         """Number of pool units currently held."""
         ...
@@ -219,6 +234,18 @@ if TYPE_CHECKING:
         """Uniform draw from [0, 1)."""
         ...
 
+    def rayleigh(s: float) -> float:
+        """Rayleigh-distributed draw with scale parameter `s`."""
+        ...
+
+    def pert(low: float, mode: float, high: float) -> float:
+        """PERT-distributed draw (scaled beta) over [low, high]."""
+        ...
+
+    def bernoulli(p: float) -> int:
+        """1 with probability `p`, else 0."""
+        ...
+
     # --- Conditions (cmb_condition) ---------------------------------------------
     def signal(condition: Handle) -> int:
         """Wake the condition's waiters to re-evaluate their predicates."""
@@ -267,6 +294,7 @@ else:
     pool_acquire = _b.resourcepool_acquire
     pool_release = _b.resourcepool_release
     pool_preempt = _b.resourcepool_preempt
+    pool_available = _b.resourcepool_available
     pool_in_use = _b.resourcepool_in_use
     pool_mean_in_use = _b.resourcepool_mean_in_use
 
@@ -287,6 +315,9 @@ else:
     uniform = _b.random_uniform
     normal = _b.random_normal
     random01 = _b.random01
+    rayleigh = _b.random_rayleigh
+    pert = _b.random_pert
+    bernoulli = _b.random_bernoulli
 
     # Conditions (cmb_condition)
     signal = _b.condition_signal

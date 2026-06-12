@@ -16,7 +16,8 @@ functions, then compiles everything on first ``experiment()``:
 
 import keyword
 from collections.abc import Callable, Iterable, Mapping
-from typing import Any, TypedDict, TypeVar, overload
+from typing import (TYPE_CHECKING, Any, TypedDict, TypeVar, get_type_hints,
+                    overload)
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -33,7 +34,8 @@ Handle = int
 
 #: The per-trial record passed to process bodies: a numpy structured
 #: scalar whose fields are accessed as attributes inside nopython code.
-#: Opaque to static typing.
+#: Annotate env with your Model subclass to get typed fields; Env is the
+#: untyped fallback.
 Env = Any
 
 _F = TypeVar("_F", bound=Callable[..., Any])
@@ -41,6 +43,97 @@ _F = TypeVar("_F", bound=Callable[..., Any])
 #: A `pools`/`stores` declaration: list of names (unbounded capacity) or
 #: name -> capacity mapping (an int, a param name, or None for unbounded).
 _Capacities = Mapping[str, int | str | None] | Iterable[str] | None
+
+# --- Env field declarations ---------------------------------------------------
+# A model is declared as a Model subclass whose annotated fields describe
+# the trial record:
+#
+#     class RepairShop(sim.Model):
+#         mtbf: sim.Param
+#         avg_broken: sim.Output
+#         broken: sim.Queue
+#         repairman: sim.Resource
+#
+# The subclass doubles as the static type of `env` in process bodies, so
+# the checker knows each field. For the checker the markers ARE the value
+# types the fields carry (Param -> float, Queue -> Handle, ...); at
+# runtime they are distinct sentinel classes that Model.__init__ collects
+# from the annotations.
+
+if TYPE_CHECKING:
+    Param = float        #: swept input, set by experiment()
+    Output = float       #: result, written by the model
+    State = int          #: mutable per-trial counter
+    FloatState = float   #: mutable per-trial real-valued state
+    Queue = Handle       #: cmb_buffer of counted amounts
+    Resource = Handle    #: cmb_resource, single holder
+    Pool = Handle        #: cmb_resourcepool; default declares capacity
+    Store = Handle       #: cmb_objectqueue; default declares capacity
+    Dataset = Handle     #: cmb_dataset tally statistics
+    Condition = Handle   #: cmb_condition variable
+    Predicate = int      #: address of the matching @model.predicate
+
+    class _Capacity:
+        cap: int | str
+        def __init__(self, cap: int | str) -> None: ...
+
+    def capacity(cap: int | str) -> Any: ...
+
+    _DECL_KINDS: dict[Any, str] = {}
+else:
+    class _Decl:
+        """Marker for env field declarations in Model subclasses."""
+
+    class Param(_Decl): ...
+    class Output(_Decl): ...
+    class State(_Decl): ...
+    class FloatState(_Decl): ...
+    class Queue(_Decl): ...
+    class Resource(_Decl): ...
+    class Pool(_Decl): ...
+    class Store(_Decl): ...
+    class Dataset(_Decl): ...
+    class Condition(_Decl): ...
+    class Predicate(_Decl): ...
+
+    class _Capacity:
+        def __init__(self, cap):
+            self.cap = cap
+
+    def capacity(cap):
+        """Declare a Pool/Store capacity: an int or the name of a param."""
+        return _Capacity(cap)
+
+    _DECL_KINDS = {Param: "param", Output: "output", State: "state",
+                   FloatState: "fstate",
+                   Queue: "queue", Resource: "resource", Pool: "pool",
+                   Store: "store", Dataset: "dataset",
+                   Condition: "condition", Predicate: "predicate"}
+
+
+def _class_declarations(cls: type) -> dict[str, Any]:
+    """Collect env field declarations from a Model subclass's annotations,
+    in declaration order (base classes first)."""
+    decls: dict[str, Any] = {"param": [], "output": [], "state": [],
+                             "fstate": [], "queue": [], "resource": [],
+                             "dataset": [], "condition": [],
+                             "predicate": [], "pool": {}, "store": {}}
+    for fname, hint in get_type_hints(cls).items():
+        kind = _DECL_KINDS.get(hint)
+        if kind is None:
+            continue
+        default = getattr(cls, fname, None)
+        if kind in ("pool", "store"):
+            if isinstance(default, _Capacity):
+                default = default.cap
+            decls[kind][fname] = default
+        else:
+            if default is not None:
+                raise ValueError(
+                    f"field '{fname}': only Pool/Store declarations may "
+                    "carry a capacity default")
+            decls[kind].append(fname)
+    return decls
 
 _STANDARD_FIELDS = [
     ("start_time", "<f8"),
@@ -88,14 +181,24 @@ def _as_capacity_dict(value: _Capacities) -> dict[str, int | str | None]:
 
 
 class Model:
-    """A simulation model translating cimba's concepts: declared entities
-    (queues, resources, pools, stores, datasets, conditions), parameters,
-    outputs, and state fields, plus process functions registered with
-    @model.process. Compilation happens once, on first experiment()."""
+    """A simulation model. Subclass it and declare the env fields as
+    annotations (Param, Output, Queue, Resource, Pool, Store, Dataset,
+    Condition, State, Predicate) -- the subclass then types `env` in
+    process bodies. Entity names may also be passed as keyword lists for
+    quick untyped models. Process functions are registered with
+    @model.process; compilation happens once, on first experiment()."""
+
+    # Standard trial-record fields, readable as env attributes in process
+    # bodies (plain annotations, not declaration markers).
+    start_time: float
+    warmup_s: float
+    duration_s: float
+    cooldown_s: float
+    seed: int
 
     _source: str
 
-    def __init__(self, name: str, *,
+    def __init__(self, name: str | None = None, *,
                  params: Iterable[str] = (),
                  outputs: Iterable[str] = (),
                  queues: Iterable[str] = (),
@@ -105,16 +208,19 @@ class Model:
                  datasets: Iterable[str] = (),
                  conditions: Iterable[str] = (),
                  state: Iterable[str] = ()):
-        self.name = name
-        self.params = list(params)
-        self.outputs = list(outputs)
-        self.queues = list(queues)
-        self.resources = list(resources)
-        self.pools = _as_capacity_dict(pools)
-        self.stores = _as_capacity_dict(stores)
-        self.datasets = list(datasets)
-        self.conditions = list(conditions)
-        self.state = list(state)
+        decls = _class_declarations(type(self))
+        self.name = name if name is not None else type(self).__name__
+        self.params = decls["param"] + list(params)
+        self.outputs = decls["output"] + list(outputs)
+        self.queues = decls["queue"] + list(queues)
+        self.resources = decls["resource"] + list(resources)
+        self.pools = decls["pool"] | _as_capacity_dict(pools)
+        self.stores = decls["store"] | _as_capacity_dict(stores)
+        self.datasets = decls["dataset"] + list(datasets)
+        self.conditions = decls["condition"] + list(conditions)
+        self.state = decls["state"] + list(state)
+        self.float_state: list[str] = decls["fstate"]
+        self._predicate_fields: list[str] = decls["predicate"]
 
         seen: set[str] = set()
         for kind, names in (("param", self.params),
@@ -125,7 +231,9 @@ class Model:
                             ("store", self.stores),
                             ("dataset", self.datasets),
                             ("condition", self.conditions),
-                            ("state", self.state)):
+                            ("state", self.state),
+                            ("fstate", self.float_state),
+                            ("predicate", self._predicate_fields)):
             for n in names:
                 _check_name(n, kind)
                 if n in seen:
@@ -140,7 +248,8 @@ class Model:
         # (name, fn, copies, priority, indexed)
         self._processes: list[
             tuple[str, Callable[..., Any], int, int, bool]] = []
-        self._predicates: list[tuple[str, Callable[..., Any]]] = []
+        # (name, fn, env field holding the compiled address)
+        self._predicates: list[tuple[str, Callable[..., Any], str]] = []
         self._collect: Callable[..., Any] | None = None
         self._compiled: _Compiled | None = None
 
@@ -171,10 +280,21 @@ class Model:
 
     def predicate(self, fn: _F) -> _F:
         """Register a condition predicate `def fn(env) -> bool`. Its
-        compiled address is published as the env field `_pred_<name>`,
-        for use with sim.wait_for(env.<cond>, env._pred_<name>, env)."""
-        self._register_name(fn.__name__, "predicate")
-        self._predicates.append((fn.__name__, fn))
+        compiled address is published in the declared Predicate field of
+        the same name, for use with sim.wait_for(env.<cond>, env.<name>,
+        env). (Without a declared field, it is published as the hidden
+        field `_pred_<name>`.)"""
+        name = fn.__name__
+        if name in self._predicate_fields:
+            if self._compiled is not None:
+                raise RuntimeError("model is already compiled")
+            if any(f == name for _n, _fn, f in self._predicates):
+                raise ValueError(f"predicate '{name}' already registered")
+            field = name
+        else:
+            self._register_name(name, "predicate")
+            field = f"_pred_{name}"
+        self._predicates.append((name, fn, field))
         return fn
 
     def collect(self, fn: _F) -> _F:
@@ -214,7 +334,10 @@ class Model:
         fields += [(o, "<f8") for o in self.outputs]
         fields += [(h, "<i8") for h in self._entities]
         fields += [(s, "<i8") for s in self.state]
-        fields += [(f"_pred_{n}", "<i8") for n, _ in self._predicates]
+        fields += [(s, "<f8") for s in self.float_state]
+        fields += [(p, "<i8") for p in self._predicate_fields]
+        fields += [(f, "<i8") for _n, _fn, f in self._predicates
+                   if f.startswith("_pred_")]
         for pname, _fn, copies, _pri, indexed in self._processes:
             fields += [(f"_p_{pname}_{i}", "<i8") for i in range(copies)]
             if indexed:
@@ -262,7 +385,9 @@ class Model:
             inner = njit(fn)
             proc_cfuncs[pname] = (make_proc_indexed(inner) if indexed
                                   else make_proc(inner))
-        pred_cfuncs = {n: make_pred(njit(fn)) for n, fn in self._predicates}
+        # Predicates keyed by the env field that publishes their address
+        pred_cfuncs = {field: make_pred(njit(fn))
+                       for _n, fn, field in self._predicates}
         collect_inner = njit(self._collect) if self._collect else None
         return proc_cfuncs, pred_cfuncs, collect_inner
 
@@ -391,6 +516,11 @@ class Model:
             return self._compiled
         if not self._processes:
             raise ValueError("model has no processes")
+        bound = {f for _n, _fn, f in self._predicates}
+        unbound = [f for f in self._predicate_fields if f not in bound]
+        if unbound:
+            raise ValueError(f"Predicate field(s) {unbound} declared but "
+                             "no @predicate of that name registered")
 
         dtype = self.dtype
         rec = from_dtype(dtype)
@@ -461,8 +591,8 @@ class Model:
             trials[p] = np.repeat(m.ravel(), replications)
         for o in self.outputs:
             trials[o] = np.nan
-        for pname, pred in compiled["preds"].items():
-            trials[f"_pred_{pname}"] = pred.address
+        for field, pred in compiled["preds"].items():
+            trials[field] = pred.address
 
         rng = np.random.default_rng(
             seed if seed is not None else int(lib.cmb_random_hwseed())

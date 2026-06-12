@@ -18,14 +18,18 @@ import cimba.sim as sim
 
 # --- M/G/1: arrivals -> queue -> single gamma server -------------------------
 
-mg1 = sim.Model("mg1",
-                params=["utilization", "service_cv"],
-                outputs=["avg_queue_length"],
-                queues=["queue"])
+class MG1(sim.Model):
+    utilization: sim.Param
+    service_cv: sim.Param
+    avg_queue_length: sim.Output
+    queue: sim.Queue
+
+
+mg1 = MG1()
 
 
 @mg1.process
-def arrivals(env):
+def arrivals(env: MG1):
     mean_interarr = 1.0 / env.utilization
     while True:
         sim.hold(sim.exponential(mean_interarr))
@@ -33,7 +37,7 @@ def arrivals(env):
 
 
 @mg1.process
-def service(env):
+def service(env: MG1):
     shape = 1.0 / (env.service_cv * env.service_cv)
     scale = env.service_cv * env.service_cv
     while True:
@@ -42,20 +46,23 @@ def service(env):
 
 
 @mg1.collect
-def mg1_stats(env):
+def mg1_stats(env: MG1):
     env.avg_queue_length = sim.mean_level(env.queue)
 
 
 # --- M/M/2: two identical servers pulling from one queue ---------------------
 
-mm2 = sim.Model("mm2",
-                params=["utilization"],   # per-server utilization
-                outputs=["avg_queue_length"],
-                queues=["queue"])
+class MM2(sim.Model):
+    utilization: sim.Param      # per-server utilization
+    avg_queue_length: sim.Output
+    queue: sim.Queue
+
+
+mm2 = MM2()
 
 
 @mm2.process
-def mm2_arrivals(env):
+def mm2_arrivals(env: MM2):
     mean_interarr = 1.0 / (2.0 * env.utilization)
     while True:
         sim.hold(sim.exponential(mean_interarr))
@@ -63,14 +70,14 @@ def mm2_arrivals(env):
 
 
 @mm2.process(copies=2)
-def mm2_server(env):
+def mm2_server(env: MM2):
     while True:
         sim.get(env.queue, 1)
         sim.hold(sim.exponential(1.0))
 
 
 @mm2.collect
-def mm2_stats(env):
+def mm2_stats(env: MM2):
     env.avg_queue_length = sim.mean_level(env.queue)
 
 

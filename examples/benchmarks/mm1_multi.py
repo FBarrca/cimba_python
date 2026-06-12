@@ -19,22 +19,27 @@ SERVICE_RATE = 1.0
 EXPECTED_MEAN_SYSTEM_TIME = 1.0 / (SERVICE_RATE - ARRIVAL_RATE)
 NUM_TRIALS = 100
 
-mm1 = sim.Model("mm1_bench_multi",
-                params=["arr_mean", "srv_mean"],
-                outputs=["avg_wait", "sum_wait"],
-                stores=["queue"],
-                state=["obj_cnt"])
+class MM1Bench(sim.Model):
+    arr_mean: sim.Param
+    srv_mean: sim.Param
+    avg_wait: sim.Output
+    sum_wait: sim.Output
+    queue: sim.Store
+    obj_cnt: sim.State
+
+
+mm1 = MM1Bench("mm1_bench_multi")
 
 
 @mm1.process
-def arrival(env):
+def arrival(env: MM1Bench):
     for _ in range(NUM_OBJECTS):
         sim.hold(sim.exponential(env.arr_mean))
         sim.store_put(env.queue, sim.f2i(sim.now()))
 
 
 @mm1.process
-def service(env):
+def service(env: MM1Bench):
     env.sum_wait = 0.0
     while True:
         job = sim.store_take(env.queue)
@@ -44,7 +49,7 @@ def service(env):
 
 
 @mm1.collect
-def stats(env):
+def stats(env: MM1Bench):
     env.avg_wait = env.sum_wait / env.obj_cnt
 
 

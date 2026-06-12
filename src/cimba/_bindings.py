@@ -38,6 +38,9 @@ random_gamma = _extern("cpy_random_gamma", _f64(_f64, _f64))
 random01 = _extern("cpy_random01", _f64())
 random_uniform = _extern("cpy_random_uniform", _f64(_f64, _f64))
 random_normal = _extern("cpy_random_normal", _f64(_f64, _f64))
+random_rayleigh = _extern("cpy_random_rayleigh", _f64(_f64))
+random_pert = _extern("cpy_random_PERT", _f64(_f64, _f64, _f64))
+random_bernoulli = _extern("cpy_random_bernoulli", _u64(_f64))
 
 # --- Processes ---------------------------------------------------------------
 process_create = _extern("cmb_process_create", _intp())
@@ -89,6 +92,7 @@ resourcepool_recording_start = _extern(
     "cmb_resourcepool_start_recording", _void(_intp))
 resourcepool_recording_stop = _extern(
     "cmb_resourcepool_stop_recording", _void(_intp))
+resourcepool_available = _extern("cpy_resourcepool_available", _u64(_intp))
 resourcepool_in_use = _extern("cpy_resourcepool_in_use", _u64(_intp))
 resourcepool_mean_in_use = _extern("cpy_resourcepool_mean_in_use", _f64(_intp))
 
