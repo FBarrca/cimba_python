@@ -942,3 +942,85 @@ def test_kwargs_model_still_works():
     assert model.name == "legacy"
     assert model.params == ["rho"]
     assert model.queues == {"q": None}
+
+
+def test_native_timeseries_and_text_reports(tmp_path):
+    report = tmp_path / "native_report.txt"
+    report_handle = sim.log_text(str(report))
+
+    class Reports(sim.Model):
+        ok: sim.Output
+        n: sim.Output
+        mean: sim.Output
+        q: sim.Queue = sim.capacity(5)
+        d: sim.Dataset
+
+    model = Reports()
+
+    @model.process
+    def driver(env: Reports):
+        for i in range(30):
+            sim.tally(env.d, float(i % 7))
+            sim.put(env.q, 1)
+            sim.hold(0.5)
+            sim.get(env.q, 1)
+            sim.hold(0.5)
+        sim.suspend()
+
+    @model.collect
+    def collect(env: Reports):
+        ts = sim.queue_history(env.q)
+        env.n = float(sim.timeseries_count(ts))
+        env.mean = sim.timeseries_mean(ts)
+        ok = sim.queue_report_file(env.q, report_handle, 0)
+        ok += sim.timeseries_histogram_file(ts, report_handle, 1, 5, 0.0, 5.0)
+        ok += sim.timeseries_pacf_correlogram_file(ts, report_handle, 1, 3)
+        ok += sim.dataset_histogram_file(env.d, report_handle, 1, 5, 0.0, 0.0)
+        ok += sim.dataset_pacf_correlogram_file(env.d, report_handle, 1, 3)
+        env.ok = float(ok)
+
+    exp = model.experiment(replications=1, duration=40.0, warmup=0.0,
+                           seed=17)
+    assert exp.run() == 0
+    assert exp["ok"][0] == 5.0
+    assert exp["n"][0] > 10.0
+    assert 0.0 < exp["mean"][0] < 1.0
+
+    text = report.read_text()
+    assert "Buffer levels for q" in text
+    assert "-1.0" in text and "1.0" in text
+    assert "#" in text
+
+
+def test_native_reports_print_to_stdout():
+    class ConsoleReports(sim.Model):
+        ok: sim.Output
+        q: sim.Queue = sim.capacity(3)
+        d: sim.Dataset
+
+    model = ConsoleReports()
+
+    @model.process
+    def driver(env: ConsoleReports):
+        for i in range(12):
+            sim.tally(env.d, float(i % 3))
+            sim.put(env.q, 1)
+            sim.hold(0.25)
+            sim.get(env.q, 1)
+            sim.hold(0.25)
+        sim.suspend()
+
+    @model.collect
+    def collect(env: ConsoleReports):
+        ts = sim.queue_history(env.q)
+        ok = sim.queue_report(env.q)
+        ok += sim.timeseries_histogram(ts, 3, 0.0, 3.0)
+        ok += sim.dataset_histogram(env.d, 3, 0.0, 0.0)
+        env.ok = float(ok)
+
+    exp = model.experiment(replications=1, duration=10.0, warmup=0.0,
+                           seed=23)
+    text = capture_native_stdout(exp.run)
+    assert exp["ok"][0] == 3.0
+    assert "Buffer levels for q" in text
+    assert "#" in text

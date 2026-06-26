@@ -103,15 +103,32 @@ __all__ = [
     "event_priority", "current_event", "event_count", "clear_events",
     "flip", "held", "pool_held",
     "pq_put", "pq_get", "pq_take", "pq_length", "pq_space", "pq_position",
-    "pq_reprioritize", "pq_cancel", "pq_mean_length",
-    "put", "get", "level", "space", "mean_level",
+    "pq_reprioritize", "pq_cancel", "pq_mean_length", "pq_history",
+    "pq_report", "pq_report_file",
+    "put", "get", "level", "space", "mean_level", "queue_history",
+    "queue_report", "queue_report_file",
     "acquire", "release", "preempt", "available", "in_use", "mean_in_use",
+    "resource_history", "resource_report", "resource_report_file",
     "pool_acquire", "pool_release", "pool_preempt", "pool_available",
-    "pool_in_use", "pool_mean_in_use",
+    "pool_in_use", "pool_mean_in_use", "pool_history", "pool_report",
+    "pool_report_file",
     "store_put", "store_get", "store_take", "store_length", "store_space",
-    "store_position", "store_mean_length",
+    "store_position", "store_mean_length", "store_history",
+    "store_report", "store_report_file",
     "tally", "dataset_mean", "dataset_count", "dataset_min", "dataset_max",
-    "dataset_std",
+    "dataset_std", "dataset_print", "dataset_print_file",
+    "dataset_fivenum", "dataset_fivenum_file",
+    "dataset_histogram", "dataset_histogram_file",
+    "dataset_correlogram", "dataset_correlogram_file",
+    "dataset_pacf_correlogram", "dataset_pacf_correlogram_file",
+    "timeseries_count", "timeseries_min", "timeseries_max",
+    "timeseries_mean", "timeseries_std", "timeseries_median",
+    "timeseries_print", "timeseries_print_file",
+    "timeseries_fivenum", "timeseries_fivenum_file",
+    "timeseries_histogram", "timeseries_histogram_file",
+    "timeseries_correlogram", "timeseries_correlogram_file",
+    "timeseries_pacf_correlogram",
+    "timeseries_pacf_correlogram_file",
     "wait_for", "signal",
     "exponential", "gamma", "uniform", "normal", "random01",
     "rayleigh", "pert", "bernoulli", "triangular", "weibull", "lognormal",
@@ -433,6 +450,19 @@ if TYPE_CHECKING:
         """Time-weighted mean queue length over the recording window."""
         ...
 
+    def pq_history(pqueue: Handle) -> Handle:
+        """Native timeseries history for a priority queue."""
+        ...
+
+    def pq_report_file(pqueue: Handle, path: Handle,
+                       append: int = 1) -> int:
+        """Write the native priority-queue text report to `path`."""
+        ...
+
+    def pq_report(pqueue: Handle) -> int:
+        """Print the native priority-queue text report to stdout."""
+        ...
+
     # --- Datasets (cmb_dataset): tally statistics ------------------------------
     def tally(dataset: Handle, value: float) -> int:
         """Record an observation; returns the observation count."""
@@ -456,6 +486,181 @@ if TYPE_CHECKING:
 
     def dataset_std(dataset: Handle) -> float:
         """Sample standard deviation of the observations (0 if < 2)."""
+        ...
+
+    def dataset_print_file(dataset: Handle, path: Handle,
+                           append: int = 1) -> int:
+        """Write raw dataset values to `path`."""
+        ...
+
+    def dataset_print(dataset: Handle) -> int:
+        """Print raw dataset values to stdout."""
+        ...
+
+    def dataset_fivenum_file(dataset: Handle, path: Handle,
+                             append: int = 1) -> int:
+        """Write the native dataset five-number summary to `path`."""
+        ...
+
+    def dataset_fivenum(dataset: Handle) -> int:
+        """Print the native dataset five-number summary to stdout."""
+        ...
+
+    def dataset_histogram_file(dataset: Handle, path: Handle,
+                               append: int = 1, bins: int = 20,
+                               low: float = 0.0, high: float = 0.0) -> int:
+        """Write the native dataset text histogram to `path`."""
+        ...
+
+    def dataset_histogram(dataset: Handle, bins: int = 20,
+                          low: float = 0.0, high: float = 0.0) -> int:
+        """Print the native dataset text histogram to stdout."""
+        ...
+
+    def dataset_correlogram_file(dataset: Handle, path: Handle,
+                                 append: int = 1, lags: int = 20) -> int:
+        """Write the native dataset ACF correlogram to `path`."""
+        ...
+
+    def dataset_correlogram(dataset: Handle, lags: int = 20) -> int:
+        """Print the native dataset ACF correlogram to stdout."""
+        ...
+
+    def dataset_pacf_correlogram_file(dataset: Handle, path: Handle,
+                                      append: int = 1,
+                                      lags: int = 20) -> int:
+        """Write the native dataset PACF correlogram to `path`."""
+        ...
+
+    def dataset_pacf_correlogram(dataset: Handle, lags: int = 20) -> int:
+        """Print the native dataset PACF correlogram to stdout."""
+        ...
+
+    # --- Timeseries histories ------------------------------------------------
+    def queue_history(queue: Handle) -> Handle:
+        """Native timeseries history for a queue."""
+        ...
+
+    def resource_history(resource: Handle) -> Handle:
+        """Native timeseries history for a resource."""
+        ...
+
+    def pool_history(pool: Handle) -> Handle:
+        """Native timeseries history for a resource pool."""
+        ...
+
+    def store_history(store: Handle) -> Handle:
+        """Native timeseries history for a store/object queue."""
+        ...
+
+    def timeseries_count(timeseries: Handle) -> int:
+        """Number of native timeseries samples."""
+        ...
+
+    def timeseries_min(timeseries: Handle) -> float:
+        """Minimum native timeseries sample value."""
+        ...
+
+    def timeseries_max(timeseries: Handle) -> float:
+        """Maximum native timeseries sample value."""
+        ...
+
+    def timeseries_mean(timeseries: Handle) -> float:
+        """Time-weighted native timeseries mean."""
+        ...
+
+    def timeseries_std(timeseries: Handle) -> float:
+        """Time-weighted native timeseries sample standard deviation."""
+        ...
+
+    def timeseries_median(timeseries: Handle) -> float:
+        """Time-weighted native timeseries median."""
+        ...
+
+    def timeseries_print_file(timeseries: Handle, path: Handle,
+                              append: int = 1) -> int:
+        """Write raw native timeseries rows to `path`."""
+        ...
+
+    def timeseries_print(timeseries: Handle) -> int:
+        """Print raw native timeseries rows to stdout."""
+        ...
+
+    def timeseries_fivenum_file(timeseries: Handle, path: Handle,
+                                append: int = 1) -> int:
+        """Write the native weighted five-number summary to `path`."""
+        ...
+
+    def timeseries_fivenum(timeseries: Handle) -> int:
+        """Print the native weighted five-number summary to stdout."""
+        ...
+
+    def timeseries_histogram_file(timeseries: Handle, path: Handle,
+                                  append: int = 1, bins: int = 20,
+                                  low: float = 0.0,
+                                  high: float = 0.0) -> int:
+        """Write the native weighted text histogram to `path`."""
+        ...
+
+    def timeseries_histogram(timeseries: Handle, bins: int = 20,
+                             low: float = 0.0, high: float = 0.0) -> int:
+        """Print the native weighted text histogram to stdout."""
+        ...
+
+    def timeseries_correlogram_file(timeseries: Handle, path: Handle,
+                                    append: int = 1, lags: int = 20) -> int:
+        """Write the native timeseries ACF correlogram to `path`."""
+        ...
+
+    def timeseries_correlogram(timeseries: Handle, lags: int = 20) -> int:
+        """Print the native timeseries ACF correlogram to stdout."""
+        ...
+
+    def timeseries_pacf_correlogram_file(timeseries: Handle, path: Handle,
+                                         append: int = 1,
+                                         lags: int = 20) -> int:
+        """Write the native timeseries PACF correlogram to `path`."""
+        ...
+
+    def timeseries_pacf_correlogram(timeseries: Handle,
+                                    lags: int = 20) -> int:
+        """Print the native timeseries PACF correlogram to stdout."""
+        ...
+
+    def queue_report_file(queue: Handle, path: Handle,
+                          append: int = 1) -> int:
+        """Write the native queue text report to `path`."""
+        ...
+
+    def queue_report(queue: Handle) -> int:
+        """Print the native queue text report to stdout."""
+        ...
+
+    def resource_report_file(resource: Handle, path: Handle,
+                             append: int = 1) -> int:
+        """Write the native resource text report to `path`."""
+        ...
+
+    def resource_report(resource: Handle) -> int:
+        """Print the native resource text report to stdout."""
+        ...
+
+    def pool_report_file(pool: Handle, path: Handle,
+                         append: int = 1) -> int:
+        """Write the native resource-pool text report to `path`."""
+        ...
+
+    def pool_report(pool: Handle) -> int:
+        """Print the native resource-pool text report to stdout."""
+        ...
+
+    def store_report_file(store: Handle, path: Handle,
+                          append: int = 1) -> int:
+        """Write the native store/object-queue text report to `path`."""
+        ...
+
+    def store_report(store: Handle) -> int:
+        """Print the native store/object-queue text report to stdout."""
         ...
 
     # --- Random draws -----------------------------------------------------------
@@ -715,6 +920,12 @@ else:
     level = _b.buffer_level
     space = _b.buffer_space
     mean_level = _b.buffer_mean_level
+    queue_history = _b.buffer_history
+    queue_report_file = _b.buffer_report_file
+
+    @njit
+    def queue_report(queue):
+        return queue_report_file(queue, 0, _np.uint64(1))
 
     # Resources (cmb_resource)
     acquire = _b.resource_acquire
@@ -724,6 +935,12 @@ else:
     in_use = _b.resource_in_use
     held = _b.resource_held
     mean_in_use = _b.resource_mean_in_use
+    resource_history = _b.resource_history
+    resource_report_file = _b.resource_report_file
+
+    @njit
+    def resource_report(resource):
+        return resource_report_file(resource, 0, _np.uint64(1))
 
     # Resource pools (cmb_resourcepool)
     pool_acquire = _b.resourcepool_acquire
@@ -733,6 +950,12 @@ else:
     pool_held = _b.resourcepool_held
     pool_in_use = _b.resourcepool_in_use
     pool_mean_in_use = _b.resourcepool_mean_in_use
+    pool_history = _b.resourcepool_history
+    pool_report_file = _b.resourcepool_report_file
+
+    @njit
+    def pool_report(pool):
+        return pool_report_file(pool, 0, _np.uint64(1))
 
     # Stores (cmb_objectqueue)
     store_put = _b.objectqueue_put
@@ -741,6 +964,12 @@ else:
     store_space = _b.objectqueue_space
     store_position = _b.objectqueue_position
     store_mean_length = _b.objectqueue_mean_length
+    store_history = _b.objectqueue_history
+    store_report_file = _b.objectqueue_report_file
+
+    @njit
+    def store_report(store):
+        return store_report_file(store, 0, _np.uint64(1))
 
     # Priority queues (cmb_priorityqueue)
     pq_put = _b.priorityqueue_put
@@ -751,6 +980,12 @@ else:
     pq_reprioritize = _b.priorityqueue_reprioritize
     pq_cancel = _b.priorityqueue_cancel
     pq_mean_length = _b.priorityqueue_mean_length
+    pq_history = _b.priorityqueue_history
+    pq_report_file = _b.priorityqueue_report_file
+
+    @njit
+    def pq_report(pqueue):
+        return pq_report_file(pqueue, 0, _np.uint64(1))
 
     # Datasets (cmb_dataset)
     tally = _b.dataset_add
@@ -759,6 +994,70 @@ else:
     dataset_min = _b.dataset_min
     dataset_max = _b.dataset_max
     dataset_std = _b.dataset_std
+    dataset_print_file = _b.dataset_print_file
+    dataset_fivenum_file = _b.dataset_fivenum_file
+    dataset_histogram_file = _b.dataset_histogram_file
+    dataset_correlogram_file = _b.dataset_correlogram_file
+    dataset_pacf_correlogram_file = _b.dataset_pacf_correlogram_file
+
+    @njit
+    def dataset_print(dataset):
+        return dataset_print_file(dataset, 0, _np.uint64(1))
+
+    @njit
+    def dataset_fivenum(dataset):
+        return dataset_fivenum_file(dataset, 0, _np.uint64(1))
+
+    @njit
+    def dataset_histogram(dataset, bins=20, low=0.0, high=0.0):
+        return dataset_histogram_file(dataset, 0, _np.uint64(1),
+                                      _np.uint64(bins), low, high)
+
+    @njit
+    def dataset_correlogram(dataset, lags=20):
+        return dataset_correlogram_file(dataset, 0, _np.uint64(1),
+                                        _np.uint64(lags))
+
+    @njit
+    def dataset_pacf_correlogram(dataset, lags=20):
+        return dataset_pacf_correlogram_file(dataset, 0, _np.uint64(1),
+                                             _np.uint64(lags))
+
+    # Timeseries histories
+    timeseries_count = _b.timeseries_count
+    timeseries_min = _b.timeseries_min
+    timeseries_max = _b.timeseries_max
+    timeseries_mean = _b.timeseries_mean
+    timeseries_std = _b.timeseries_std
+    timeseries_median = _b.timeseries_median
+    timeseries_print_file = _b.timeseries_print_file
+    timeseries_fivenum_file = _b.timeseries_fivenum_file
+    timeseries_histogram_file = _b.timeseries_histogram_file
+    timeseries_correlogram_file = _b.timeseries_correlogram_file
+    timeseries_pacf_correlogram_file = _b.timeseries_pacf_correlogram_file
+
+    @njit
+    def timeseries_print(timeseries):
+        return timeseries_print_file(timeseries, 0, _np.uint64(1))
+
+    @njit
+    def timeseries_fivenum(timeseries):
+        return timeseries_fivenum_file(timeseries, 0, _np.uint64(1))
+
+    @njit
+    def timeseries_histogram(timeseries, bins=20, low=0.0, high=0.0):
+        return timeseries_histogram_file(timeseries, 0, _np.uint64(1),
+                                         _np.uint64(bins), low, high)
+
+    @njit
+    def timeseries_correlogram(timeseries, lags=20):
+        return timeseries_correlogram_file(timeseries, 0, _np.uint64(1),
+                                           _np.uint64(lags))
+
+    @njit
+    def timeseries_pacf_correlogram(timeseries, lags=20):
+        return timeseries_pacf_correlogram_file(timeseries, 0, _np.uint64(1),
+                                                _np.uint64(lags))
 
     # Random draws
     exponential = _b.random_exponential

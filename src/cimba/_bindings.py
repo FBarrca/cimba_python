@@ -116,6 +116,9 @@ buffer_recording_stop = _extern("cmb_buffer_recording_stop", _void(_intp))
 buffer_put = _extern("cpy_buffer_put", _i64(_intp, _u64))
 buffer_get = _extern("cpy_buffer_get", _i64(_intp, _u64))
 buffer_mean_level = _extern("cpy_buffer_mean_level", _f64(_intp))
+buffer_history = _extern("cpy_buffer_history", _intp(_intp))
+buffer_report_file = _extern("cpy_buffer_report_file",
+                             _u64(_intp, _intp, _u64))
 buffer_level = _extern("cpy_buffer_level", _u64(_intp))
 buffer_space = _extern("cpy_buffer_space", _u64(_intp))
 
@@ -132,6 +135,9 @@ resource_available = _extern("cpy_resource_available", _u64(_intp))
 resource_in_use = _extern("cpy_resource_in_use", _u64(_intp))
 resource_held = _extern("cpy_resource_held_by_process", _u64(_intp, _intp))
 resource_mean_in_use = _extern("cpy_resource_mean_in_use", _f64(_intp))
+resource_history = _extern("cpy_resource_history", _intp(_intp))
+resource_report_file = _extern("cpy_resource_report_file",
+                               _u64(_intp, _intp, _u64))
 
 # --- Resource pools: capacity > 1 ----------------------------------------------
 resourcepool_create = _extern("cmb_resourcepool_create", _intp())
@@ -150,6 +156,9 @@ resourcepool_held = _extern("cmb_resourcepool_held_by_process",
                             _u64(_intp, _intp))
 resourcepool_in_use = _extern("cpy_resourcepool_in_use", _u64(_intp))
 resourcepool_mean_in_use = _extern("cpy_resourcepool_mean_in_use", _f64(_intp))
+resourcepool_history = _extern("cpy_resourcepool_history", _intp(_intp))
+resourcepool_report_file = _extern("cpy_resourcepool_report_file",
+                                   _u64(_intp, _intp, _u64))
 
 # --- Object queues: FIFO of opaque int64 objects --------------------------------
 objectqueue_create = _extern("cmb_objectqueue_create", _intp())
@@ -167,6 +176,9 @@ objectqueue_recording_start = _extern(
 objectqueue_recording_stop = _extern(
     "cmb_objectqueue_recording_stop", _void(_intp))
 objectqueue_mean_length = _extern("cpy_objectqueue_mean_length", _f64(_intp))
+objectqueue_history = _extern("cpy_objectqueue_history", _intp(_intp))
+objectqueue_report_file = _extern("cpy_objectqueue_report_file",
+                                  _u64(_intp, _intp, _u64))
 
 # --- Priority queues: entries ordered by priority, with cancellation -------------
 priorityqueue_create = _extern("cmb_priorityqueue_create", _intp())
@@ -189,6 +201,9 @@ priorityqueue_recording_stop = _extern(
     "cmb_priorityqueue_recording_stop", _void(_intp))
 priorityqueue_mean_length = _extern("cpy_priorityqueue_mean_length",
                                     _f64(_intp))
+priorityqueue_history = _extern("cpy_priorityqueue_history", _intp(_intp))
+priorityqueue_report_file = _extern("cpy_priorityqueue_report_file",
+                                    _u64(_intp, _intp, _u64))
 
 # --- Datasets: tally statistics --------------------------------------------------
 dataset_create = _extern("cmb_dataset_create", _intp())
@@ -201,6 +216,34 @@ dataset_count = _extern("cpy_dataset_count", _u64(_intp))
 dataset_min = _extern("cpy_dataset_min", _f64(_intp))
 dataset_max = _extern("cpy_dataset_max", _f64(_intp))
 dataset_std = _extern("cpy_dataset_stddev", _f64(_intp))
+dataset_print_file = _extern("cpy_dataset_print_file",
+                             _u64(_intp, _intp, _u64))
+dataset_fivenum_file = _extern("cpy_dataset_fivenum_file",
+                               _u64(_intp, _intp, _u64))
+dataset_histogram_file = _extern("cpy_dataset_histogram_file",
+                                 _u64(_intp, _intp, _u64, _u64, _f64, _f64))
+dataset_correlogram_file = _extern("cpy_dataset_correlogram_file",
+                                   _u64(_intp, _intp, _u64, _u64))
+dataset_pacf_correlogram_file = _extern(
+    "cpy_dataset_pacf_correlogram_file", _u64(_intp, _intp, _u64, _u64))
+
+# --- Timeseries histories ---------------------------------------------------------
+timeseries_count = _extern("cpy_timeseries_count", _u64(_intp))
+timeseries_min = _extern("cpy_timeseries_min", _f64(_intp))
+timeseries_max = _extern("cpy_timeseries_max", _f64(_intp))
+timeseries_mean = _extern("cpy_timeseries_mean", _f64(_intp))
+timeseries_std = _extern("cpy_timeseries_stddev", _f64(_intp))
+timeseries_median = _extern("cpy_timeseries_median", _f64(_intp))
+timeseries_print_file = _extern("cpy_timeseries_print_file",
+                                _u64(_intp, _intp, _u64))
+timeseries_fivenum_file = _extern("cpy_timeseries_fivenum_file",
+                                  _u64(_intp, _intp, _u64))
+timeseries_histogram_file = _extern(
+    "cpy_timeseries_histogram_file", _u64(_intp, _intp, _u64, _u64, _f64, _f64))
+timeseries_correlogram_file = _extern("cpy_timeseries_correlogram_file",
+                                      _u64(_intp, _intp, _u64, _u64))
+timeseries_pacf_correlogram_file = _extern(
+    "cpy_timeseries_pacf_correlogram_file", _u64(_intp, _intp, _u64, _u64))
 
 # --- Conditions -------------------------------------------------------------------
 condition_create = _extern("cmb_condition_create", _intp())

@@ -30,7 +30,10 @@ def service(env: MM1):
 
 @model.collect
 def collect_stats(env: MM1):
-    env.avg_queue_length = sim.mean_level(env.queue)
+    history = sim.queue_history(env.queue)
+    env.avg_queue_length = sim.timeseries_mean(history)
+    sim.queue_report(env.queue)
+    sim.timeseries_pacf_correlogram(history, lags=20)
 
 
 def main() -> None:

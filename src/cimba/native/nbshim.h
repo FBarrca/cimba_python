@@ -72,6 +72,70 @@ CIMBA_PY_EXPORT double cpy_resource_mean_in_use(void *rp);
 CIMBA_PY_EXPORT double cpy_resourcepool_mean_in_use(void *rpp);
 CIMBA_PY_EXPORT double cpy_objectqueue_mean_length(void *oqp);
 CIMBA_PY_EXPORT double cpy_priorityqueue_mean_length(void *pqp);
+CIMBA_PY_EXPORT void *cpy_buffer_history(void *bp);
+CIMBA_PY_EXPORT void *cpy_resource_history(void *rp);
+CIMBA_PY_EXPORT void *cpy_resourcepool_history(void *rpp);
+CIMBA_PY_EXPORT void *cpy_objectqueue_history(void *oqp);
+CIMBA_PY_EXPORT void *cpy_priorityqueue_history(void *pqp);
+CIMBA_PY_EXPORT uint64_t cpy_timeseries_count(const void *tsp);
+CIMBA_PY_EXPORT double cpy_timeseries_min(const void *tsp);
+CIMBA_PY_EXPORT double cpy_timeseries_max(const void *tsp);
+CIMBA_PY_EXPORT double cpy_timeseries_mean(const void *tsp);
+CIMBA_PY_EXPORT double cpy_timeseries_stddev(const void *tsp);
+CIMBA_PY_EXPORT double cpy_timeseries_median(const void *tsp);
+CIMBA_PY_EXPORT uint64_t cpy_dataset_print_file(const void *dsp,
+                                                intptr_t path,
+                                                uint64_t append);
+CIMBA_PY_EXPORT uint64_t cpy_dataset_fivenum_file(const void *dsp,
+                                                  intptr_t path,
+                                                  uint64_t append);
+CIMBA_PY_EXPORT uint64_t cpy_dataset_histogram_file(const void *dsp,
+                                                    intptr_t path,
+                                                    uint64_t append,
+                                                    uint64_t num_bins,
+                                                    double low_lim,
+                                                    double high_lim);
+CIMBA_PY_EXPORT uint64_t cpy_dataset_correlogram_file(const void *dsp,
+                                                      intptr_t path,
+                                                      uint64_t append,
+                                                      uint64_t n);
+CIMBA_PY_EXPORT uint64_t cpy_dataset_pacf_correlogram_file(const void *dsp,
+                                                           intptr_t path,
+                                                           uint64_t append,
+                                                           uint64_t n);
+CIMBA_PY_EXPORT uint64_t cpy_timeseries_print_file(const void *tsp,
+                                                   intptr_t path,
+                                                   uint64_t append);
+CIMBA_PY_EXPORT uint64_t cpy_timeseries_fivenum_file(const void *tsp,
+                                                     intptr_t path,
+                                                     uint64_t append);
+CIMBA_PY_EXPORT uint64_t cpy_timeseries_histogram_file(const void *tsp,
+                                                       intptr_t path,
+                                                       uint64_t append,
+                                                       uint64_t num_bins,
+                                                       double low_lim,
+                                                       double high_lim);
+CIMBA_PY_EXPORT uint64_t cpy_timeseries_correlogram_file(const void *tsp,
+                                                         intptr_t path,
+                                                         uint64_t append,
+                                                         uint64_t n);
+CIMBA_PY_EXPORT uint64_t cpy_timeseries_pacf_correlogram_file(const void *tsp,
+                                                              intptr_t path,
+                                                              uint64_t append,
+                                                              uint64_t n);
+CIMBA_PY_EXPORT uint64_t cpy_buffer_report_file(void *bp, intptr_t path,
+                                                uint64_t append);
+CIMBA_PY_EXPORT uint64_t cpy_resource_report_file(void *rp, intptr_t path,
+                                                  uint64_t append);
+CIMBA_PY_EXPORT uint64_t cpy_resourcepool_report_file(void *rpp,
+                                                      intptr_t path,
+                                                      uint64_t append);
+CIMBA_PY_EXPORT uint64_t cpy_objectqueue_report_file(void *oqp,
+                                                     intptr_t path,
+                                                     uint64_t append);
+CIMBA_PY_EXPORT uint64_t cpy_priorityqueue_report_file(void *pqp,
+                                                       intptr_t path,
+                                                       uint64_t append);
 CIMBA_PY_EXPORT int64_t cpy_objectqueue_put(void *oqp, intptr_t object);
 CIMBA_PY_EXPORT int64_t cpy_objectqueue_get(void *oqp, intptr_t *objloc);
 CIMBA_PY_EXPORT uint64_t cpy_resource_in_use(const void *rp);

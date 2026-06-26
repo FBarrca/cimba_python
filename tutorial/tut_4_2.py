@@ -33,9 +33,10 @@ Translation notes (C -> cimba.sim):
   harbormaster wake-up predicate and the ship rechecks its own docking
   test in a loop, catching the same race as the C code (another ship
   grabbing the tugs between wakeup and resumption).
-* Logging and histogram printing are not exposed; the report prints
-  dataset means and pool utilizations instead, over replicated trials
-  running in parallel (the C tutorial runs a single trial).
+* Text reports, histograms, and time-series histories are exposed through
+  sim.dataset_*(), sim.timeseries_*(), and sim.*_report() helpers. This
+  runnable script keeps the console report compact over replicated trials;
+  the docs tutorial shows the fuller single-trial report style.
 
 Usage: uv run python examples/demo_harbor.py
 """

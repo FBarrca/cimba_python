@@ -10,9 +10,7 @@ Top-level package
 Simulation API
 --------------
 
-Use :mod:`cimba.sim` for the SimPy-flavored modeling API. The module depends on
-Numba and the compiled native extension, so this reference lists the public
-surface without importing it during documentation builds.
+Use :mod:`cimba.sim` for modeling.
 
 Model declarations:
 
@@ -21,16 +19,14 @@ Model declarations:
 ``Dataset``, ``Condition``, ``Predicate``, ``Event``, ``Processes``,
 ``PQueues``, ``Spawnable``, ``Struct``, ``capacity()``, ``count()``.
 
-Per-process fields (``sim.Struct``): declare the fields as ``float``/``int``
-annotations on a ``sim.Struct`` subclass, and let the process function ask
-for its own view with a final annotated parameter --
-``def visitor(env, vip: Visitor)`` (with the copy index:
-``def visitor(env, idx, vip: Visitor)``). Each copy carries its own fields,
-zeroed at creation, and ``Visitor(handle)`` returns a read/write view of any
-such process's fields inside model code -- the Python counterpart of the C
-tutorial's ``struct visitor { struct cmb_process core; ... }`` pattern.
-``@model.process(struct=Visitor)`` attaches the fields without the view
-parameter.
+Per-process fields:
+
+Declare a ``sim.Struct`` subclass with ``float`` and ``int`` annotations. A
+process can receive its own field view as a final annotated parameter:
+``def visitor(env, view: Visitor)``. Multi-copy processes can also receive the
+copy index: ``def visitor(env, idx, view: Visitor)``. ``Visitor(handle)``
+returns a read/write view of another process's fields when model code already
+has that process handle.
 
 Process verbs:
 
@@ -39,22 +35,20 @@ Process verbs:
 ``status()``, ``set_priority()``, ``timer_set()``, ``timer_add()``,
 ``timer_cancel()``, ``timers_clear()``, ``spawn()``, ``despawn()``.
 
-Dynamic processes: a process named in a ``sim.Spawnable`` field is not
-started at setup; ``sim.spawn(env.<name>, env, priority=0)`` creates and
-starts a copy at runtime and returns its handle. The new process begins
-running once the caller blocks, so its ``sim.Struct`` fields (zeroed at
-creation) can be initialized through the handle first. Finished processes
-can be reclaimed early with ``sim.despawn(handle)`` to recycle memory
-during long trials; any spawned processes still alive at the end of the
-trial are stopped and reclaimed automatically, like the static ones.
+Dynamic processes:
 
-Low-level events (callbacks registered with ``@model.event`` and published in
-``sim.Event`` fields):
+A process named in a ``sim.Spawnable`` field is created at runtime with
+``sim.spawn(env.<name>, env, priority=0)``. The returned handle can be used to
+initialize its ``sim.Struct`` fields before it first runs. Finished spawned
+processes can be reclaimed with ``sim.despawn(handle)``.
 
-``schedule()``, ``schedule_at()``, ``event_cancel()``, ``event_reschedule()``,
-``event_reprioritize()``, ``event_scheduled()``, ``event_time()``,
-``event_priority()``, ``current_event()``, ``event_count()``,
-``clear_events()``.
+Low-level events:
+
+Callbacks registered with ``@model.event`` are exposed in ``sim.Event`` fields.
+Use ``schedule()``, ``schedule_at()``, ``event_cancel()``,
+``event_reschedule()``, ``event_reprioritize()``, ``event_scheduled()``,
+``event_time()``, ``event_priority()``, ``current_event()``,
+``event_count()``, and ``clear_events()``.
 
 Queues and resources:
 
@@ -62,7 +56,10 @@ Queues and resources:
 ``acquire()``, ``release()``, ``preempt()``, ``available()``, ``in_use()``,
 ``held()``, ``mean_in_use()``, ``pool_acquire()``, ``pool_release()``,
 ``pool_preempt()``, ``pool_available()``, ``pool_held()``, ``pool_in_use()``,
-``pool_mean_in_use()``.
+``pool_mean_in_use()``, ``queue_history()``, ``resource_history()``,
+``pool_history()``, ``queue_report()``, ``queue_report_file()``,
+``resource_report()``, ``resource_report_file()``, ``pool_report()``,
+``pool_report_file()``.
 
 Stores, priority queues, datasets, and conditions:
 
@@ -71,8 +68,24 @@ Stores, priority queues, datasets, and conditions:
 ``pq_put()``, ``pq_get()``, ``pq_take()``, ``pq_length()``, ``pq_space()``,
 ``pq_position()``, ``pq_reprioritize()``, ``pq_cancel()``,
 ``pq_mean_length()``, ``tally()``, ``dataset_mean()``, ``dataset_count()``,
-``dataset_min()``, ``dataset_max()``, ``dataset_std()``, ``wait_for()``,
-``signal()``.
+``dataset_min()``, ``dataset_max()``, ``dataset_std()``, ``store_history()``,
+``pq_history()``, ``store_report()``, ``store_report_file()``,
+``pq_report()``, ``pq_report_file()``, ``dataset_print()``,
+``dataset_print_file()``, ``dataset_fivenum()``, ``dataset_fivenum_file()``,
+``dataset_histogram()``, ``dataset_histogram_file()``,
+``dataset_correlogram()``, ``dataset_correlogram_file()``,
+``dataset_pacf_correlogram()``, ``dataset_pacf_correlogram_file()``,
+``timeseries_count()``, ``timeseries_min()``, ``timeseries_max()``,
+``timeseries_mean()``, ``timeseries_std()``, ``timeseries_median()``,
+``timeseries_print()``, ``timeseries_print_file()``, ``timeseries_fivenum()``,
+``timeseries_fivenum_file()``, ``timeseries_histogram()``,
+``timeseries_histogram_file()``, ``timeseries_correlogram()``,
+``timeseries_correlogram_file()``, ``timeseries_pacf_correlogram()``,
+``timeseries_pacf_correlogram_file()``, ``wait_for()``, ``signal()``.
+
+For text reports and text-mode plots, the no-suffix helpers print to stdout for
+console and notebook use; the ``*_file()`` variants write to a path handle
+created with ``sim.log_text()``.
 
 Random draws:
 

@@ -10,6 +10,7 @@
 
 #include <inttypes.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 #include "cimba.h"
@@ -261,6 +262,326 @@ double cpy_objectqueue_mean_length(void *oqp)
 double cpy_priorityqueue_mean_length(void *pqp)
 {
     return mean_of_history(cmb_priorityqueue_history(pqp));
+}
+
+void *cpy_buffer_history(void *bp)
+{
+    return cmb_buffer_history(bp);
+}
+
+void *cpy_resource_history(void *rp)
+{
+    return cmb_resource_history(rp);
+}
+
+void *cpy_resourcepool_history(void *rpp)
+{
+    return cmb_resourcepool_get_history(rpp);
+}
+
+void *cpy_objectqueue_history(void *oqp)
+{
+    return cmb_objectqueue_history(oqp);
+}
+
+void *cpy_priorityqueue_history(void *pqp)
+{
+    return cmb_priorityqueue_history(pqp);
+}
+
+uint64_t cpy_timeseries_count(const void *tsp)
+{
+    return cmb_timeseries_count(tsp);
+}
+
+double cpy_timeseries_min(const void *tsp)
+{
+    return cmb_timeseries_min(tsp);
+}
+
+double cpy_timeseries_max(const void *tsp)
+{
+    return cmb_timeseries_max(tsp);
+}
+
+static void summarize_history(const void *tsp, struct cmb_wtdsummary *wsp)
+{
+    cmb_wtdsummary_initialize(wsp);
+    cmb_timeseries_summarize(tsp, wsp);
+}
+
+double cpy_timeseries_mean(const void *tsp)
+{
+    struct cmb_wtdsummary ws;
+    summarize_history(tsp, &ws);
+    return cmb_wtdsummary_mean(&ws);
+}
+
+double cpy_timeseries_stddev(const void *tsp)
+{
+    struct cmb_wtdsummary ws;
+    summarize_history(tsp, &ws);
+    return cmb_wtdsummary_stddev(&ws);
+}
+
+double cpy_timeseries_median(const void *tsp)
+{
+    return cmb_timeseries_median(tsp);
+}
+
+typedef void (*file_writer_func)(FILE *fp, void *ctx);
+
+static uint64_t write_file(const intptr_t path,
+                           const uint64_t append,
+                           file_writer_func writer,
+                           void *ctx)
+{
+    if (path == 0) {
+        writer(stdout, ctx);
+        return fflush(stdout) == 0 ? 1u : 0u;
+    }
+    const char *name = (const char *)path;
+    FILE *fp = fopen(name, append ? "a" : "w");
+    if (fp == NULL) {
+        return 0u;
+    }
+    writer(fp, ctx);
+    return fclose(fp) == 0 ? 1u : 0u;
+}
+
+struct dataset_histogram_ctx {
+    const void *dsp;
+    uint64_t num_bins;
+    double low_lim;
+    double high_lim;
+};
+
+struct correlogram_ctx {
+    const void *dsp;
+    uint64_t n;
+};
+
+static void dataset_print_writer(FILE *fp, void *ctx)
+{
+    cmb_dataset_print(ctx, fp);
+}
+
+static void dataset_fivenum_writer(FILE *fp, void *ctx)
+{
+    cmb_dataset_fivenum_print(ctx, fp, true);
+}
+
+static void dataset_histogram_writer(FILE *fp, void *ctx)
+{
+    const struct dataset_histogram_ctx *hp = ctx;
+    cmb_dataset_histogram_print(hp->dsp, fp, (unsigned)hp->num_bins,
+                                hp->low_lim, hp->high_lim);
+}
+
+static void dataset_correlogram_writer(FILE *fp, void *ctx)
+{
+    const struct correlogram_ctx *cp = ctx;
+    cmb_dataset_correlogram_print(cp->dsp, fp, (unsigned)cp->n, NULL);
+}
+
+static void dataset_pacf_correlogram_writer(FILE *fp, void *ctx)
+{
+    const struct correlogram_ctx *cp = ctx;
+    const uint64_t n = cp->n;
+    double *pacf = calloc(n + 1u, sizeof *pacf);
+    if (pacf == NULL) {
+        return;
+    }
+    cmb_dataset_PACF(cp->dsp, (unsigned)n, pacf, NULL);
+    cmb_dataset_correlogram_print(cp->dsp, fp, (unsigned)n, pacf);
+    free(pacf);
+}
+
+uint64_t cpy_dataset_print_file(const void *dsp, const intptr_t path,
+                                const uint64_t append)
+{
+    return write_file(path, append, dataset_print_writer, (void *)dsp);
+}
+
+uint64_t cpy_dataset_fivenum_file(const void *dsp, const intptr_t path,
+                                  const uint64_t append)
+{
+    return write_file(path, append, dataset_fivenum_writer, (void *)dsp);
+}
+
+uint64_t cpy_dataset_histogram_file(const void *dsp, const intptr_t path,
+                                    const uint64_t append,
+                                    const uint64_t num_bins,
+                                    const double low_lim,
+                                    const double high_lim)
+{
+    struct dataset_histogram_ctx ctx = {
+        .dsp = dsp,
+        .num_bins = num_bins,
+        .low_lim = low_lim,
+        .high_lim = high_lim,
+    };
+    return write_file(path, append, dataset_histogram_writer, &ctx);
+}
+
+uint64_t cpy_dataset_correlogram_file(const void *dsp, const intptr_t path,
+                                      const uint64_t append,
+                                      const uint64_t n)
+{
+    struct correlogram_ctx ctx = { .dsp = dsp, .n = n };
+    return write_file(path, append, dataset_correlogram_writer, &ctx);
+}
+
+uint64_t cpy_dataset_pacf_correlogram_file(const void *dsp,
+                                           const intptr_t path,
+                                           const uint64_t append,
+                                           const uint64_t n)
+{
+    struct correlogram_ctx ctx = { .dsp = dsp, .n = n };
+    return write_file(path, append, dataset_pacf_correlogram_writer, &ctx);
+}
+
+struct timeseries_histogram_ctx {
+    const void *tsp;
+    uint64_t num_bins;
+    double low_lim;
+    double high_lim;
+};
+
+static void timeseries_print_writer(FILE *fp, void *ctx)
+{
+    cmb_timeseries_print(ctx, fp);
+}
+
+static void timeseries_fivenum_writer(FILE *fp, void *ctx)
+{
+    cmb_timeseries_fivenum_print(ctx, fp, true);
+}
+
+static void timeseries_histogram_writer(FILE *fp, void *ctx)
+{
+    const struct timeseries_histogram_ctx *hp = ctx;
+    cmb_timeseries_histogram_print(hp->tsp, fp, (uint16_t)hp->num_bins,
+                                   hp->low_lim, hp->high_lim);
+}
+
+static void timeseries_correlogram_writer(FILE *fp, void *ctx)
+{
+    const struct correlogram_ctx *cp = ctx;
+    cmb_timeseries_correlogram_print(cp->dsp, fp, (uint16_t)cp->n, NULL);
+}
+
+static void timeseries_pacf_correlogram_writer(FILE *fp, void *ctx)
+{
+    const struct correlogram_ctx *cp = ctx;
+    const uint64_t n = cp->n;
+    double *pacf = calloc(n + 1u, sizeof *pacf);
+    if (pacf == NULL) {
+        return;
+    }
+    cmb_timeseries_PACF(cp->dsp, (uint16_t)n, pacf, NULL);
+    cmb_timeseries_correlogram_print(cp->dsp, fp, (uint16_t)n, pacf);
+    free(pacf);
+}
+
+uint64_t cpy_timeseries_print_file(const void *tsp, const intptr_t path,
+                                   const uint64_t append)
+{
+    return write_file(path, append, timeseries_print_writer, (void *)tsp);
+}
+
+uint64_t cpy_timeseries_fivenum_file(const void *tsp, const intptr_t path,
+                                     const uint64_t append)
+{
+    return write_file(path, append, timeseries_fivenum_writer, (void *)tsp);
+}
+
+uint64_t cpy_timeseries_histogram_file(const void *tsp, const intptr_t path,
+                                       const uint64_t append,
+                                       const uint64_t num_bins,
+                                       const double low_lim,
+                                       const double high_lim)
+{
+    struct timeseries_histogram_ctx ctx = {
+        .tsp = tsp,
+        .num_bins = num_bins,
+        .low_lim = low_lim,
+        .high_lim = high_lim,
+    };
+    return write_file(path, append, timeseries_histogram_writer, &ctx);
+}
+
+uint64_t cpy_timeseries_correlogram_file(const void *tsp,
+                                         const intptr_t path,
+                                         const uint64_t append,
+                                         const uint64_t n)
+{
+    struct correlogram_ctx ctx = { .dsp = tsp, .n = n };
+    return write_file(path, append, timeseries_correlogram_writer, &ctx);
+}
+
+uint64_t cpy_timeseries_pacf_correlogram_file(const void *tsp,
+                                              const intptr_t path,
+                                              const uint64_t append,
+                                              const uint64_t n)
+{
+    struct correlogram_ctx ctx = { .dsp = tsp, .n = n };
+    return write_file(path, append, timeseries_pacf_correlogram_writer, &ctx);
+}
+
+static void buffer_report_writer(FILE *fp, void *ctx)
+{
+    cmb_buffer_print_report(ctx, fp);
+}
+
+static void resource_report_writer(FILE *fp, void *ctx)
+{
+    cmb_resource_print_report(ctx, fp);
+}
+
+static void resourcepool_report_writer(FILE *fp, void *ctx)
+{
+    cmb_resourcepool_print_report(ctx, fp);
+}
+
+static void objectqueue_report_writer(FILE *fp, void *ctx)
+{
+    cmb_objectqueue_report_print(ctx, fp);
+}
+
+static void priorityqueue_report_writer(FILE *fp, void *ctx)
+{
+    cmb_priorityqueue_report_print(ctx, fp);
+}
+
+uint64_t cpy_buffer_report_file(void *bp, const intptr_t path,
+                                const uint64_t append)
+{
+    return write_file(path, append, buffer_report_writer, bp);
+}
+
+uint64_t cpy_resource_report_file(void *rp, const intptr_t path,
+                                  const uint64_t append)
+{
+    return write_file(path, append, resource_report_writer, rp);
+}
+
+uint64_t cpy_resourcepool_report_file(void *rpp, const intptr_t path,
+                                      const uint64_t append)
+{
+    return write_file(path, append, resourcepool_report_writer, rpp);
+}
+
+uint64_t cpy_objectqueue_report_file(void *oqp, const intptr_t path,
+                                     const uint64_t append)
+{
+    return write_file(path, append, objectqueue_report_writer, oqp);
+}
+
+uint64_t cpy_priorityqueue_report_file(void *pqp, const intptr_t path,
+                                       const uint64_t append)
+{
+    return write_file(path, append, priorityqueue_report_writer, pqp);
 }
 
 /* Value-passing object queue access: objects are opaque intptr_t values */
