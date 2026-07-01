@@ -1,65 +1,53 @@
-from dataclasses import dataclass
+"""Tutorial 1.1: a first M/M/1 queue model."""
 
 import cimba
+import cimba.sim as sim
 
 
-@dataclass
-class MM1Trial:
-    arr_rate: float = 0.75
-    srv_rate: float = 1.0
-    duration: float = 1000.0
-    seed: int = 123
-    avg_queue_length: float = 0.0
-    arrivals: int = 0
-    services: int = 0
+class MM1(sim.Model):
+    utilization: sim.Param
+    avg_queue_length: sim.Output
+    queue: sim.Queue
 
 
-def arrival(ctx: MM1Trial):
-    mean = 1.0 / ctx.arr_rate
+model = MM1("MM1")
+
+
+@model.process
+def arrival(env: MM1):
     while True:
-        cimba.hold(cimba.exponential(mean))
-        ctx.arrivals += 1
-        ctx.queue.put(1)
+        t_ia = sim.exponential(1.0 / env.utilization)
+        sim.hold(t_ia)
+        sim.put(env.queue, 1)
 
 
-def service(ctx: MM1Trial):
-    mean = 1.0 / ctx.srv_rate
+@model.process
+def service(env: MM1):
     while True:
-        ctx.queue.get(1)
-        cimba.hold(cimba.exponential(mean))
-        ctx.services += 1
+        sim.get(env.queue, 1)
+        t_srv = sim.exponential(1.0)
+        sim.hold(t_srv)
 
 
-def end_sim(subject, ctx: MM1Trial):
-    ctx.arrival_process.stop()
-    ctx.service_process.stop()
-    ctx.queue.stop_recording()
-    ctx.simulation.clear()
-
-
-def run(seed: int = 11, stop_time: float = 25.0) -> MM1Trial:
-    trial = MM1Trial(duration=stop_time, seed=seed)
-    with cimba.Simulation(seed=trial.seed) as sim:
-        trial.simulation = sim
-        trial.queue = cimba.Buffer("Queue")
-        trial.queue.start_recording()
-        trial.arrival_process = cimba.Process("Arrival", arrival, trial).start()
-        trial.service_process = cimba.Process("Service", service, trial).start()
-        sim.schedule(end_sim, trial.duration, obj=trial)
-        sim.execute()
-
-        trial.avg_queue_length = trial.queue.history().summary().mean
-
-    del trial.queue
-    del trial.arrival_process
-    del trial.service_process
-    del trial.simulation
-    return trial
+@model.collect
+def collect_stats(env: MM1):
+    env.avg_queue_length = sim.mean_level(env.queue)
 
 
 def main() -> None:
-    trial = run()
-    print(f"Arrivals {trial.arrivals} Services {trial.services} Avg {trial.avg_queue_length:.3f}")
+    cimba.logger_flags_on(cimba.LOGGER_INFO)
+    exp = model.experiment(
+        utilization=[0.75],
+        replications=1,
+        duration=10.0,
+        warmup=0.0,
+        seed=42,
+    )
+    failures = exp.run()
+    if failures:
+        raise RuntimeError(f"{failures} trial(s) failed")
+    avg = float(exp["avg_queue_length"][0])
+    print(f"Average queue length over the first 10 time units: {avg:.6f}")
 
 
 if __name__ == "__main__":

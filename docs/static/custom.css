@@ -11,7 +11,7 @@
     line-height: 1.0;
 }
 
-.rst-content code.literal .xref {
+.rst-content code-literal .xref {
     color: #2980b9 !important;
     font-weight: bold;
 }

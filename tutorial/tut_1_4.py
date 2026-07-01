@@ -1,74 +1,55 @@
-from dataclasses import dataclass
+"""Tutorial 1.4: collect queue statistics over a long run."""
 
-import cimba
-
-
-@dataclass
-class MM1Trial:
-    arr_rate: float = 0.75
-    srv_rate: float = 1.0
-    warmup_time: float = 50.0
-    duration: float = 5000.0
-    seed: int = 14
-    avg_queue_length: float = 0.0
-    arrivals: int = 0
-    services: int = 0
+import cimba.sim as sim
 
 
-def theoretical_queue_length(arr_rate: float, srv_rate: float) -> float:
-    rho = arr_rate / srv_rate
-    return rho * rho / (1.0 - rho)
+class MM1(sim.Model):
+    utilization: sim.Param
+    avg_queue_length: sim.Output
+    queue: sim.Queue
 
 
-def arrival(ctx: MM1Trial):
-    mean = 1.0 / ctx.arr_rate
+model = MM1("MM1")
+
+
+@model.process
+def arrival(env: MM1):
     while True:
-        cimba.hold(cimba.exponential(mean))
-        ctx.arrivals += 1
-        ctx.queue.put(1)
+        t_ia = sim.exponential(1.0 / env.utilization)
+        sim.hold(t_ia)
+        sim.put(env.queue, 1)
 
 
-def service(ctx: MM1Trial):
-    mean = 1.0 / ctx.srv_rate
+@model.process
+def service(env: MM1):
     while True:
-        ctx.queue.get(1)
-        cimba.hold(cimba.exponential(mean))
-        ctx.services += 1
+        sim.get(env.queue, 1)
+        t_srv = sim.exponential(1.0)
+        sim.hold(t_srv)
 
 
-def recorder(ctx: MM1Trial):
-    cimba.hold(ctx.warmup_time)
-    ctx.queue.start_recording()
-    cimba.hold(ctx.duration)
-    ctx.queue.stop_recording()
-    ctx.arrival_process.stop()
-    ctx.service_process.stop()
-    ctx.simulation.clear()
-
-
-def run(seed: int = 14) -> MM1Trial:
-    trial = MM1Trial(seed=seed)
-    with cimba.Simulation(seed=trial.seed) as sim:
-        trial.simulation = sim
-        trial.queue = cimba.Buffer("Queue")
-        trial.arrival_process = cimba.Process("Arrival", arrival, trial).start()
-        trial.service_process = cimba.Process("Service", service, trial).start()
-        cimba.Process("Recorder", recorder, trial).start()
-        sim.execute()
-
-        trial.avg_queue_length = trial.queue.history().summary().mean
-
-    del trial.queue
-    del trial.arrival_process
-    del trial.service_process
-    del trial.simulation
-    return trial
+@model.collect
+def collect_stats(env: MM1):
+    history = sim.queue_history(env.queue)
+    env.avg_queue_length = sim.timeseries_mean(history)
+    sim.queue_report(env.queue)
+    sim.timeseries_pacf_correlogram(history, lags=20)
 
 
 def main() -> None:
-    trial = run()
-    expected = theoretical_queue_length(trial.arr_rate, trial.srv_rate)
-    print(f"Avg {trial.avg_queue_length:.3f} Expected {expected:.3f}")
+    exp = model.experiment(
+        utilization=[0.75],
+        replications=1,
+        duration=1.0e6,
+        warmup=1.0e3,
+        seed=45,
+    )
+    failures = exp.run()
+    if failures:
+        raise RuntimeError(f"{failures} trial(s) failed")
+    avg = float(exp["avg_queue_length"][0])
+    print("Theory predicts an average M/M/1 waiting-queue length of 2.25")
+    print(f"Simulation result: {avg:.6f}")
 
 
 if __name__ == "__main__":

@@ -1,2 +1,4 @@
-sphinx>=4.0
+sphinx
 sphinx-rtd-theme
+numpy
+numba

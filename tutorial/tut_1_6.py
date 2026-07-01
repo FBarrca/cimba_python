@@ -1,103 +1,77 @@
-from collections.abc import Iterable
-from dataclasses import dataclass
+"""Tutorial 1.6: parallel M/M/1 utilization sweep."""
+
+import numpy as np
 
 import cimba
+import cimba.sim as sim
 
 
-@dataclass
-class MM1Trial:
-    arr_rate: float
-    srv_rate: float
-    duration: float
-    seed: int
-    avg_queue_length: float = 0.0
-    arrivals: int = 0
-    services: int = 0
+class MM1(sim.Model):
+    utilization: sim.Param
+    avg_queue_length: sim.Output
+    queue: sim.Queue
 
 
-def arrival(ctx: MM1Trial):
-    mean = 1.0 / ctx.arr_rate
-    while True:
-        cimba.hold(cimba.exponential(mean))
-        ctx.arrivals += 1
-        ctx.queue.put(1)
+def build_model() -> MM1:
+    model = MM1("MM1")
+
+    @model.process
+    def arrival(env: MM1):
+        while True:
+            t_ia = sim.exponential(1.0 / env.utilization)
+            sim.hold(t_ia)
+            sim.put(env.queue, 1)
+
+    @model.process
+    def service(env: MM1):
+        while True:
+            sim.get(env.queue, 1)
+            t_srv = sim.exponential(1.0)
+            sim.hold(t_srv)
+
+    @model.collect
+    def collect_stats(env: MM1):
+        env.avg_queue_length = sim.mean_level(env.queue)
+
+    return model
 
 
-def service(ctx: MM1Trial):
-    mean = 1.0 / ctx.srv_rate
-    while True:
-        ctx.queue.get(1)
-        cimba.hold(cimba.exponential(mean))
-        ctx.services += 1
+def sweep_rho(
+    *,
+    replications: int = 10,
+    duration: float = 1.0e6,
+    warmup: float = 1.0e3,
+    seed: int | None = 42,
+) -> tuple[np.ndarray, np.ndarray]:
+    rhos = np.arange(0.025, 1.0, 0.025)
+    exp = build_model().experiment(
+        utilization=rhos,
+        replications=replications,
+        duration=duration,
+        warmup=warmup,
+        seed=seed,
+    )
+    failures = exp.run()
+    if failures:
+        raise RuntimeError(f"{failures} trial(s) failed")
+    return rhos, exp["avg_queue_length"].reshape(len(rhos), replications)
 
 
-def recorder(ctx: MM1Trial):
-    ctx.queue.start_recording()
-    cimba.hold(ctx.duration)
-    ctx.queue.stop_recording()
-    ctx.arrival_process.stop()
-    ctx.service_process.stop()
-    ctx.simulation.clear()
-
-
-def run_mm1_trial(trial: MM1Trial) -> MM1Trial:
-    with cimba.Simulation(seed=trial.seed) as sim:
-        trial.simulation = sim
-        trial.queue = cimba.Buffer("Queue")
-        trial.arrival_process = cimba.Process("Arrival", arrival, trial).start()
-        trial.service_process = cimba.Process("Service", service, trial).start()
-        cimba.Process("Recorder", recorder, trial).start()
-        sim.execute()
-
-        trial.avg_queue_length = trial.queue.history().summary().mean
-
-    del trial.queue
-    del trial.arrival_process
-    del trial.service_process
-    del trial.simulation
-    return trial
-
-
-def run_experiment(
-    rhos: Iterable[float] = (0.25, 0.50, 0.75),
-    replications: int = 2,
-    duration: float = 2500.0,
-    seed: int = 1600,
-    processes: int | None = 2,
-) -> list[dict[str, float]]:
-    rhos = tuple(rhos)
-    grid = [(rho, rep) for rho in rhos for rep in range(replications)]
-
-    def trial_fn(index, trial_seed):
-        rho, rep = grid[index]
-        trial = run_mm1_trial(
-            MM1Trial(
-                arr_rate=rho,
-                srv_rate=1.0,
-                duration=duration,
-                seed=trial_seed,
-            )
-        )
-        return {
-            "rho": rho,
-            "replication": rep,
-            "avg_queue_length": trial.avg_queue_length,
-        }
-
-    samples = cimba.run_experiment(trial_fn, n=len(grid), seed=seed, processes=processes)
-    rows = []
-    for rho in rhos:
-        summary = cimba.DataSummary()
-        for sample in samples:
-            if sample["rho"] == rho:
-                summary.add(sample["avg_queue_length"])
-        rows.append({"rho": rho, "avg_queue_length": summary.mean})
-    return rows
+def print_sweep(rhos: np.ndarray, values: np.ndarray) -> None:
+    print(f"cimba {cimba.native_version()}")
+    print(f"{'rho':>8} {'simulated':>10} {'+/-95%':>10} {'theory':>10}")
+    for rho, samples in zip(rhos, values):
+        mean = float(samples.mean())
+        ci = 0.0
+        if samples.size > 1:
+            ci = float(1.96 * samples.std(ddof=1) / np.sqrt(samples.size))
+        theory = rho * rho / (1.0 - rho)
+        print(f"{rho:8.3f} {mean:10.4f} {ci:10.4f} {theory:10.4f}")
 
 
 def main() -> None:
-    for row in run_experiment():
-        print(f"{row['rho']:.3f}\t{row['avg_queue_length']:.6f}")
+    rhos, values = sweep_rho(replications=10, duration=1.0e6, warmup=1.0e3)
+    print_sweep(rhos, values)
 
 
 if __name__ == "__main__":

@@ -1,25 +1,26 @@
-# Top-level build for the Cimba Python wrapper.
-#
-# Strategy: consume the upstream Cimba C library (vendored as a git submodule
-# under subprojects/cimba) as a Meson subproject, then compile our Cython
-# extension and statically link it against that library. Building Cimba as a
-# static lib keeps the wheel self-contained (a single _cimba*.so, no external
-# .so to ship or RPATH to fix up).
+# Build for the Cimba Python wrapper: consume the upstream Cimba C library
+# (vendored as a git submodule under subprojects/cimba), generate the cffi
+# glue module, and statically link libcimba into it.
 project(
     'cimba',
-    'c', 'cython',
-    version: '0.2.1',
+    'c',
+    version: '0.1.0',
     meson_version: '>=1.1.0',
-    default_options: [
-        'buildtype=release',
-        'default_library=static',
-    ],
+    # Fast wheels by default. Use -Dcimba_debug_logs=true to build the bundled
+    # Cimba library with native INFO logging for tutorials/debugging.
+    default_options: ['buildtype=release'],
 )
 
 py = import('python').find_installation(pure: false)
+cc = meson.get_compiler('c')
 
-# Pull in the upstream C library. enable_docs=false skips the doxygen/sphinx
-# subdir; building Cimba static lets us embed it into the extension module.
+if get_option('cimba_debug_logs') and get_option('buildtype') == 'release'
+    error(
+        'cimba_debug_logs requires -Dbuildtype=debugoptimized because '
+        + 'upstream Cimba release builds compile INFO logs out with -DNLOGINFO'
+    )
+endif
+
 cimba_proj = subproject(
     'cimba',
     default_options: [
@@ -28,74 +29,49 @@ cimba_proj = subproject(
         'warning_level=1',
     ],
 )
-# Upstream declares this in src/meson.build (it does not override_dependency,
-# so we fetch the variable directly). It carries link_with + include dirs.
-cimba_dep = cimba_proj.get_variable('my_lib_dep')
+cimba_lib = cimba_proj.get_variable('cimba_lib')
+# inc_api alone is not enough: upstream's public cmb_process.h includes the
+# internal cmi_coroutine.h, which lives in src/ (inc_int).
+inc_api = cimba_proj.get_variable('inc_api')
+inc_int = cimba_proj.get_variable('inc_int')
 
-# Pure-Python parts of the package.
+m_dep = cc.find_library('m', required: true)
+thread_dep = dependency('threads')
+
+# cffi codegen at build time: _cffi_build.py emits _cimba.c.
+cffi_gen = custom_target(
+    input: files('src/cimba/_cffi_build.py'),
+    output: '_cimba.c',
+    command: [py, '@INPUT@', '@OUTDIR@'],
+)
+
 py.install_sources(
-    files(
-        'src/cimba/__init__.py',
-        'src/cimba/__init__.pyi',
-        'src/cimba/py.typed',
-        'src/cimba/cimba.py',
-        'src/cimba/cimba.pyi',
-        'src/cimba/cmb_buffer.py',
-        'src/cimba/cmb_buffer.pyi',
-        'src/cimba/cmb_condition.py',
-        'src/cimba/cmb_condition.pyi',
-        'src/cimba/cmb_dataset.py',
-        'src/cimba/cmb_dataset.pyi',
-        'src/cimba/cmb_datasummary.py',
-        'src/cimba/cmb_datasummary.pyi',
-        'src/cimba/cmb_event.py',
-        'src/cimba/cmb_event.pyi',
-        'src/cimba/cmb_logger.py',
-        'src/cimba/cmb_logger.pyi',
-        'src/cimba/cmb_objectqueue.py',
-        'src/cimba/cmb_objectqueue.pyi',
-        'src/cimba/cmb_priorityqueue.py',
-        'src/cimba/cmb_priorityqueue.pyi',
-        'src/cimba/cmb_process.py',
-        'src/cimba/cmb_process.pyi',
-        'src/cimba/cmb_random.py',
-        'src/cimba/cmb_random.pyi',
-        'src/cimba/cmb_resource.py',
-        'src/cimba/cmb_resource.pyi',
-        'src/cimba/cmb_resourcepool.py',
-        'src/cimba/cmb_resourcepool.pyi',
-        'src/cimba/cmb_timeseries.py',
-        'src/cimba/cmb_timeseries.pyi',
-        'src/cimba/cmb_wtdsummary.py',
-        'src/cimba/cmb_wtdsummary.pyi',
-        'src/cimba/reporting.py',
-        'src/cimba/_types.pyi',
-        'src/cimba/_cimba.pyi',  # type stub so editors get hover/autocomplete
-    ),
+    'src/cimba/__init__.py',
+    'src/cimba/sim.py',
+    'src/cimba/_bindings.py',
+    'src/cimba/_intrinsics.py',
+    'src/cimba/_model.py',
+    'src/cimba/py.typed',
+    'src/cimba/_cimba.pyi',
     subdir: 'cimba',
 )
 
-# The Cython extension. Meson runs cython -> cc -> link automatically; the
-# dependency provides cimba.h's include dir and the static archive to link.
-# -Wl,--wrap=cmi_coroutine_context_switch interposes the vendored coroutine
-# context switch at link time (no submodule changes) so the binding can save and
-# restore CPython per-thread frame/exception state across switches on Python
-# 3.14+. See src/cimba/_cython/cmb_corostate.pxi.
 cimba_ext = py.extension_module(
     '_cimba',
-    'src/cimba/_cimba.pyx',
-    dependencies: [cimba_dep],
-    link_args: ['-Wl,--wrap=cmi_coroutine_context_switch'],
+    cffi_gen,
+    # nbshim.c re-exports the static-inline cimba functions that sim.py binds
+    # as Numba external symbols (cpy_*).
+    'src/cimba/native/nbshim.c',
+    include_directories: [inc_api, inc_int, 'src/cimba/native'],
+    dependencies: [m_dep, thread_dep],
+    link_whole: cimba_lib,
     install: true,
     subdir: 'cimba',
 )
 
-# Upstream adds its tutorials/benchmarks/tests to Meson's default `all` target
-# (it doesn't guard them with meson.is_subproject()), and one tutorial links
-# system HDF5. We don't ship any of those. This stable-named alias lets the
-# build compile ONLY our extension and its real deps (libcimba + codegen) -- see
-# `tool.meson-python.args.compile` in pyproject.toml -- so the examples (and the
-# HDF5 lookup) are never built.
+# Upstream adds its tutorials/benchmarks/tests to the default `all` target (one
+# links system HDF5). meson-python compiles only this alias instead -- see
+# tool.meson-python.args.compile in pyproject.toml.
 alias_target('cimba_ext', cimba_ext)
 
 if get_option('enable_docs')

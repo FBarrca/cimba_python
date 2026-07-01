@@ -1,92 +1,99 @@
+"""Tutorial 1.7: command-line M/M/1 utilization sweep."""
+
+from __future__ import annotations
+
 import argparse
-from dataclasses import dataclass
+import time
+
+import numpy as np
 
 import cimba
+import cimba.sim as sim
 
 
-@dataclass
-class MM1Trial:
-    arr_rate: float = 0.75
-    srv_rate: float = 1.0
-    warmup_time: float = 1000.0
-    duration: float = 1.0e6
-    seed: int = 17
-    avg_queue_length: float = 0.0
-    arrivals: int = 0
-    services: int = 0
+class MM1(sim.Model):
+    utilization: sim.Param
+    avg_queue_length: sim.Output
+    queue: sim.Queue
 
 
-def arrival(ctx: MM1Trial):
-    mean = 1.0 / ctx.arr_rate
-    while True:
-        cimba.hold(cimba.exponential(mean))
-        ctx.arrivals += 1
-        ctx.queue.put(1)
+def build_model() -> MM1:
+    model = MM1("MM1")
+
+    @model.process
+    def arrival(env: MM1):
+        while True:
+            t_ia = sim.exponential(1.0 / env.utilization)
+            sim.hold(t_ia)
+            sim.put(env.queue, 1)
+
+    @model.process
+    def service(env: MM1):
+        while True:
+            sim.get(env.queue, 1)
+            t_srv = sim.exponential(1.0)
+            sim.hold(t_srv)
+
+    @model.collect
+    def collect_stats(env: MM1):
+        env.avg_queue_length = sim.mean_level(env.queue)
+
+    return model
 
 
-def service(ctx: MM1Trial):
-    mean = 1.0 / ctx.srv_rate
-    while True:
-        ctx.queue.get(1)
-        cimba.hold(cimba.exponential(mean))
-        ctx.services += 1
-
-
-def recorder(ctx: MM1Trial):
-    if ctx.warmup_time > 0.0:
-        cimba.hold(ctx.warmup_time)
-    ctx.queue.start_recording()
-    cimba.hold(ctx.duration)
-    ctx.queue.stop_recording()
-    ctx.arrival_process.stop()
-    ctx.service_process.stop()
-    ctx.simulation.clear()
-
-
-def run(trial: MM1Trial) -> MM1Trial:
-    with cimba.Simulation(seed=trial.seed) as sim:
-        trial.simulation = sim
-        trial.queue = cimba.Buffer("Queue")
-        trial.arrival_process = cimba.Process("Arrival", arrival, trial).start()
-        trial.service_process = cimba.Process("Service", service, trial).start()
-        cimba.Process("Recorder", recorder, trial).start()
-        sim.execute()
-
-        trial.avg_queue_length = trial.queue.history().summary().mean
-
-    del trial.queue
-    del trial.arrival_process
-    del trial.service_process
-    del trial.simulation
-    return trial
-
-
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run a Python Cimba M/M/1 tutorial trial.")
-    parser.add_argument("--arr-rate", type=float, default=0.75)
-    parser.add_argument("--srv-rate", type=float, default=1.0)
-    parser.add_argument("--warmup-time", type=float, default=1000.0)
-    parser.add_argument("--duration", type=float, default=1.0e6)
-    parser.add_argument("--seed", type=int, default=17)
-    return parser.parse_args(argv)
-
-
-def run_from_args(argv: list[str] | None = None) -> MM1Trial:
-    args = parse_args(argv)
-    return run(
-        MM1Trial(
-            arr_rate=args.arr_rate,
-            srv_rate=args.srv_rate,
-            warmup_time=args.warmup_time,
-            duration=args.duration,
-            seed=args.seed,
-        )
+def sweep_rho(
+    *,
+    replications: int,
+    duration: float,
+    warmup: float,
+    seed: int | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    rhos = np.arange(0.025, 1.0, 0.025)
+    exp = build_model().experiment(
+        utilization=rhos,
+        replications=replications,
+        duration=duration,
+        warmup=warmup,
+        seed=seed,
     )
+    failures = exp.run()
+    if failures:
+        raise RuntimeError(f"{failures} trial(s) failed")
+    return rhos, exp["avg_queue_length"].reshape(len(rhos), replications)
 
 
-def main(argv: list[str] | None = None) -> None:
-    trial = run_from_args(argv)
-    print(f"Avg {trial.avg_queue_length:.6f}")
+def print_sweep(rhos: np.ndarray, values: np.ndarray) -> None:
+    print(f"cimba {cimba.native_version()}")
+    print(f"{'rho':>8} {'simulated':>10} {'+/-95%':>10} {'theory':>10}")
+    for rho, samples in zip(rhos, values):
+        mean = float(samples.mean())
+        ci = 0.0
+        if samples.size > 1:
+            ci = float(1.96 * samples.std(ddof=1) / np.sqrt(samples.size))
+        theory = rho * rho / (1.0 - rho)
+        print(f"{rho:8.3f} {mean:10.4f} {ci:10.4f} {theory:10.4f}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-t", "--timing", action="store_true")
+    parser.add_argument("-n", "--reps", type=int, default=10)
+    parser.add_argument("-d", "--duration", type=float, default=1.0e6)
+    parser.add_argument("-w", "--warmup", type=float, default=1.0e3)
+    parser.add_argument("-s", "--seed", type=int, default=42)
+    args = parser.parse_args()
+
+    t0 = time.perf_counter()
+    rhos, values = sweep_rho(
+        replications=args.reps,
+        duration=args.duration,
+        warmup=args.warmup,
+        seed=args.seed,
+    )
+    elapsed = time.perf_counter() - t0
+    print_sweep(rhos, values)
+    if args.timing:
+        print(f"\n{len(rhos) * args.reps} trials in {elapsed:.2f} s")
 
 
 if __name__ == "__main__":

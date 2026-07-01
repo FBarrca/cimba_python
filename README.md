@@ -1,4 +1,4 @@
-![Cimba logo](subprojects/cimba/images/logo_large.jpg)
+![Cimba logo](docs/static/cimba_logo_large.jpg)
 
 # Cimba Python
 
@@ -9,18 +9,18 @@ a multithreaded discrete event simulation engine written in C and assembly.
 
 It is designed for Python simulation models that need more speed than pure
 Python event scheduling can usually provide. In the included M/M/1 benchmark,
-Cimba Python runs about **8.5-8.9x faster than SimPy**, while keeping model code
-in Python.
+Cimba Python runs about **27-33x faster than SimPy** after its one-time Numba
+compile, while keeping model code in Python.
 
 On an AMD Ryzen 7 9700X under WSL Ubuntu 24.04, averaged over 10 runs:
 
 | Benchmark | SimPy | Cimba Python | Cimba C |
 | --- | ---: | ---: | ---: |
-| Single core, single trial | 3.185 s | 0.375 s | 0.095 s |
-| Multicore, 100 trials | 41.820 s | 4.698 s | 1.178 s |
+| Single core, single trial | 2.612 s | 0.096 s | 0.083 s |
+| Multicore, 100 trials | 36.807 s | 1.131 s | 0.970 s |
 
 The benchmark data and charts are in
-[`benchmarks/AMD_Ryzen_7_9700X_WSL.ods`](benchmarks/AMD_Ryzen_7_9700X_WSL.ods).
+[`benchmark/AMD_Ryzen_7_9700X_WSL.ods`](benchmark/AMD_Ryzen_7_9700X_WSL.ods).
 
 ## Install
 
@@ -34,49 +34,74 @@ or with `uv`:
 uv add cimba
 ```
 
-Python 3.13 or newer is required. The PyPI wheels embed the Cimba C library, so
-you do not need to install Cimba separately.
+Python 3.13 or newer is required. The wheel embeds the Cimba C library, so you
+do not need to install Cimba separately.
 
 ## What is it?
 
-Cimba Python gives Python models access to Cimba's native simulation engine:
-processes, event queues, buffers, object queues, priority queues, resources,
-conditions, random distributions, time series, and summary statistics.
+Cimba Python gives Python models access to Cimba's native simulation engine
+through the `cimba.sim` API: processes, event queues, buffers, queues, stores,
+priority queues, resources, resource pools, conditions, timers, events, random
+distributions, logging helpers, and experiment tables.
 
 ## What does the code look like?
 
 ```python
-import cimba
+import cimba.sim as sim
 
 
-def arrival(queue):
+class MM1(sim.Model):
+    utilization: sim.Param
+    avg_queue_length: sim.Output
+    queue: sim.Queue
+
+
+model = MM1("MM1")
+
+
+@model.process
+def arrival(env: MM1):
     while True:
-        cimba.hold(cimba.exponential(1.0 / 0.75))
-        queue.put(1)
+        sim.hold(sim.exponential(1.0 / env.utilization))
+        sim.put(env.queue, 1)
 
 
-def service(queue):
+@model.process
+def service(env: MM1):
     while True:
-        queue.get(1)
-        cimba.hold(cimba.exponential(1.0))
+        sim.get(env.queue, 1)
+        sim.hold(sim.exponential(1.0))
 
 
-with cimba.Simulation(seed=123) as sim:
-    queue = cimba.Buffer("Queue")
-    queue.start_recording()
+@model.collect
+def collect_stats(env: MM1):
+    env.avg_queue_length = sim.mean_level(env.queue)
 
-    cimba.Process("Arrival", arrival, queue).start()
-    cimba.Process("Service", service, queue).start()
 
-    sim.stop_at(1000.0)
-    sim.execute()
+exp = model.experiment(
+    utilization=0.75,
+    replications=100,
+    duration=1000.0,
+    warmup=100.0,
+    seed=123,
+)
+exp.run()
 
-    queue.stop_recording()
-    print(queue.history().summary().mean)
+print(exp["avg_queue_length"].mean())
 ```
 
-More examples, tutorials, topical guides, and the API reference are in the
+More examples, tutorials, background notes, and the API reference are in the
 [documentation](https://fbarrca.github.io/cimba_python/).
+
+## Development
+
+From a fresh clone:
+
+```bash
+git submodule update --init --recursive
+uv sync
+uv run pytest
+```
 
 ## License
 

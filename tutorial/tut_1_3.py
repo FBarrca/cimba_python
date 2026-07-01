@@ -1,83 +1,66 @@
-from dataclasses import dataclass
+"""Tutorial 1.3: user logging from Python process bodies."""
 
 import cimba
+import cimba.sim as sim
 
 USERFLAG1 = 0x00000001
 
-
-@dataclass
-class MM1Trial:
-    arr_rate: float = 0.75
-    srv_rate: float = 1.0
-    duration: float = 20.0
-    seed: int = 13
-    avg_queue_length: float = 0.0
-    arrivals: int = 0
-    services: int = 0
-    trace: list[str] | None = None
+MSG_ARR_HOLD = sim.log_text("Holds for")
+MSG_ARR_PUT = sim.log_text("Puts one into the queue")
+MSG_SRV_GET = sim.log_text("Gets one from the queue")
+MSG_SRV_HOLD = sim.log_text("Got one, services it for")
 
 
-def log_user(ctx: MM1Trial, message: str, *args: object) -> None:
-    if ctx.trace is not None:
-        ctx.trace.append(message % args)
+class MM1(sim.Model):
+    utilization: sim.Param
+    avg_queue_length: sim.Output
+    queue: sim.Queue
 
 
-def arrival(ctx: MM1Trial):
-    mean = 1.0 / ctx.arr_rate
+model = MM1("MM1")
+
+
+@model.process
+def arrival(env: MM1):
     while True:
-        t_ia = cimba.exponential(mean)
-        log_user(ctx, "Holds for %f time units", t_ia)
-        cimba.hold(t_ia)
-        ctx.arrivals += 1
-        log_user(ctx, "Puts one into the queue")
-        ctx.queue.put(1)
+        t_ia = sim.exponential(1.0 / env.utilization)
+        sim.log_user_f64(USERFLAG1, MSG_ARR_HOLD, t_ia)
+        sim.hold(t_ia)
+        sim.log_user(USERFLAG1, MSG_ARR_PUT)
+        sim.put(env.queue, 1)
 
 
-def service(ctx: MM1Trial):
-    mean = 1.0 / ctx.srv_rate
+@model.process
+def service(env: MM1):
     while True:
-        log_user(ctx, "Gets one from the queue")
-        ctx.queue.get(1)
-        t_srv = cimba.exponential(mean)
-        log_user(ctx, "Got one, services it for %f time units", t_srv)
-        cimba.hold(t_srv)
-        ctx.services += 1
+        sim.log_user(USERFLAG1, MSG_SRV_GET)
+        sim.get(env.queue, 1)
+        t_srv = sim.exponential(1.0)
+        sim.log_user_f64(USERFLAG1, MSG_SRV_HOLD, t_srv)
+        sim.hold(t_srv)
 
 
-def end_sim(ctx: MM1Trial):
-    cimba.hold(ctx.duration)
-    log_user(ctx, "--- Game Over ---")
-    ctx.arrival_process.stop()
-    ctx.service_process.stop()
-    ctx.queue.stop_recording()
-    ctx.simulation.clear()
-
-
-def run(seed: int = 13) -> MM1Trial:
-    cimba.logger_flags_off(cimba.LOGGER_INFO)
-    cimba.logger_flags_off(USERFLAG1)
-    trial = MM1Trial(seed=seed, trace=[])
-    with cimba.Simulation(seed=trial.seed) as sim:
-        trial.simulation = sim
-        trial.queue = cimba.Buffer("Queue")
-        trial.queue.start_recording()
-        trial.arrival_process = cimba.Process("Arrival", arrival, trial).start()
-        trial.service_process = cimba.Process("Service", service, trial).start()
-        cimba.Process("EndSimulation", end_sim, trial).start()
-        sim.execute()
-
-        trial.avg_queue_length = trial.queue.history().summary().mean
-
-    del trial.queue
-    del trial.arrival_process
-    del trial.service_process
-    del trial.simulation
-    return trial
+@model.collect
+def collect_stats(env: MM1):
+    env.avg_queue_length = sim.mean_level(env.queue)
 
 
 def main() -> None:
-    trial = run()
-    print(f"Avg {trial.avg_queue_length:.3f}")
+    cimba.logger_flags_off(cimba.LOGGER_INFO)
+    cimba.logger_flags_on(USERFLAG1)
+    exp = model.experiment(
+        utilization=[0.75],
+        replications=1,
+        duration=10.0,
+        warmup=0.0,
+        seed=44,
+    )
+    failures = exp.run()
+    if failures:
+        raise RuntimeError(f"{failures} trial(s) failed")
+    avg = float(exp["avg_queue_length"][0])
+    print(f"Average queue length with user logging enabled: {avg:.6f}")
+    cimba.logger_flags_off(USERFLAG1)
 
 
 if __name__ == "__main__":
