@@ -21,7 +21,7 @@ from typing import (TYPE_CHECKING, Any, TypedDict, TypeVar, get_type_hints,
                     overload)
 
 import numpy as np
-from numpy.typing import ArrayLike
+from numpy.typing import ArrayLike, NDArray
 
 from numba import carray, cfunc, from_dtype, njit, types
 from numba.extending import overload as _nb_overload
@@ -84,6 +84,13 @@ if TYPE_CHECKING:
     #: the same-named @model.process, created at runtime by sim.spawn()
     Spawnable = int
 
+    class Trace:
+        """Per-trial replay array, fed to experiment(); inside model code
+        ``Trace(env.<field>)`` returns the trial's trace as a float64
+        NumPy view."""
+
+        def __new__(cls, field: "Trace") -> "NDArray[np.float64]": ...
+
     class _Capacity:
         cap: int | str
         def __init__(self, cap: int | str) -> None: ...
@@ -113,6 +120,11 @@ else:
     class PQueues(_Decl): ...
     class Spawnable(_Decl): ...
 
+    class Trace(_Decl):
+        def __new__(cls, *args, **kwargs):
+            raise TypeError("Trace(field) views are only available "
+                            "inside compiled model code")
+
     class _Capacity:
         def __init__(self, cap):
             self.cap = cap
@@ -132,7 +144,20 @@ else:
                    Condition: "condition", Predicate: "predicate",
                    Event: "event",
                    Processes: "processes", PQueues: "pqueues",
-                   Spawnable: "spawnable"}
+                   Spawnable: "spawnable", Trace: "trace"}
+
+    _trace_data = ptr_caster(types.float64)
+
+    @_nb_overload(Trace)
+    def _trace_view(field):
+        # env.<field> is the [data_ptr, length] int64 pair in the record
+        if not isinstance(field, types.Array) or field.dtype != types.int64:
+            return None
+
+        def view(field):
+            return carray(_trace_data(field[0]), field[1])
+
+        return view
 
 
 def _class_declarations(cls: type) -> dict[str, Any]:
@@ -142,7 +167,7 @@ def _class_declarations(cls: type) -> dict[str, Any]:
                              "fstate": [], "resource": [],
                              "dataset": [], "condition": [],
                              "predicate": [], "event": [], "processes": [],
-                             "spawnable": [],
+                             "spawnable": [], "trace": [],
                              "queue": {}, "pool": {}, "store": {},
                              "pqueues": {}}
     for fname, hint in get_type_hints(cls).items():
@@ -310,6 +335,41 @@ def _as_capacity_dict(value: _Capacities) -> dict[str, int | str | None]:
     return {name: None for name in value}
 
 
+def _as_trace_rows(value: Any, n_trials: int, name: str) -> list[np.ndarray]:
+    """Normalize a Trace value into one contiguous float64 row per trial:
+    a 1-D array is shared by every trial, a 2-D array maps row i to trial
+    i, and a sequence of 1-D arrays gives ragged per-trial traces."""
+    if not isinstance(value, np.ndarray):
+        try:
+            value = np.asarray(value, dtype=np.float64)
+        except (ValueError, TypeError):
+            # Ragged: a sequence of per-trial 1-D arrays
+            rows = [np.ascontiguousarray(row, dtype=np.float64)
+                    for row in value]
+            if len(rows) != n_trials:
+                raise ValueError(
+                    f"trace '{name}': expected {n_trials} per-trial "
+                    f"arrays (one per trial), got {len(rows)}") from None
+            for row in rows:
+                if row.ndim != 1:
+                    raise ValueError(f"trace '{name}': per-trial arrays "
+                                     "must be 1-D") from None
+            return rows
+    arr = np.ascontiguousarray(value, dtype=np.float64)
+    if arr.ndim == 1:
+        return [arr] * n_trials
+    if arr.ndim == 2:
+        if arr.shape[0] != n_trials:
+            raise ValueError(
+                f"trace '{name}': expected {n_trials} rows (one per "
+                f"trial, design-point-major with replications innermost), "
+                f"got {arr.shape[0]}")
+        return list(arr)
+    raise ValueError(f"trace '{name}': expected a 1-D array (shared), a "
+                     "2-D array (row per trial), or a sequence of 1-D "
+                     "arrays")
+
+
 class Model:
     """A simulation model. Subclass it and declare the env fields as
     annotations (Param, Output, Queue, Resource, Pool, Store, Dataset,
@@ -350,6 +410,7 @@ class Model:
         self.conditions = decls["condition"] + list(conditions)
         self.state = decls["state"] + list(state)
         self.float_state: list[str] = decls["fstate"]
+        self.traces: list[str] = decls["trace"]
         self.pqueues: dict[str, int] = decls["pqueues"]
         self._predicate_fields: list[str] = decls["predicate"]
         self._event_fields: list[str] = decls["event"]
@@ -367,6 +428,7 @@ class Model:
                             ("condition", self.conditions),
                             ("state", self.state),
                             ("fstate", self.float_state),
+                            ("trace", self.traces),
                             ("pqueues", self.pqueues),
                             ("predicate", self._predicate_fields),
                             ("event", self._event_fields),
@@ -579,6 +641,7 @@ class Model:
         fields += [(h, "<i8") for h in self._entities]
         fields += [(s, "<i8") for s in self.state]
         fields += [(s, "<f8") for s in self.float_state]
+        fields += [(t, "<i8", (2,)) for t in self.traces]
         fields += [(f, "<i8", (n,)) for f, n in self.pqueues.items()]
         fields += [(p, "<i8") for p in self._predicate_fields]
         fields += [(f, "<i8") for _n, _fn, f in self._predicates
@@ -911,13 +974,22 @@ class Model:
                    seed: int | None = None,
                    **param_values: ArrayLike) -> "Experiment":
         """Build an experiment: the cross product of the swept parameter
-        values (scalars are held fixed), replicated with distinct seeds."""
+        values (scalars are held fixed), replicated with distinct seeds.
+
+        Trace fields take their replay data here as well: a 1-D array
+        shared by every trial, a 2-D array whose row i replays in trial i
+        (trial order is design-point-major with replications innermost),
+        or a sequence of 1-D arrays for ragged per-trial traces."""
         compiled = self._compile()
 
         missing = set(self.params) - set(param_values)
-        unknown = set(param_values) - set(self.params)
+        unknown = set(param_values) - set(self.params) - set(self.traces)
+        missing_traces = set(self.traces) - set(param_values)
         if missing:
             raise ValueError(f"missing parameter values: {sorted(missing)}")
+        if missing_traces:
+            raise ValueError(f"missing trace values: "
+                             f"{sorted(missing_traces)}")
         if unknown:
             raise ValueError(f"unknown parameters: {sorted(unknown)}")
         if replications < 1:
@@ -945,12 +1017,22 @@ class Model:
         for field, desc in compiled["spawns"].items():
             trials[field] = desc.ctypes.data
 
+        trace_rows: list[np.ndarray] = []
+        for tname in self.traces:
+            rows = _as_trace_rows(param_values[tname], n_trials, tname)
+            trace_rows += rows
+            field = trials[tname]
+            for i, row in enumerate(rows):
+                field[i, 0] = row.ctypes.data
+                field[i, 1] = row.size
+
         rng = np.random.default_rng(
             seed if seed is not None else int(lib.cmb_random_hwseed())
         )
         trials["seed"] = rng.integers(1, np.iinfo(np.uint64).max,
                                       size=n_trials, dtype=np.uint64)
-        return Experiment(self, trials, compiled["trial"].address)
+        return Experiment(self, trials, compiled["trial"].address,
+                          keepalive=trace_rows)
 
 
 class Experiment:
@@ -960,10 +1042,13 @@ class Experiment:
     #: Number of failed trials in the last run(), or None before it.
     failures: int | None
 
-    def __init__(self, model: Model, trials: np.ndarray, trial_addr: int):
+    def __init__(self, model: Model, trials: np.ndarray, trial_addr: int,
+                 keepalive: Sequence[np.ndarray] = ()):
         self.model = model
         self.trials = trials
         self._trial_addr = trial_addr
+        # Trace arrays whose data pointers live in the trial records
+        self._keepalive = tuple(keepalive)
         self.failures = None
 
     def run(self) -> int:

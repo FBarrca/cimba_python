@@ -60,6 +60,16 @@ Concept translation (cimba -> sim API):
                       sim.mean_in_use(), sim.pool_mean_in_use(),
                       sim.store_mean_length(), sim.pq_mean_length()
 
+Data-driven generators replay per-trial trajectories generated outside
+the simulation (bootstrap, fitted models, recorded traces): declare a
+``sim.Trace`` field and pass the data to experiment() -- a 1-D array
+shared by all trials, a 2-D array with one row per trial, or a list of
+1-D arrays. Inside a process body, ``values = sim.Trace(env.<field>)``
+returns the trial's trace as a plain float64 array supporting len(),
+indexing, slicing, and iteration. When a generator exhausts its trace
+it simply finishes; the trial still runs to its configured window, so
+traces should cover warmup + duration + cooldown.
+
 Mutable per-trial counters are declared with sim.State. Multi-copy
 processes may take a second argument to learn their index:
 `def machine(env, idx)`. The trial function, recording lifecycle, and all
@@ -85,13 +95,13 @@ from ._model import (Condition, Dataset, Env, Event, Experiment, FloatState,
                      Handle, Model, Output, Param, Pool, PQueues, Predicate,
                      ProcessDAG, ProcessDAGEdge, ProcessDAGNode, Processes,
                      Queue, Resource, Spawnable, State, Store, Struct,
-                     capacity, count)
+                     Trace, capacity, count)
 
 __all__ = [
     "Model", "Experiment", "Env", "Handle",
     "Param", "Output", "State", "FloatState", "Queue", "Resource", "Pool",
     "Store", "Dataset", "Condition", "Predicate", "Event", "Processes",
-    "PQueues", "Spawnable", "Struct", "capacity", "count",
+    "PQueues", "Spawnable", "Struct", "Trace", "capacity", "count",
     "ProcessDAG", "ProcessDAGNode", "ProcessDAGEdge",
     "SUCCESS", "PREEMPTED", "INTERRUPTED", "STOPPED", "CANCELLED", "TIMEOUT",
     "LOGGER_FATAL", "LOGGER_ERROR", "LOGGER_WARNING", "LOGGER_INFO",

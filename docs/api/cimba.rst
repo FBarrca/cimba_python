@@ -17,7 +17,8 @@ Model declarations:
 ``Model``, ``Experiment``, ``Env``, ``Handle``, ``Param``, ``Output``,
 ``State``, ``FloatState``, ``Queue``, ``Resource``, ``Pool``, ``Store``,
 ``Dataset``, ``Condition``, ``Predicate``, ``Event``, ``Processes``,
-``PQueues``, ``Spawnable``, ``Struct``, ``capacity()``, ``count()``.
+``PQueues``, ``Spawnable``, ``Struct``, ``Trace``, ``capacity()``,
+``count()``.
 
 Process DAGs:
 
@@ -45,6 +46,20 @@ process can receive its own field view as a final annotated parameter:
 copy index: ``def visitor(env, idx, view: Visitor)``. ``Visitor(handle)``
 returns a read/write view of another process's fields when model code already
 has that process handle.
+
+Data-driven traces:
+
+Declare ``demand: sim.Trace`` and pass per-trial replay data to
+``model.experiment(demand=...)``: a 1-D array is shared by every trial, a 2-D
+array maps row *i* to trial *i* (trial order is design-point-major with
+replications innermost), and a sequence of 1-D arrays gives ragged per-trial
+traces. Inside a process body, ``values = sim.Trace(env.demand)`` returns the
+trial's trace as a ``float64`` NumPy view supporting ``len()``, indexing,
+slicing, and iteration; treat it as read-only. A generator that exhausts its
+trace simply finishes -- the trial still runs to its configured recording
+window, so generate traces that cover ``warmup + duration + cooldown`` (or
+derive the experiment duration from the trace span), and consider recording
+``sim.now()`` into an ``Output`` when the loop ends as an exhaustion check.
 
 Process verbs:
 
