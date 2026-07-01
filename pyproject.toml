@@ -51,6 +51,9 @@ default-groups = ["dev", "build"]
 [tool.pytest.ini_options]
 # Never descend into the vendored C library submodule.
 testpaths = ["tests"]
+# Native stdout tests capture file descriptors explicitly; Python-level pytest
+# capture avoids anonymous temp-file failures on Windows-mounted WSL temp dirs.
+addopts = "--capture=sys"
 
 [tool.meson-python.args]
 # Compile only our extension (alias in meson.build), skipping upstream's
