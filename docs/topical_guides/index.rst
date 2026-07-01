@@ -9,6 +9,7 @@ already know the basic shape of a Cimba model and want firmer footing.
 
    simulations
    processes
+   process_graphs
    queues_resources
    monitoring
    random

@@ -28,6 +28,8 @@ from numba.extending import overload as _nb_overload
 
 from . import _bindings as _b
 from ._cimba import ffi, lib
+from ._graph import (ProcessDAG, ProcessDAGEdge, ProcessDAGNode,
+                     infer_process_dag)
 from ._intrinsics import addressof, ptr_caster
 
 #: Opaque native entity handle (process, queue, resource, ...) as stored
@@ -461,6 +463,33 @@ class Model:
                                          indexed, struct, injected,
                                          spawnable))
         return fn
+
+    def process_dag(self, *, validate: bool = True) -> ProcessDAG:
+        """Infer a resource-aware process graph from registered processes.
+
+        ``validate`` is accepted for API stability. Inferred graphs may contain
+        legitimate resource cycles, so acyclicity is checked only when callers
+        explicitly ask for :meth:`ProcessDAG.topological_order`.
+        """
+        entity_kinds: dict[str, str] = {}
+        entity_kinds.update({name: "queue" for name in self.queues})
+        entity_kinds.update({name: "resource" for name in self.resources})
+        entity_kinds.update({name: "pool" for name in self.pools})
+        entity_kinds.update({name: "store" for name in self.stores})
+        entity_kinds.update({name: "condition" for name in self.conditions})
+        entity_kinds.update({name: "state" for name in self.state})
+        entity_kinds.update({name: "fstate" for name in self.float_state})
+        entity_kinds.update({name: "pqueues" for name in self.pqueues})
+        event_fields = set(self._event_fields)
+        event_fields.update(field for _n, _fn, field, _d in self._events)
+        entity_kinds.update({name: "event" for name in event_fields})
+        return infer_process_dag(
+            self._processes,
+            entity_kinds=entity_kinds,
+            process_fields=self._process_fields,
+            spawnable_fields=self._spawnable_fields,
+            event_callbacks=((field, fn) for _n, fn, field, _d in self._events),
+        )
 
     def predicate(self, fn: _F) -> _F:
         """Register a condition predicate `def fn(env) -> bool`. Its

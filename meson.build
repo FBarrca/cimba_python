@@ -49,6 +49,7 @@ py.install_sources(
     'src/cimba/__init__.py',
     'src/cimba/sim.py',
     'src/cimba/_bindings.py',
+    'src/cimba/_graph.py',
     'src/cimba/_intrinsics.py',
     'src/cimba/_model.py',
     'src/cimba/py.typed',

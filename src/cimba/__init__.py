@@ -1,4 +1,4 @@
-"""Python bindings for Cimba, a discrete-event-simulation library."""
+"""Python bindings for Cimba, a discrete-event-simulation library.
 
 Use :mod:`cimba.sim` for the SimPy-flavored modeling API.
 """
@@ -12,11 +12,11 @@ __all__ = [
     "LOGGER_ERROR",
     "LOGGER_WARNING",
     "LOGGER_INFO",
-    "logger_flags_on",
     "logger_flags_off",
+    "logger_flags_on",
     "native_version",
-    "version",
     "use_threads",
+    "version",
     "__version__",
 ]
 

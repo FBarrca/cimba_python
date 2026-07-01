@@ -19,6 +19,24 @@ Model declarations:
 ``Dataset``, ``Condition``, ``Predicate``, ``Event``, ``Processes``,
 ``PQueues``, ``Spawnable``, ``Struct``, ``capacity()``, ``count()``.
 
+Process DAGs:
+
+Call ``model.process_dag()`` to infer a resource-aware graph from registered
+process bodies. The returned ``ProcessDAG`` contains ``ProcessDAGNode`` and
+``ProcessDAGEdge`` records for processes and model fields, and can render
+Mermaid or Graphviz DOT text. The inference follows direct ``sim`` calls,
+simple aliases, helper functions called with ``env``, spawnables, stores,
+priority queues, conditions, events, mutable state, and shared resources:
+
+.. code-block:: python
+
+   graph = model.process_dag()
+   print(graph.to_mermaid())
+   print(graph.to_dot())
+
+See :doc:`../topical_guides/process_graphs` for examples, inferred edge kinds,
+and limitations.
+
 Per-process fields:
 
 Declare a ``sim.Struct`` subclass with ``float`` and ``int`` annotations. A

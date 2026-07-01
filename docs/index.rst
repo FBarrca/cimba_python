@@ -11,5 +11,6 @@ Cimba Python documentation
     installation
     tutorial
     background
+    topical_guides/index
     missing_features
     api/cimba
