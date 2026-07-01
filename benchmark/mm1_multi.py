@@ -4,7 +4,7 @@ Benchmark: M/M/1 queue via the Python bindings (cimba.sim), multi-core.
 Runs NUM_TRIALS independent trials in parallel (one million jobs each) using
 cimba_run_experiment through Experiment.run().
 
-Usage: uv run python examples/benchmarks/mm1_multi.py
+Usage: uv run python benchmark/mm1_multi.py
 """
 
 import statistics

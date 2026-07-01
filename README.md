@@ -1,102 +1,112 @@
-# Python bindings for Cimba, a multithreaded discrete-event-simulation library.
+![Cimba logo](docs/static/cimba_logo_large.jpg)
 
-This package wraps the native Cimba library (vendored under `subprojects/cimba`)
-with two modules:
+# Cimba Python
 
-| Module | Role |
-| --- | --- |
-| `cimba.sim` | SimPy-flavored `Model` / `@process` API compiled via Numba |
+## Fast discrete event simulation for Python
 
-`cimba.native_version()` (alias `cimba.version()`) calls into the linked C
-library so you can confirm the toolchain works end to end.
+Cimba Python is a Python interface to [Cimba](https://github.com/ambonvik/cimba),
+a multithreaded discrete event simulation engine written in C and assembly.
 
-## How it's put together
+It is designed for Python simulation models that need more speed than pure
+Python event scheduling can usually provide. In the included M/M/1 benchmark,
+Cimba Python runs about **27-33x faster than SimPy** after its one-time Numba
+compile, while keeping model code in Python.
 
-| Piece | Where | Why |
-| --- | --- | --- |
-| Native C library | `subprojects/cimba/` (git submodule) | Meson subproject; pinned commit |
-| Build backend | `meson-python` (`pyproject.toml`) | Reuses upstream Meson/NASM/C23 build |
-| Build wiring | `meson.build` | cffi glue + native shims, `link_whole` libcimba |
-| Python package | `src/cimba/` | `sim` module + `_cimba` cffi extension |
-| Examples | `examples/` | M/G/1 demos and benchmarks |
-| Tests | `tests/` | Import, linkage, and a short sim-API smoke run |
+On an AMD Ryzen 7 9700X under WSL Ubuntu 24.04, averaged over 10 runs:
 
-The C library is built as a **static** archive and embedded into `_cimba`, so a
-wheel is self-contained (one `.so`, no external libcimba to ship).
+| Benchmark | SimPy | Cimba Python | Cimba C |
+| --- | ---: | ---: | ---: |
+| Single core, single trial | 2.612 s | 0.096 s | 0.083 s |
+| Multicore, 100 trials | 36.807 s | 1.131 s | 0.970 s |
 
-## Prerequisites
+The benchmark data and charts are in
+[`benchmark/AMD_Ryzen_7_9700X_WSL.ods`](benchmark/AMD_Ryzen_7_9700X_WSL.ods).
 
-`uv` provides Python 3.13, `meson`, `ninja`, `cffi`, and `meson-python`. You
-only need these on the system itself:
-
-| Tool | Why | Check |
-| --- | --- | --- |
-| **uv** | drives the build/test/run workflow | `uv --version` |
-| **git** | the C library is a submodule | `git --version` |
-| **C compiler** (gcc/clang) | compiles Cimba + the extension | `cc --version` |
-| **NASM** | Cimba's ziggurat RNG is in assembly | `nasm --version` |
-
-Cimba also links `pthreads` and `libm`, which are part of the C runtime. On
-Ubuntu/WSL the compiler + NASM come from: `sudo apt install build-essential nasm`.
-
-## Quick start (from a fresh clone)
+## Install
 
 ```bash
-git clone <repo-url> cimba_python
-cd cimba_python
-git submodule update --init --recursive    # pulls subprojects/cimba
-
-uv sync                       # creates .venv, installs deps, compiles cimba (~15s first run)
-uv run python -c "import cimba; print(cimba.native_version())"   # -> 3.0.0-beta
-uv run pytest                 # smoke tests
-uv run python examples/demo_mg1_simapi.py   # SimPy-flavored M/G/1 demo
+pip install cimba
 ```
 
-No manual `.venv` activation needed — `uv run` handles it. The first `uv sync`
-compiles the C library + cffi extension; later runs are incremental.
-
-## Build a wheel
+or with `uv`:
 
 ```bash
-uv build --wheel              # -> dist/cimba-<ver>-cp313-cp313-<platform>.whl
-# or `uv build` for wheel + sdist
+uv add cimba
 ```
 
-The wheel statically embeds Cimba, so it needs no system Cimba at runtime. Verify
-that in a throwaway environment (no project, no build tools):
+Python 3.13 or newer is required. The wheel embeds the Cimba C library, so you
+do not need to install Cimba separately.
 
-```bash
-uv run --no-project --isolated \
-  --with dist/cimba-*.whl \
-  python -c "import cimba; print(cimba.native_version())"   # -> 3.0.0-beta
+## What is it?
+
+Cimba Python gives Python models access to Cimba's native simulation engine
+through the `cimba.sim` API: processes, event queues, buffers, queues, stores,
+priority queues, resources, resource pools, conditions, timers, events, random
+distributions, logging helpers, and experiment tables.
+
+## What does the code look like?
+
+```python
+import cimba.sim as sim
+
+
+class MM1(sim.Model):
+    utilization: sim.Param
+    avg_queue_length: sim.Output
+    queue: sim.Queue
+
+
+model = MM1("MM1")
+
+
+@model.process
+def arrival(env: MM1):
+    while True:
+        sim.hold(sim.exponential(1.0 / env.utilization))
+        sim.put(env.queue, 1)
+
+
+@model.process
+def service(env: MM1):
+    while True:
+        sim.get(env.queue, 1)
+        sim.hold(sim.exponential(1.0))
+
+
+@model.collect
+def collect_stats(env: MM1):
+    env.avg_queue_length = sim.mean_level(env.queue)
+
+
+exp = model.experiment(
+    utilization=0.75,
+    replications=100,
+    duration=1000.0,
+    warmup=100.0,
+    seed=123,
+)
+exp.run()
+
+print(exp["avg_queue_length"].mean())
 ```
 
-## Troubleshooting
+More examples, tutorials, background notes, and the API reference are in the
+[documentation](https://fbarrca.github.io/cimba_python/).
 
-**`FileNotFoundError: .../build/cp313` on import.** `build/cp313/` is the
-editable dev install's build directory. If it's deleted, `uv sync` won't
-recompile (it reinstalls cimba from uv's cache), so the import breaks. Force a
-real rebuild:
+## Development
 
-```bash
-uv sync --reinstall-package cimba
-```
-
-Use the same command if a plain `uv sync` doesn't pick up changes to
-`meson.build` or `pyproject.toml`. (A genuine fresh clone with a cold uv cache
-builds correctly with plain `uv sync`; `uv build` wheels are unaffected.)
-
-## Updating the bundled C library
+From a fresh clone:
 
 ```bash
-cd subprojects/cimba
-git fetch && git checkout <commit-or-tag>
-cd ../..
-git add subprojects/cimba && git commit -m "Bump Cimba to <ref>"
+git submodule update --init --recursive
+uv sync
+uv run pytest
 ```
 
 ## License
 
-This wrapper is licensed under Apache-2.0 (see [`LICENSE`](LICENSE)). It bundles
-the Apache-2.0 licensed Cimba library in compiled form; see [`NOTICE`](NOTICE)
-and `subprojects/cimba/NOTICE` for attribution.
+Cimba Python is licensed under Apache-2.0. See [`LICENSE`](LICENSE) and
+[`NOTICE`](NOTICE).
+
+The bundled Cimba C library is also Apache-2.0 licensed. See
+`subprojects/cimba/NOTICE` for attribution.

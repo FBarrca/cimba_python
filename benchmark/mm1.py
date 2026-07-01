@@ -9,9 +9,10 @@ The trial ends when the event queue drains (the arrival process finishes after
 NUM_OBJECTS puts and the server starves). Lifecycle events are pushed past that
 point with a huge warmup so no recording overhead occurs during the run.
 
-Usage: uv run python examples/benchmarks/mm1.py
+Usage: uv run python benchmark/mm1.py
 """
 
+import statistics
 import time
 
 import cimba as cp
@@ -21,7 +22,7 @@ NUM_OBJECTS = 1_000_000
 ARRIVAL_RATE = 0.9
 SERVICE_RATE = 1.0
 EXPECTED_MEAN_SYSTEM_TIME = 1.0 / (SERVICE_RATE - ARRIVAL_RATE)
-REPS = 5
+REPS = 10
 
 class MM1Bench(sim.Model):
     arr_mean: sim.Param
@@ -87,8 +88,11 @@ def main() -> None:
               f"avg system time {avg:.4f}, "
               f"{NUM_OBJECTS / wall:,.0f} jobs/s")
 
+    avg_wall = statistics.mean(times)
     best = min(times)
-    print(f"\nbest of {REPS}: {best:.3f} s ({NUM_OBJECTS / best:,.0f} jobs/s)")
+    print(f"\naverage of {REPS}: {avg_wall:.3f} s "
+          f"({NUM_OBJECTS / avg_wall:,.0f} jobs/s)")
+    print(f"best of {REPS}: {best:.3f} s ({NUM_OBJECTS / best:,.0f} jobs/s)")
     print(f"last avg system time: {last_avg:.4f} "
           f"(expected {EXPECTED_MEAN_SYSTEM_TIME:.1f})")
 

@@ -333,7 +333,31 @@ The result is that Cimba Python is aimed at experiments with many replications,
 large parameter sweeps, and hot process loops where compiled execution and
 parallel trial execution matter.
 
-.. image:: ../subprojects/cimba/images/Speed_test_AMD_3970x.png
+The repository's ``benchmark/`` directory contains M/M/1 queue benchmarks for
+the Python API. The matching SimPy and native C benchmark sources are vendored
+with the C library in ``subprojects/cimba/benchmark/``.
+
+On an AMD Ryzen 7 9700X under WSL Ubuntu 24.04, averaged over 10 runs, with
+Cimba Python timed after its one-time Numba compile:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Benchmark
+     - SimPy
+     - Cimba Python
+     - Cimba C
+   * - Single core, single trial
+     - 2.612 s
+     - 0.096 s
+     - 0.083 s
+   * - Multicore, 100 trials
+     - 36.807 s
+     - 1.131 s
+     - 0.970 s
+
+The benchmark data and charts are in
+``benchmark/AMD_Ryzen_7_9700X_WSL.ods``.
 
 Benchmark numbers depend on the model, machine, Python version, and build
 configuration, so treat them as a reason to measure your model rather than a
