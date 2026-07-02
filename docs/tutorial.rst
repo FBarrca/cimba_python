@@ -608,6 +608,41 @@ Model callbacks can index the collection with
 generated offset arrays; experiment fields still use names such as
 ``attractions__queues`` and ``attractions__server_state``.
 
+Components can also contain other components. This is useful when a natural
+object has smaller named parts:
+
+.. code-block:: python
+
+    class RideQueues(sim.Component):
+        line: sim.PQueues = sim.count("queue_count")
+
+        def __init__(self, queue_count: int):
+            self.queue_count = queue_count
+
+
+    class RideServers(sim.Component):
+        served: sim.State
+
+
+    class Attraction(sim.Component):
+        queues: RideQueues
+        servers: RideServers
+
+        def __init__(self, queue_count: int, server_count: int):
+            self.queues = RideQueues(queue_count)
+            self.servers = RideServers()
+            self.server_count = server_count
+
+        @sim.process(copies="server_count")
+        def server(self, env, idx):
+            q = self.queues.line[idx % self.queues.queue_count]
+            self.servers.served += 1
+            # serve one visitor from q ...
+
+Nested fields use the same flattened public naming convention:
+``env.attractions[i].queues.line[j]`` is stored under
+``attractions__queues__line``.
+
 .. code-block:: python
 
     def run_mm1_trial(

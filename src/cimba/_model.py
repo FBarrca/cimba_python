@@ -21,7 +21,7 @@ import keyword
 import linecache
 import textwrap
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import (TYPE_CHECKING, Any, TypedDict, TypeVar, get_args,
                     get_origin, get_type_hints, overload)
 
@@ -223,6 +223,16 @@ class _ComponentDecl:
     template: Component
     decls: dict[str, Any]
     field_map: dict[str, str]
+    local_name: str = ""
+    instances: tuple[Component, ...] = ()
+    process_names: tuple[str, ...] = ()
+    display_name: str = ""
+    item_display_name: str = ""
+    direct_field_map: dict[str, str] = field(default_factory=dict)
+    constants: dict[str, tuple[Any, ...]] = field(default_factory=dict)
+    pqueue_counts: dict[str, tuple[int, ...]] = field(default_factory=dict)
+    pqueue_offsets: dict[str, tuple[int, ...]] = field(default_factory=dict)
+    children: tuple["_AnyComponentDecl", ...] = ()
 
 
 @dataclass(frozen=True)
@@ -236,6 +246,17 @@ class _ComponentCollectionDecl:
     constants: dict[str, tuple[Any, ...]]
     pqueue_counts: dict[str, tuple[int, ...]]
     pqueue_offsets: dict[str, tuple[int, ...]]
+    local_name: str = ""
+    process_names: tuple[str, ...] = ()
+    display_name: str = ""
+    item_display_name: str = ""
+    direct_field_map: dict[str, str] = field(default_factory=dict)
+    parent_offsets: tuple[int, ...] = ()
+    parent_lengths: tuple[int, ...] = ()
+    children: tuple["_AnyComponentDecl", ...] = ()
+
+
+_AnyComponentDecl = _ComponentDecl | _ComponentCollectionDecl
 
 
 def _empty_declarations() -> dict[str, Any]:
@@ -292,11 +313,6 @@ def _field_declarations(
 
 def _component_declarations(cls: type[Component]) -> dict[str, Any]:
     decls = _field_declarations(cls, allow_symbolic_pqueues=True)
-    for fname, hint in get_type_hints(cls).items():
-        if _is_component_class(hint) or _component_collection_class(hint):
-            raise ValueError(
-                f"component field '{fname}': nested Components are not "
-                "supported yet")
     for kind in ("predicate", "event", "processes", "spawnable"):
         if decls[kind]:
             raise ValueError(
@@ -326,7 +342,7 @@ def _component_field_map(name: str, decls: dict[str, Any]) -> dict[str, str]:
     return {field: f"{name}__{field}" for field in fields}
 
 
-def _component_collection_constants(
+def _component_constants(
     items: Sequence[Component],
     field_map: Mapping[str, str],
 ) -> dict[str, tuple[Any, ...]]:
@@ -345,9 +361,9 @@ def _component_collection_constants(
     return constants
 
 
-def _resolve_component_collection_pqueues(
-    collection_name: str,
-    length: int,
+def _resolve_component_pqueues(
+    component_name: str,
+    instance_count: int,
     decls: Mapping[str, Any],
     constants: Mapping[str, tuple[Any, ...]],
 ) -> tuple[dict[str, tuple[int, ...]], dict[str, tuple[int, ...]]]:
@@ -355,17 +371,17 @@ def _resolve_component_collection_pqueues(
     offsets_by_field: dict[str, tuple[int, ...]] = {}
     for field, count_decl in decls["pqueues"].items():
         if isinstance(count_decl, int):
-            counts = (count_decl,) * length
+            counts = (count_decl,) * instance_count
         else:
             values = constants.get(count_decl)
             if values is None:
                 raise ValueError(
-                    f"component collection '{collection_name}' field "
+                    f"component '{component_name}' field "
                     f"'{field}' uses PQueues count '{count_decl}', which "
                     "must name an int constant on every item")
             if not all(type(value) is int and value >= 1 for value in values):
                 raise ValueError(
-                    f"component collection '{collection_name}' field "
+                    f"component '{component_name}' field "
                     f"'{field}' uses PQueues count '{count_decl}', which "
                     "must be a positive int on every item")
             counts = values
@@ -397,23 +413,32 @@ def _rewrite_component_capacity(
     return cap
 
 
-def _validate_component_collection_declarations(
-    collection_name: str,
+def _validate_component_instance_declarations(
+    component_name: str,
     decls: dict[str, Any],
+    *,
+    instance_count: int,
+    collection: bool,
 ) -> None:
-    for kind in ("param", "trace", "predicate", "event", "processes",
-                 "spawnable"):
+    if collection or instance_count > 1:
+        for kind in ("param", "trace"):
+            if decls[kind]:
+                raise ValueError(
+                    f"component collection '{component_name}' declares "
+                    f"{kind} fields, which are not supported yet")
+    for kind in ("predicate", "event", "processes", "spawnable"):
         if decls[kind]:
             raise ValueError(
-                f"component collection '{collection_name}' declares {kind} "
-                "fields, which are not supported yet")
-    for kind in ("queue", "pool", "store"):
-        for field, cap in decls[kind].items():
-            if isinstance(cap, str):
-                raise ValueError(
-                    f"component collection '{collection_name}' field "
-                    f"'{field}' uses symbolic capacity '{cap}', which is "
-                    "not supported yet")
+                f"component '{component_name}' declares {kind} fields, which "
+                "are not supported yet")
+    if collection or instance_count > 1:
+        for kind in ("queue", "pool", "store"):
+            for field, cap in decls[kind].items():
+                if isinstance(cap, str):
+                    raise ValueError(
+                        f"component collection '{component_name}' field "
+                        f"'{field}' uses symbolic capacity '{cap}', which is "
+                        "not supported yet")
 
 
 def _declarations_contain(decls: dict[str, Any], name: str) -> bool:
@@ -433,47 +458,213 @@ def _flatten_component_declarations(
     component_name: str,
     decls: dict[str, Any],
     field_map: dict[str, str],
-) -> None:
-    for flat_name in field_map.values():
-        if _declarations_contain(target, flat_name):
-            raise ValueError(f"duplicate field name '{flat_name}'")
-    for kind in ("param", "output", "state", "fstate", "resource",
-                 "dataset", "condition", "trace"):
-        target[kind].extend(field_map[name] for name in decls[kind])
-    for kind in ("queue", "pool", "store"):
-        for name, cap in decls[kind].items():
-            target[kind][field_map[name]] = _rewrite_component_capacity(
-                component_name, name, cap, decls, field_map)
-    for name, count_value in decls["pqueues"].items():
-        if isinstance(count_value, str):
-            raise ValueError(
-                f"component '{component_name}' field '{name}' uses symbolic "
-                "PQueues count, which is only supported in component lists")
-        target["pqueues"][field_map[name]] = count_value
-
-
-def _flatten_component_collection_declarations(
-    target: dict[str, Any],
-    collection_name: str,
-    decls: dict[str, Any],
-    field_map: dict[str, str],
-    length: int,
+    instance_count: int,
     pqueue_counts: Mapping[str, tuple[int, ...]],
 ) -> None:
     for flat_name in field_map.values():
         if _declarations_contain(target, flat_name):
             raise ValueError(f"duplicate field name '{flat_name}'")
+    for kind in ("param", "trace"):
+        target[kind].extend(field_map[name] for name in decls[kind])
     for kind in ("output", "state", "fstate", "resource", "dataset",
                  "condition"):
         target[kind].extend(field_map[name] for name in decls[kind])
-        for name in decls[kind]:
-            target["field_shapes"][field_map[name]] = (length,)
+        if instance_count > 1:
+            for name in decls[kind]:
+                target["field_shapes"][field_map[name]] = (instance_count,)
     for kind in ("queue", "pool", "store"):
         for name, cap in decls[kind].items():
-            target[kind][field_map[name]] = cap
-            target["field_shapes"][field_map[name]] = (length,)
+            target[kind][field_map[name]] = _rewrite_component_capacity(
+                component_name, name, cap, decls, field_map)
+            if instance_count > 1:
+                target["field_shapes"][field_map[name]] = (instance_count,)
     for name, counts in pqueue_counts.items():
         target["pqueues"][field_map[name]] = sum(counts)
+
+
+def _component_child_default(
+    component: Component,
+    field_name: str,
+    child_cls: type[Component],
+    component_name: str,
+) -> Component:
+    child = getattr(component, field_name, _MISSING)
+    if child is _MISSING:
+        raise ValueError(
+            f"component field '{component_name}.{field_name}' needs a "
+            f"{child_cls.__name__} instance default")
+    if not isinstance(child, child_cls):
+        raise TypeError(
+            f"component field '{component_name}.{field_name}' default must "
+            f"be a {child_cls.__name__} instance")
+    return child
+
+
+def _component_collection_default(
+    component: Component,
+    field_name: str,
+    child_cls: type[Component],
+    component_name: str,
+) -> tuple[Component, ...]:
+    value = getattr(component, field_name, _MISSING)
+    if value is _MISSING:
+        raise ValueError(
+            f"component collection '{component_name}.{field_name}' needs a "
+            f"non-empty list or tuple of {child_cls.__name__} instances")
+    if not isinstance(value, (list, tuple)) or not value:
+        raise ValueError(
+            f"component collection '{component_name}.{field_name}' needs a "
+            f"non-empty list or tuple of {child_cls.__name__} instances")
+    templates = tuple(value)
+    for item in templates:
+        if not isinstance(item, child_cls):
+            raise TypeError(
+                f"component collection '{component_name}.{field_name}' "
+                f"items must be {child_cls.__name__} instances")
+    return templates
+
+
+def _component_children_by_name(
+    decl: _AnyComponentDecl,
+) -> dict[str, _AnyComponentDecl]:
+    return {child.local_name: child for child in decl.children}
+
+
+def _walk_component_declarations(
+    decls: Iterable[_AnyComponentDecl],
+) -> Iterable[_AnyComponentDecl]:
+    for decl in decls:
+        yield decl
+        yield from _walk_component_declarations(decl.children)
+
+
+def _build_component_declaration(
+    *,
+    local_name: str,
+    name: str,
+    cls: type[Component],
+    templates: tuple[Component, ...],
+    process_names: tuple[str, ...],
+    display_name: str,
+    item_display_name: str,
+    target: dict[str, Any],
+    collection: bool,
+    parent_offsets: tuple[int, ...] = (),
+    parent_lengths: tuple[int, ...] = (),
+) -> _AnyComponentDecl:
+    decls = _component_declarations(cls)
+    direct_field_map = _component_field_map(name, decls)
+    instance_count = len(templates)
+    _validate_component_instance_declarations(
+        name, decls, instance_count=instance_count, collection=collection)
+    constants = _component_constants(templates, direct_field_map)
+    pqueue_counts, pqueue_offsets = _resolve_component_pqueues(
+        name, instance_count, decls, constants)
+    _flatten_component_declarations(
+        target, name, decls, direct_field_map, instance_count, pqueue_counts)
+
+    children: list[_AnyComponentDecl] = []
+    for fname, hint in get_type_hints(cls).items():
+        if _is_component_class(hint):
+            child_templates = tuple(
+                _component_child_default(template, fname, hint, name)
+                for template in templates
+            )
+            child_process_names = tuple(
+                f"{process_name}__{fname}" for process_name in process_names
+            )
+            children.append(
+                _build_component_declaration(
+                    local_name=fname,
+                    name=f"{name}__{fname}",
+                    cls=hint,
+                    templates=child_templates,
+                    process_names=child_process_names,
+                    display_name=f"{item_display_name}.{fname}",
+                    item_display_name=f"{item_display_name}.{fname}",
+                    target=target,
+                    collection=False,
+                )
+            )
+            continue
+
+        collection_cls = _component_collection_class(hint)
+        if collection_cls is None:
+            continue
+        child_templates_list: list[Component] = []
+        child_process_names: list[str] = []
+        offsets: list[int] = []
+        lengths: list[int] = []
+        for parent_index, template in enumerate(templates):
+            items = _component_collection_default(
+                template, fname, collection_cls, name)
+            offsets.append(len(child_templates_list))
+            lengths.append(len(items))
+            child_templates_list.extend(items)
+            parent_process_name = process_names[parent_index]
+            child_process_names.extend(
+                f"{parent_process_name}__{fname}__{index}"
+                for index in range(len(items))
+            )
+        child_display = f"{item_display_name}.{fname}"
+        children.append(
+            _build_component_declaration(
+                local_name=fname,
+                name=f"{name}__{fname}",
+                cls=collection_cls,
+                templates=tuple(child_templates_list),
+                process_names=tuple(child_process_names),
+                display_name=child_display,
+                item_display_name=f"{child_display}[]",
+                target=target,
+                collection=True,
+                parent_offsets=tuple(offsets),
+                parent_lengths=tuple(lengths),
+            )
+        )
+
+    field_map = dict(direct_field_map)
+    for child in children:
+        for field, flat_name in child.field_map.items():
+            field_map[f"{child.local_name}__{field}"] = flat_name
+
+    if collection:
+        return _ComponentCollectionDecl(
+            name=name,
+            cls=cls,
+            templates=templates,
+            decls=decls,
+            field_map=field_map,
+            length=instance_count,
+            constants=constants,
+            pqueue_counts=pqueue_counts,
+            pqueue_offsets=pqueue_offsets,
+            local_name=local_name,
+            process_names=process_names,
+            display_name=display_name,
+            item_display_name=item_display_name,
+            direct_field_map=direct_field_map,
+            parent_offsets=parent_offsets,
+            parent_lengths=parent_lengths,
+            children=tuple(children),
+        )
+    return _ComponentDecl(
+        name=name,
+        cls=cls,
+        template=templates[0],
+        decls=decls,
+        field_map=field_map,
+        local_name=local_name,
+        instances=templates,
+        process_names=process_names,
+        display_name=display_name,
+        item_display_name=item_display_name,
+        direct_field_map=direct_field_map,
+        constants=constants,
+        pqueue_counts=pqueue_counts,
+        pqueue_offsets=pqueue_offsets,
+        children=tuple(children),
+    )
 
 
 def _class_declarations(cls: type) -> dict[str, Any]:
@@ -491,14 +682,18 @@ def _class_declarations(cls: type) -> dict[str, Any]:
                 raise TypeError(
                     f"component field '{fname}' default must be a "
                     f"{hint.__name__} instance")
-            component_decls = _component_declarations(hint)
-            field_map = _component_field_map(fname, component_decls)
-            _flatten_component_declarations(decls, fname, component_decls,
-                                            field_map)
-            decls["components"].append(
-                _ComponentDecl(fname, hint, template, component_decls,
-                               field_map)
+            component_decl = _build_component_declaration(
+                local_name=fname,
+                name=fname,
+                cls=hint,
+                templates=(template,),
+                process_names=(fname,),
+                display_name=fname,
+                item_display_name=fname,
+                target=decls,
+                collection=False,
             )
+            decls["components"].append(component_decl)
             continue
 
         collection_cls = _component_collection_class(hint)
@@ -519,22 +714,21 @@ def _class_declarations(cls: type) -> dict[str, Any]:
                 raise TypeError(
                     f"component collection '{fname}' items must be "
                     f"{collection_cls.__name__} instances")
-        component_decls = _component_declarations(collection_cls)
-        _validate_component_collection_declarations(fname, component_decls)
-        field_map = _component_field_map(fname, component_decls)
-        constants = _component_collection_constants(templates, field_map)
-        pqueue_counts, pqueue_offsets = \
-            _resolve_component_collection_pqueues(
-                fname, len(templates), component_decls, constants)
-        _flatten_component_collection_declarations(
-            decls, fname, component_decls, field_map, len(templates),
-            pqueue_counts)
-        decls["component_collections"].append(
-            _ComponentCollectionDecl(fname, collection_cls, templates,
-                                     component_decls, field_map,
-                                     len(templates), constants,
-                                     pqueue_counts, pqueue_offsets)
+        component_decl = _build_component_declaration(
+            local_name=fname,
+            name=fname,
+            cls=collection_cls,
+            templates=templates,
+            process_names=tuple(f"{fname}__{index}"
+                                for index in range(len(templates))),
+            display_name=fname,
+            item_display_name=f"{fname}[]",
+            target=decls,
+            collection=True,
+            parent_offsets=(0,),
+            parent_lengths=(len(templates),),
         )
+        decls["component_collections"].append(component_decl)
     return decls
 
 _STANDARD_FIELDS = [
@@ -762,6 +956,10 @@ def _collection_pqueue_offsets_symbol(collection: str, field: str) -> str:
     return f"_CIMBA_PQOFF_{collection}__{field}"
 
 
+def _component_offsets_symbol(component: str) -> str:
+    return f"_CIMBA_OFF_{component}"
+
+
 def _env_attr(env_name: str, field: str, ctx: ast.expr_context) -> ast.Attribute:
     return ast.Attribute(
         value=ast.Name(id=env_name, ctx=ast.Load()),
@@ -783,80 +981,314 @@ def _add(left: ast.expr, right: ast.expr) -> ast.BinOp:
     return ast.BinOp(left=left, op=ast.Add(), right=right)
 
 
-class _ComponentMethodLowerer(ast.NodeTransformer):
-    def __init__(self, *, component_name: str, receiver_name: str,
-                 env_name: str, field_map: Mapping[str, str],
-                 constants: Mapping[str, Any],
-                 item_index: int | None = None,
-                 pqueue_offsets: Mapping[str, tuple[int, ...]] | None = None):
-        self.component_name = component_name
-        self.receiver_name = receiver_name
+def _component_instance_count(decl: _AnyComponentDecl) -> int:
+    if isinstance(decl, _ComponentCollectionDecl):
+        return len(decl.templates)
+    return len(decl.instances)
+
+
+@dataclass(frozen=True)
+class _ComponentAccess:
+    decl: _AnyComponentDecl
+    index: ast.expr | None
+    text: str
+
+
+@dataclass(frozen=True)
+class _ComponentFieldAccess:
+    decl: _AnyComponentDecl
+    index: ast.expr | None
+    field: str
+    text: str
+
+
+class _ComponentPathLowerer(ast.NodeTransformer):
+    def __init__(self, *, env_name: str):
         self.env_name = env_name
-        self.field_map = field_map
-        self.constants = constants
-        self.item_index = item_index
-        self.pqueue_offsets = pqueue_offsets or {}
+
+    def _root_namespace_ref(self, node: ast.AST) -> _ComponentAccess | None:
+        return None
+
+    def _root_collection_ref(self, node: ast.AST) -> _ComponentAccess | None:
+        return None
+
+    def _namespace_ref(self, node: ast.AST) -> _ComponentAccess | None:
+        root = self._root_namespace_ref(node)
+        if root is not None:
+            return root
+
+        if isinstance(node, ast.Subscript):
+            collection = self._collection_ref(node.value)
+            if collection is None:
+                return None
+            index = self._collection_item_index(
+                collection.decl, collection.index, node.slice)
+            return _ComponentAccess(
+                collection.decl, index, f"{collection.text}[...]")
+
+        if isinstance(node, ast.Attribute):
+            parent = self._namespace_ref(node.value)
+            if parent is None:
+                return None
+            child = _component_children_by_name(parent.decl).get(node.attr)
+            if child is None or isinstance(child, _ComponentCollectionDecl):
+                return None
+            index = (parent.index
+                     if _component_instance_count(child) > 1 else None)
+            return _ComponentAccess(
+                child, index, f"{parent.text}.{node.attr}")
+
+        return None
+
+    def _collection_ref(self, node: ast.AST) -> _ComponentAccess | None:
+        root = self._root_collection_ref(node)
+        if root is not None:
+            return root
+
+        if isinstance(node, ast.Attribute):
+            parent = self._namespace_ref(node.value)
+            if parent is None:
+                return None
+            child = _component_children_by_name(parent.decl).get(node.attr)
+            if not isinstance(child, _ComponentCollectionDecl):
+                return None
+            return _ComponentAccess(
+                child, parent.index, f"{parent.text}.{node.attr}")
+
+        return None
+
+    def _field_ref(self, node: ast.AST) -> _ComponentFieldAccess | None:
+        if not isinstance(node, ast.Attribute):
+            return None
+        namespace = self._namespace_ref(node.value)
+        if namespace is None:
+            return None
+        field_name = node.attr
+        if field_name in namespace.decl.direct_field_map:
+            return _ComponentFieldAccess(
+                namespace.decl,
+                namespace.index,
+                field_name,
+                f"{namespace.text}.{field_name}",
+            )
+        if field_name in namespace.decl.constants:
+            return _ComponentFieldAccess(
+                namespace.decl,
+                namespace.index,
+                field_name,
+                f"{namespace.text}.{field_name}",
+            )
+        if field_name in _component_children_by_name(namespace.decl):
+            return None
+        self._raise_unknown_field(namespace, field_name)
+
+    def _collection_item_index(
+        self,
+        decl: _ComponentCollectionDecl,
+        parent_index: ast.expr | None,
+        item_index: ast.expr,
+    ) -> ast.expr:
+        index = self.visit(copy.deepcopy(item_index))
+        if not isinstance(index, ast.expr):
+            raise TypeError("component collection index did not lower "
+                            "to an expression")
+        if len(decl.parent_offsets) <= 1:
+            offset_value = decl.parent_offsets[0] if decl.parent_offsets else 0
+            if offset_value == 0:
+                return index
+            return _add(ast.Constant(offset_value), index)
+        if parent_index is None:
+            raise TypeError("nested component collection has no parent index")
+        if (isinstance(parent_index, ast.Constant)
+                and type(parent_index.value) is int):
+            offset_value = decl.parent_offsets[parent_index.value]
+            if offset_value == 0:
+                return index
+            return _add(ast.Constant(offset_value), index)
+        offset = _subscript(
+            ast.Name(id=_component_offsets_symbol(decl.name), ctx=ast.Load()),
+            parent_index,
+            ast.Load(),
+        )
+        return _add(offset, index)
+
+    def _field_target(
+        self,
+        access: _ComponentFieldAccess,
+        ctx: ast.expr_context,
+    ) -> ast.expr:
+        flat_name = access.decl.direct_field_map[access.field]
+        target = _env_attr(self.env_name, flat_name, ctx)
+        if _component_instance_count(access.decl) <= 1:
+            return target
+        if access.index is None:
+            raise TypeError("component field has no instance index")
+        return _subscript(target, access.index, ctx)
+
+    def _constant_expr(self, access: _ComponentFieldAccess) -> ast.expr:
+        values = access.decl.constants[access.field]
+        if len(values) == 1:
+            return ast.Constant(values[0])
+        if (isinstance(access.index, ast.Constant)
+                and type(access.index.value) is int):
+            return ast.Constant(values[access.index.value])
+        if access.index is None:
+            raise TypeError("component constant has no instance index")
+        return _subscript(
+            ast.Name(id=_collection_const_symbol(access.decl.name,
+                                                 access.field),
+                     ctx=ast.Load()),
+            access.index,
+            ast.Load(),
+        )
+
+    def _pqueue_offset_expr(self, access: _ComponentFieldAccess) -> ast.expr:
+        offsets = access.decl.pqueue_offsets[access.field]
+        if len(offsets) == 1:
+            return ast.Constant(offsets[0])
+        if (isinstance(access.index, ast.Constant)
+                and type(access.index.value) is int):
+            return ast.Constant(offsets[access.index.value])
+        if access.index is None:
+            raise TypeError("component PQueues field has no instance index")
+        return _subscript(
+            ast.Name(id=_collection_pqueue_offsets_symbol(access.decl.name,
+                                                          access.field),
+                     ctx=ast.Load()),
+            access.index,
+            ast.Load(),
+        )
+
+    def _raise_unknown_field(
+        self,
+        namespace: _ComponentAccess,
+        field_name: str,
+    ) -> None:
+        kind = ("component collection field"
+                if isinstance(namespace.decl, _ComponentCollectionDecl)
+                else "component field")
+        raise ValueError(
+            f"{self._callback_label()} references unknown {kind} "
+            f"{namespace.text}.{field_name}")
+
+    def _callback_label(self) -> str:
+        raise NotImplementedError
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         if (isinstance(node.func, ast.Name) and node.func.id == "getattr"
-                and node.args and self._is_receiver(node.args[0])):
-            raise ValueError(
-                f"component '{self.component_name}' process uses dynamic "
-                "getattr(self, ...), which is not supported")
-        if (isinstance(node.func, ast.Attribute)
-                and self._is_receiver(node.func.value)):
-            raise ValueError(
-                f"component '{self.component_name}' process cannot call "
-                f"self.{node.func.attr}() inside compiled code")
+                and node.args):
+            target = (self._namespace_ref(node.args[0])
+                      or self._collection_ref(node.args[0]))
+            if target is not None:
+                raise ValueError(
+                    f"{self._callback_label()} uses dynamic "
+                    f"getattr({target.text}, ...), which is not supported")
+        if isinstance(node.func, ast.Attribute):
+            target = (self._namespace_ref(node.func.value)
+                      or self._collection_ref(node.func.value))
+            if target is not None:
+                raise ValueError(
+                    f"{self._callback_label()} cannot call "
+                    f"{target.text}.{node.func.attr}() inside compiled code")
         return self.generic_visit(node)
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
-        if (self.item_index is not None
-                and isinstance(node.value, ast.Attribute)
-                and self._is_receiver(node.value.value)
-                and node.value.attr in self.pqueue_offsets):
-            field = node.value.attr
-            index = self.visit(copy.deepcopy(node.slice))
-            if not isinstance(index, ast.expr):
+        access = self._field_ref(node.value)
+        if access is not None and access.field in access.decl.decls["pqueues"]:
+            queue_index = self.visit(copy.deepcopy(node.slice))
+            if not isinstance(queue_index, ast.expr):
                 raise TypeError("component PQueues index did not lower "
                                 "to an expression")
-            flat = _env_attr(self.env_name, self.field_map[field], ast.Load())
-            offset = ast.Constant(self.pqueue_offsets[field][self.item_index])
-            return ast.copy_location(
-                _subscript(flat, _add(offset, index), node.ctx),
-                node,
+            offset = self._pqueue_offset_expr(access)
+            if isinstance(offset, ast.Constant) and offset.value == 0:
+                index = queue_index
+            else:
+                index = _add(offset, queue_index)
+            flat = _env_attr(
+                self.env_name,
+                access.decl.direct_field_map[access.field],
+                ast.Load(),
             )
+            return ast.copy_location(_subscript(flat, index, node.ctx), node)
+
+        collection = self._collection_ref(node.value)
+        if collection is not None:
+            raise ValueError(
+                f"{self._callback_label()} uses {collection.text}[...] "
+                "directly; access one of its fields")
         return self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
-        if not self._is_receiver(node.value):
-            return self.generic_visit(node)
-        name = node.attr
-        if name in self.field_map:
-            if self.item_index is not None and name in self.pqueue_offsets:
+        nested = self._field_ref(node.value)
+        if nested is not None:
+            raise ValueError(
+                f"{self._callback_label()} cannot access attributes below "
+                f"component field {nested.text}")
+
+        access = self._field_ref(node)
+        if access is not None:
+            if access.field in access.decl.decls["pqueues"]:
                 raise ValueError(
-                    f"component '{self.component_name}' process must index "
-                    f"self.{name} before using it")
-            target = _env_attr(self.env_name, self.field_map[name], node.ctx)
-            if self.item_index is not None:
-                return ast.copy_location(
-                    _subscript(target, ast.Constant(self.item_index),
-                               node.ctx),
-                    node,
-                )
-            return ast.copy_location(
-                target,
-                node,
-            )
-        if name in self.constants:
-            if not isinstance(node.ctx, ast.Load):
-                raise ValueError(
-                    f"component '{self.component_name}' process cannot "
-                    f"assign to constant self.{name}")
-            return ast.copy_location(ast.Constant(self.constants[name]), node)
+                    f"{self._callback_label()} must index {access.text} "
+                    "before using it")
+            if access.field in access.decl.constants:
+                if not isinstance(node.ctx, ast.Load):
+                    raise ValueError(
+                        f"{self._callback_label()} cannot assign to "
+                        f"constant {access.text}")
+                return ast.copy_location(self._constant_expr(access), node)
+            return ast.copy_location(self._field_target(access, node.ctx),
+                                     node)
+
+        namespace = self._namespace_ref(node)
+        if namespace is not None:
+            raise ValueError(
+                f"{self._callback_label()} cannot use {namespace.text} "
+                "directly; access one of its fields")
+        collection = self._collection_ref(node)
+        if collection is not None:
+            raise ValueError(
+                f"{self._callback_label()} cannot use {collection.text} "
+                "directly; index it and access one of its fields")
+        return self.generic_visit(node)
+
+
+class _ComponentMethodLowerer(_ComponentPathLowerer):
+    def __init__(
+        self,
+        *,
+        component_name: str,
+        receiver_name: str,
+        env_name: str,
+        component_decl: _AnyComponentDecl,
+        instance_index: int,
+    ):
+        super().__init__(env_name=env_name)
+        self.component_name = component_name
+        self.receiver_name = receiver_name
+        self.component_decl = component_decl
+        self.instance_index = ast.Constant(instance_index)
+
+    def _root_namespace_ref(self, node: ast.AST) -> _ComponentAccess | None:
+        if isinstance(node, ast.Name) and node.id == self.receiver_name:
+            index = (self.instance_index
+                     if _component_instance_count(self.component_decl) > 1
+                     else None)
+            return _ComponentAccess(self.component_decl, index,
+                                    self.receiver_name)
+        return None
+
+    def _callback_label(self) -> str:
+        return f"component '{self.component_name}' process"
+
+    def _raise_unknown_field(
+        self,
+        namespace: _ComponentAccess,
+        field_name: str,
+    ) -> None:
         raise ValueError(
             f"component '{self.component_name}' process references "
-            f"unsupported self.{name}")
+            f"unsupported {namespace.text}.{field_name}")
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
         if node.id == self.receiver_name:
@@ -864,9 +1296,6 @@ class _ComponentMethodLowerer(ast.NodeTransformer):
                 f"component '{self.component_name}' process cannot use "
                 "self directly inside compiled code")
         return node
-
-    def _is_receiver(self, node: ast.AST) -> bool:
-        return isinstance(node, ast.Name) and node.id == self.receiver_name
 
 
 def _closure_namespace(fn: Callable[..., Any]) -> dict[str, Any]:
@@ -895,12 +1324,10 @@ def _component_method_source(fn: Callable[..., Any]) -> ast.FunctionDef:
 def _lower_component_process(
     component_name: str,
     component: Component,
-    field_map: Mapping[str, str],
+    component_decl: _AnyComponentDecl,
+    instance_index: int,
     method_name: str,
     method: Callable[..., Any],
-    *,
-    item_index: int | None = None,
-    pqueue_offsets: Mapping[str, tuple[int, ...]] | None = None,
 ) -> Callable[..., Any]:
     node = copy.deepcopy(_component_method_source(method))
     args = node.args
@@ -917,14 +1344,6 @@ def _lower_component_process(
     receiver_name = args.args[0].arg
     env_name = args.args[1].arg
     process_name = f"{component_name}__{method_name}"
-    constants = {
-        name: value
-        for name, value in vars(component).items()
-        if not name.startswith("_")
-        and name not in field_map
-        and _primitive_constant(value)
-    }
-
     node.name = process_name
     node.decorator_list = []
     node.returns = None
@@ -938,10 +1357,8 @@ def _lower_component_process(
         component_name=component_name,
         receiver_name=receiver_name,
         env_name=env_name,
-        field_map=field_map,
-        constants=constants,
-        item_index=item_index,
-        pqueue_offsets=pqueue_offsets,
+        component_decl=component_decl,
+        instance_index=instance_index,
     )
     lowered = lowerer.visit(node)
     if not isinstance(lowered, ast.FunctionDef):
@@ -958,6 +1375,7 @@ def _lower_component_process(
         filename,
     )
     namespace = _closure_namespace(method)
+    namespace.update(_component_collection_namespace((component_decl,)))
     exec(compile(source, filename, "exec"), namespace)
     generated = namespace[process_name]
     generated.__module__ = method.__module__
@@ -966,227 +1384,70 @@ def _lower_component_process(
     return generated
 
 
-class _ModelComponentRefLowerer(ast.NodeTransformer):
+class _ModelComponentRefLowerer(_ComponentPathLowerer):
     def __init__(self, *, model_name: str, fn_name: str, env_name: str,
-                 component_maps: Mapping[str, Mapping[str, str]],
-                 component_collections: Mapping[str,
-                                                _ComponentCollectionDecl]):
+                 component_roots: Mapping[str, _AnyComponentDecl]):
+        super().__init__(env_name=env_name)
         self.model_name = model_name
         self.fn_name = fn_name
-        self.env_name = env_name
-        self.component_maps = component_maps
-        self.component_collections = component_collections
+        self.component_roots = component_roots
         self.changed = False
 
-    def visit_Call(self, node: ast.Call) -> ast.AST:
-        if (isinstance(node.func, ast.Name) and node.func.id == "getattr"
-                and node.args):
-            component = self._single_component_namespace(node.args[0])
-            if component is not None:
-                raise ValueError(
-                    f"model '{self.model_name}' callback '{self.fn_name}' "
-                    f"uses dynamic getattr(env.{component}, ...), which is "
-                    "not supported")
-            collection = self._collection_namespace(node.args[0])
-            if collection is not None:
-                raise ValueError(
-                    f"model '{self.model_name}' callback '{self.fn_name}' "
-                    f"uses dynamic getattr(env.{collection}, ...), which is "
-                    "not supported")
-            item_ref = self._collection_item_ref(node.args[0])
-            if item_ref is not None:
-                collection, _index = item_ref
-                raise ValueError(
-                    f"model '{self.model_name}' callback '{self.fn_name}' "
-                    f"uses dynamic getattr(env.{collection}[...], ...), "
-                    "which is not supported")
-        return self.generic_visit(node)
+    def _root_namespace_ref(self, node: ast.AST) -> _ComponentAccess | None:
+        if (isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == self.env_name):
+            decl = self.component_roots.get(node.attr)
+            if decl is not None and not isinstance(decl,
+                                                   _ComponentCollectionDecl):
+                return _ComponentAccess(decl, None,
+                                        f"{self.env_name}.{node.attr}")
+        return None
+
+    def _root_collection_ref(self, node: ast.AST) -> _ComponentAccess | None:
+        if (isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == self.env_name):
+            decl = self.component_roots.get(node.attr)
+            if isinstance(decl, _ComponentCollectionDecl):
+                return _ComponentAccess(decl, None,
+                                        f"{self.env_name}.{node.attr}")
+        return None
+
+    def _callback_label(self) -> str:
+        return f"model '{self.model_name}' callback '{self.fn_name}'"
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
-        collection_field = (
-            self._collection_field_ref(node.value)
-            if isinstance(node.value, ast.Attribute) else None
-        )
-        if collection_field is not None:
-            collection, item_index, field = collection_field
-            decl = self.component_collections[collection]
-            if field not in decl.field_map:
-                raise ValueError(
-                    f"model '{self.model_name}' callback '{self.fn_name}' "
-                    f"references unknown component collection field "
-                    f"env.{collection}[...].{field}")
-            if field not in decl.pqueue_offsets:
-                return self.generic_visit(node)
-            item_index = self.visit(copy.deepcopy(item_index))
-            queue_index = self.visit(copy.deepcopy(node.slice))
-            if (not isinstance(item_index, ast.expr)
-                    or not isinstance(queue_index, ast.expr)):
-                raise TypeError("component collection index did not lower "
-                                "to an expression")
-            flat = _env_attr(self.env_name, decl.field_map[field], ast.Load())
-            offset_array = ast.Name(
-                id=_collection_pqueue_offsets_symbol(collection, field),
-                ctx=ast.Load(),
-            )
-            offset = _subscript(offset_array, item_index, ast.Load())
+        lowered = super().visit_Subscript(node)
+        if lowered is not node:
             self.changed = True
-            return ast.copy_location(
-                _subscript(flat, _add(offset, queue_index), node.ctx),
-                node,
-            )
-
-        collection = self._collection_namespace(node.value)
-        if collection is not None:
-            raise ValueError(
-                f"model '{self.model_name}' callback '{self.fn_name}' uses "
-                f"env.{collection}[...] directly; access one of its fields")
-        return self.generic_visit(node)
+        return lowered
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
-        nested_field = (
-            self._single_component_field_ref(node.value)
-            if isinstance(node.value, ast.Attribute) else None
-        )
-        if nested_field is not None:
-            component, field = nested_field
-            raise ValueError(
-                f"model '{self.model_name}' callback '{self.fn_name}' "
-                f"cannot access attributes below component field "
-                f"env.{component}.{field}")
-
-        collection_field = self._collection_field_ref(node)
-        if collection_field is not None:
-            collection, item_index, field = collection_field
-            decl = self.component_collections[collection]
-            if field in decl.field_map:
-                if field in decl.pqueue_offsets:
-                    raise ValueError(
-                        f"model '{self.model_name}' callback "
-                        f"'{self.fn_name}' must index "
-                        f"env.{collection}[...].{field} before using it")
-                item_index = self.visit(copy.deepcopy(item_index))
-                if not isinstance(item_index, ast.expr):
-                    raise TypeError("component collection index did not "
-                                    "lower to an expression")
-                target = _env_attr(self.env_name, decl.field_map[field],
-                                   node.ctx)
-                self.changed = True
-                return ast.copy_location(
-                    _subscript(target, item_index, node.ctx),
-                    node,
-                )
-            if field in decl.constants:
-                if not isinstance(node.ctx, ast.Load):
-                    raise ValueError(
-                        f"model '{self.model_name}' callback "
-                        f"'{self.fn_name}' cannot assign to constant "
-                        f"env.{collection}[...].{field}")
-                item_index = self.visit(copy.deepcopy(item_index))
-                if not isinstance(item_index, ast.expr):
-                    raise TypeError("component collection index did not "
-                                    "lower to an expression")
-                self.changed = True
-                return ast.copy_location(
-                    _subscript(
-                        ast.Name(id=_collection_const_symbol(collection,
-                                                             field),
-                                 ctx=ast.Load()),
-                        item_index,
-                        ast.Load(),
-                    ),
-                    node,
-                )
-            raise ValueError(
-                f"model '{self.model_name}' callback '{self.fn_name}' "
-                f"references unknown component collection field "
-                f"env.{collection}[...].{field}")
-
-        field_ref = self._single_component_field_ref(node)
-        if field_ref is not None:
-            component, field = field_ref
-            field_map = self.component_maps[component]
-            if field not in field_map:
-                raise ValueError(
-                    f"model '{self.model_name}' callback '{self.fn_name}' "
-                    f"references unknown component field "
-                    f"env.{component}.{field}")
+        lowered = super().visit_Attribute(node)
+        if lowered is not node:
             self.changed = True
-            return ast.copy_location(
-                _env_attr(self.env_name, field_map[field], node.ctx),
-                node,
-            )
-
-        if self._single_component_namespace(node) is not None:
-            component = self._single_component_namespace(node)
-            raise ValueError(
-                f"model '{self.model_name}' callback '{self.fn_name}' "
-                f"cannot use env.{component} directly; access one of its "
-                "fields")
-        if self._collection_namespace(node) is not None:
-            collection = self._collection_namespace(node)
-            raise ValueError(
-                f"model '{self.model_name}' callback '{self.fn_name}' "
-                f"cannot use env.{collection} directly; index it and access "
-                "one of its fields")
-        return self.generic_visit(node)
-
-    def _single_component_namespace(self, node: ast.AST) -> str | None:
-        if (isinstance(node, ast.Attribute)
-                and isinstance(node.value, ast.Name)
-                and node.value.id == self.env_name
-                and node.attr in self.component_maps):
-            return node.attr
-        return None
-
-    def _single_component_field_ref(
-        self, node: ast.Attribute,
-    ) -> tuple[str, str] | None:
-        component = self._single_component_namespace(node.value)
-        if component is None:
-            return None
-        return component, node.attr
-
-    def _collection_namespace(self, node: ast.AST) -> str | None:
-        if (isinstance(node, ast.Attribute)
-                and isinstance(node.value, ast.Name)
-                and node.value.id == self.env_name
-                and node.attr in self.component_collections):
-            return node.attr
-        return None
-
-    def _collection_item_ref(
-        self, node: ast.AST,
-    ) -> tuple[str, ast.expr] | None:
-        if not isinstance(node, ast.Subscript):
-            return None
-        collection = self._collection_namespace(node.value)
-        if collection is None:
-            return None
-        if not isinstance(node.slice, ast.expr):
-            return None
-        return collection, node.slice
-
-    def _collection_field_ref(
-        self, node: ast.Attribute,
-    ) -> tuple[str, ast.expr, str] | None:
-        item_ref = self._collection_item_ref(node.value)
-        if item_ref is None:
-            return None
-        collection, index = item_ref
-        return collection, index, node.attr
+        return lowered
 
 
 def _component_collection_namespace(
-    component_collections: Mapping[str, _ComponentCollectionDecl],
+    components: Iterable[_AnyComponentDecl],
 ) -> dict[str, Any]:
     namespace: dict[str, Any] = {}
-    for decl in component_collections.values():
+    for decl in _walk_component_declarations(components):
         for name, values in decl.constants.items():
-            namespace[_collection_const_symbol(decl.name, name)] = \
-                np.asarray(values)
+            if len(values) > 1:
+                namespace[_collection_const_symbol(decl.name, name)] = \
+                    np.asarray(values)
         for field, offsets in decl.pqueue_offsets.items():
-            namespace[_collection_pqueue_offsets_symbol(decl.name, field)] = \
-                np.asarray(offsets, dtype=np.int64)
+            if len(offsets) > 1:
+                namespace[
+                    _collection_pqueue_offsets_symbol(decl.name, field)
+                ] = np.asarray(offsets, dtype=np.int64)
+        if (isinstance(decl, _ComponentCollectionDecl)
+                and len(decl.parent_offsets) > 1):
+            namespace[_component_offsets_symbol(decl.name)] = np.asarray(
+                decl.parent_offsets, dtype=np.int64)
     return namespace
 
 
@@ -1210,12 +1471,11 @@ def _lower_model_component_refs(
     fn: Callable[..., Any],
     *,
     model_name: str,
-    component_maps: Mapping[str, Mapping[str, str]],
-    component_collections: Mapping[str, _ComponentCollectionDecl],
+    component_roots: Mapping[str, _AnyComponentDecl],
 ) -> Callable[..., Any]:
-    if not component_maps and not component_collections:
+    if not component_roots:
         return fn
-    component_names = set(component_maps) | set(component_collections)
+    component_names = set(component_roots)
     if not any(name in fn.__code__.co_names for name in component_names):
         return fn
     try:
@@ -1233,8 +1493,7 @@ def _lower_model_component_refs(
         model_name=model_name,
         fn_name=fn.__name__,
         env_name=env_name,
-        component_maps=component_maps,
-        component_collections=component_collections,
+        component_roots=component_roots,
     )
     lowered = lowerer.visit(node)
     if not isinstance(lowered, ast.FunctionDef):
@@ -1260,7 +1519,7 @@ def _lower_model_component_refs(
         filename,
     )
     namespace = _closure_namespace(fn)
-    namespace.update(_component_collection_namespace(component_collections))
+    namespace.update(_component_collection_namespace(component_roots.values()))
     exec(compile(source, filename, "exec"), namespace)
     generated = namespace[fn.__name__]
     generated.__module__ = fn.__module__
@@ -1283,15 +1542,16 @@ _PROCESS_DAG_FIELD_KINDS = (
 
 
 def _process_dag_component_process_members(
-    component_name: str,
-    cls: type[Component],
+    decl: _AnyComponentDecl,
     process_names: set[str],
 ) -> list[str]:
     members: list[str] = []
-    for method_name, _method, _spec in _component_process_methods(cls):
-        process_name = f"{component_name}__{method_name}"
-        if process_name in process_names:
-            members.append(f"process:{process_name}")
+    for component_name in decl.process_names:
+        for method_name, _method, _spec in _component_process_methods(
+                decl.cls):
+            process_name = f"{component_name}__{method_name}"
+            if process_name in process_names:
+                members.append(f"process:{process_name}")
     return members
 
 
@@ -1368,6 +1628,7 @@ class Model:
             decls["field_shapes"]
         self._components: dict[str, Component] = {}
         self._component_collections: dict[str, tuple[Component, ...]] = {}
+        self._component_bindings: dict[str, tuple[Component, ...]] = {}
 
         seen: set[str] = set()
         for kind, names in (("param", self.params),
@@ -1420,51 +1681,92 @@ class Model:
 
     def _bind_components(self) -> None:
         for decl in self._component_decls:
-            component = copy.copy(decl.template)
+            component = copy.copy(decl.instances[0])
             self._components[decl.name] = component
+            self._component_bindings[decl.name] = (component,)
             setattr(self, decl.name, component)
-            try:
-                component._cimba_model = self
-                component._cimba_name = decl.name
-            except AttributeError:
-                pass
+            self._bind_component_metadata(component, decl.name)
+            self._bind_component_children(decl, (component,))
         for decl in self._component_collection_decls:
             components = tuple(copy.copy(template)
                                for template in decl.templates)
             self._component_collections[decl.name] = components
+            self._component_bindings[decl.name] = components
             setattr(self, decl.name, list(components))
             for index, component in enumerate(components):
-                try:
-                    component._cimba_model = self
-                    component._cimba_name = f"{decl.name}[{index}]"
-                    component._cimba_collection = decl.name
-                    component._cimba_index = index
-                except AttributeError:
-                    pass
+                self._bind_component_metadata(
+                    component, f"{decl.name}[{index}]",
+                    collection=decl.name, index=index)
+            self._bind_component_children(decl, components)
+
+    def _bind_component_metadata(
+        self,
+        component: Component,
+        name: str,
+        *,
+        collection: str | None = None,
+        index: int | None = None,
+    ) -> None:
+        try:
+            component._cimba_model = self
+            component._cimba_name = name
+            if collection is not None:
+                component._cimba_collection = collection
+            if index is not None:
+                component._cimba_index = index
+        except AttributeError:
+            pass
+
+    def _bind_component_children(
+        self,
+        decl: _AnyComponentDecl,
+        parents: tuple[Component, ...],
+    ) -> None:
+        for child in decl.children:
+            bound: list[Component] = []
+            if isinstance(child, _ComponentCollectionDecl):
+                for parent_index, parent in enumerate(parents):
+                    start = child.parent_offsets[parent_index]
+                    length = child.parent_lengths[parent_index]
+                    items: list[Component] = []
+                    for item_index in range(length):
+                        child_index = start + item_index
+                        component = copy.copy(child.templates[child_index])
+                        bound.append(component)
+                        items.append(component)
+                        self._bind_component_metadata(
+                            component,
+                            child.process_names[child_index],
+                            collection=child.name,
+                            index=child_index,
+                        )
+                    setattr(parent, child.local_name, items)
+            else:
+                for child_index, parent in enumerate(parents):
+                    component = copy.copy(child.instances[child_index])
+                    bound.append(component)
+                    setattr(parent, child.local_name, component)
+                    self._bind_component_metadata(
+                        component, child.process_names[child_index])
+            bound_tuple = tuple(bound)
+            self._component_bindings[child.name] = bound_tuple
+            self._bind_component_children(child, bound_tuple)
 
     def _register_component_processes(self) -> None:
-        for decl in self._component_decls:
-            component = self._components[decl.name]
-            for method_name, method, spec in _component_process_methods(
-                    decl.cls):
-                copies = _resolve_component_process_copies(
-                    decl.name, component, method_name, spec)
-                lowered = _lower_component_process(
-                    decl.name, component, decl.field_map, method_name, method)
-                self.process(lowered, copies=copies,
-                             priority=spec.priority)
-        for decl in self._component_collection_decls:
-            components = self._component_collections[decl.name]
+        roots: list[_AnyComponentDecl] = []
+        roots.extend(self._component_decls)
+        roots.extend(self._component_collection_decls)
+        for decl in _walk_component_declarations(roots):
+            components = self._component_bindings[decl.name]
             for index, component in enumerate(components):
-                component_name = f"{decl.name}__{index}"
+                component_name = decl.process_names[index]
                 for method_name, method, spec in _component_process_methods(
                         decl.cls):
                     copies = _resolve_component_process_copies(
                         component_name, component, method_name, spec)
                     lowered = _lower_component_process(
-                        component_name, component, decl.field_map,
-                        method_name, method, item_index=index,
-                        pqueue_offsets=decl.pqueue_offsets)
+                        component_name, component, decl, index, method_name,
+                        method)
                     self.process(lowered, copies=copies,
                                  priority=spec.priority)
 
@@ -1478,11 +1780,18 @@ class Model:
     ) -> dict[str, _ComponentCollectionDecl]:
         return {decl.name: decl for decl in self._component_collection_decls}
 
+    @property
+    def _component_roots(self) -> dict[str, _AnyComponentDecl]:
+        roots: dict[str, _AnyComponentDecl] = {}
+        roots.update({decl.name: decl for decl in self._component_decls})
+        roots.update({decl.name: decl
+                      for decl in self._component_collection_decls})
+        return roots
+
     def _lower_component_refs(self, fn: _F) -> _F:
         return _lower_model_component_refs(
             fn, model_name=self.name,
-            component_maps=self._component_field_maps,
-            component_collections=self._component_collection_maps,
+            component_roots=self._component_roots,
         )
 
     def _process_dag_blocks(
@@ -1494,31 +1803,56 @@ class Model:
 
         for decl in self._component_decls:
             members = _process_dag_component_process_members(
-                decl.name, decl.cls, process_names)
+                decl, process_names)
             members.extend(_process_dag_component_field_members(
-                decl.decls, decl.field_map, entity_kinds))
+                decl.decls, decl.direct_field_map, entity_kinds))
             blocks.append(
                 ProcessDAGBlock(
-                    decl.name,
+                    decl.display_name or decl.name,
                     _dedupe_process_dag_members(members),
                 )
             )
+            for child in _walk_component_declarations(decl.children):
+                members = _process_dag_component_process_members(
+                    child, process_names)
+                members.extend(_process_dag_component_field_members(
+                    child.decls, child.direct_field_map, entity_kinds))
+                blocks.append(
+                    ProcessDAGBlock(
+                        child.display_name or child.name,
+                        _dedupe_process_dag_members(members),
+                        kind=("component_collection"
+                              if isinstance(child, _ComponentCollectionDecl)
+                              else "component"),
+                    )
+                )
 
         for decl in self._component_collection_decls:
-            members: list[str] = []
-            for index in range(decl.length):
-                component_name = f"{decl.name}__{index}"
-                members.extend(_process_dag_component_process_members(
-                    component_name, decl.cls, process_names))
+            members = _process_dag_component_process_members(
+                decl, process_names)
             members.extend(_process_dag_component_field_members(
-                decl.decls, decl.field_map, entity_kinds))
+                decl.decls, decl.direct_field_map, entity_kinds))
             blocks.append(
                 ProcessDAGBlock(
-                    decl.name,
+                    decl.display_name or decl.name,
                     _dedupe_process_dag_members(members),
                     kind="component_collection",
                 )
             )
+            for child in _walk_component_declarations(decl.children):
+                members = _process_dag_component_process_members(
+                    child, process_names)
+                members.extend(_process_dag_component_field_members(
+                    child.decls, child.direct_field_map, entity_kinds))
+                blocks.append(
+                    ProcessDAGBlock(
+                        child.display_name or child.name,
+                        _dedupe_process_dag_members(members),
+                        kind=("component_collection"
+                              if isinstance(child, _ComponentCollectionDecl)
+                              else "component"),
+                    )
+                )
 
         return tuple(blocks)
 

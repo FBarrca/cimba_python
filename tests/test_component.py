@@ -574,6 +574,235 @@ def test_component_collection_process_dag_uses_lowered_source():
         in graph.to_dot()
 
 
+def test_nested_component_fields_processes_and_model_refs_run():
+    class Counter(sim.Component):
+        count: sim.State
+
+        @sim.process
+        def tick(self, env):
+            self.count += 4
+            sim.suspend()
+
+    class Wrapper(sim.Component):
+        counter: Counter = Counter()
+
+        @sim.process
+        def bump(self, env):
+            self.counter.count += 2
+            sim.suspend()
+
+    class Network(sim.Model):
+        total: sim.Output
+        wrapper: Wrapper = Wrapper()
+
+    model = Network()
+    assert model.state == ["wrapper__counter__count"]
+    assert [p.name for p in model._processes] == [
+        "wrapper__bump",
+        "wrapper__counter__tick",
+    ]
+    assert isinstance(model.wrapper.counter, Counter)
+
+    @model.collect
+    def collect_stats(env: Network):
+        env.total = env.wrapper.counter.count
+
+    assert "env.wrapper__counter__count" in \
+        model._processes[0].fn.__cimba_source__
+    assert "env.wrapper__counter__count" in model._collect.__cimba_source__
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
+                           seed=24)
+    assert exp.run() == 0
+    assert exp["total"][0] == 6.0
+    assert exp.trials["wrapper__counter__count"][0] == 6
+
+
+def test_component_collection_can_own_nested_component_processes():
+    class Servers(sim.Component):
+        done: sim.State
+
+        def __init__(self, server_count: int, base: int):
+            self.server_count = server_count
+            self.base = base
+
+        @sim.process(copies="server_count", priority=3)
+        def server(self, env, idx):
+            self.done += self.base + idx
+            sim.suspend()
+
+    class Attraction(sim.Component):
+        def __init__(self, server_count: int, base: int):
+            self.servers = Servers(server_count, base)
+
+        servers: Servers
+
+    class Park(sim.Model):
+        total: sim.Output
+        attractions: list[Attraction] = [
+            Attraction(server_count=1, base=10),
+            Attraction(server_count=2, base=20),
+        ]
+
+    model = Park()
+    assert [(p.name, p.copies, p.priority) for p in model._processes] == [
+        ("attractions__0__servers__server", 1, 3),
+        ("attractions__1__servers__server", 2, 3),
+    ]
+    assert model.dtype["attractions__servers__done"].shape == (2,)
+    assert isinstance(model.attractions[0].servers, Servers)
+
+    @model.collect
+    def collect_stats(env: Park):
+        env.total = env.attractions[0].servers.done \
+            + env.attractions[1].servers.done
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
+                           seed=25)
+    assert exp.run() == 0
+    assert exp["total"][0] == 51.0
+    assert exp.trials["attractions__servers__done"][0].tolist() == [10, 41]
+
+
+def test_nested_component_collections_linearize_indexes():
+    class Gate(sim.Component):
+        count: sim.State
+
+    class Zone(sim.Component):
+        gates: list[Gate]
+
+        def __init__(self, gates: int):
+            self.gates = [Gate() for _ in range(gates)]
+
+    class Campus(sim.Model):
+        total: sim.Output
+        zones: list[Zone] = [Zone(1), Zone(2)]
+
+    model = Campus()
+    assert model.dtype["zones__gates__count"].shape == (3,)
+    (zones,) = model._component_collection_decls
+    (gates,) = zones.children
+    assert gates.parent_offsets == (0, 1)
+    assert gates.parent_lengths == (1, 2)
+
+    @model.process
+    def actor(env: Campus):
+        env.zones[1].gates[1].count = 7
+        env.total = env.zones[1].gates[1].count
+        sim.suspend()
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
+                           seed=26)
+    assert exp.run() == 0
+    assert exp["total"][0] == 7.0
+    assert exp.trials["zones__gates__count"][0].tolist() == [0, 0, 7]
+
+
+def test_nested_component_collection_pqueues_use_nested_offsets():
+    class Gate(sim.Component):
+        hits: sim.State
+        lanes: sim.PQueues = sim.count("lane_count")
+
+        def __init__(self, lane_count: int):
+            self.lane_count = lane_count
+
+    class Zone(sim.Component):
+        gates: list[Gate]
+
+        def __init__(self, lane_counts: list[int]):
+            self.gates = [Gate(count) for count in lane_counts]
+
+    class Campus(sim.Model):
+        total: sim.Output
+        zones: list[Zone] = [Zone([1]), Zone([2, 1])]
+
+    model = Campus()
+    assert model.pqueues == {"zones__gates__lanes": 4}
+    (zones,) = model._component_collection_decls
+    (gates,) = zones.children
+    assert gates.pqueue_counts["lanes"] == (1, 2, 1)
+    assert gates.pqueue_offsets["lanes"] == (0, 1, 3)
+
+    @model.process
+    def actor(env: Campus):
+        q = env.zones[1].gates[0].lanes[1]
+        sim.pq_put(q, 12, 0)
+        env.zones[1].gates[0].hits += sim.pq_take(q)
+        env.total = env.zones[1].gates[0].hits
+        sim.suspend()
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
+                           seed=27)
+    assert exp.run() == 0
+    assert exp["total"][0] == 12.0
+    assert exp.trials["zones__gates__hits"][0].tolist() == [0, 12, 0]
+
+
+def test_nested_component_declaration_and_namespace_errors_are_rejected():
+    class Child(sim.Component):
+        count: sim.State
+
+    class MissingChild(sim.Component):
+        child: Child
+
+    class MissingModel(sim.Model):
+        parent: MissingChild = MissingChild()
+
+    with pytest.raises(ValueError, match="needs a Child instance default"):
+        MissingModel()
+
+    class WrongChild(sim.Component):
+        child: Child = object()
+
+    class WrongModel(sim.Model):
+        parent: WrongChild = WrongChild()
+
+    with pytest.raises(TypeError, match="default must be a Child instance"):
+        WrongModel()
+
+    class EmptyChildren(sim.Component):
+        children: list[Child] = []
+
+    class EmptyModel(sim.Model):
+        parent: EmptyChildren = EmptyChildren()
+
+    with pytest.raises(ValueError, match="non-empty"):
+        EmptyModel()
+
+    class Parent(sim.Component):
+        child: Child = Child()
+
+    class Network(sim.Model):
+        parent: Parent = Parent()
+
+    direct = Network()
+    with pytest.raises(ValueError, match="cannot use env.parent.child"):
+        @direct.process
+        def direct_actor(env: Network):
+            _ = env.parent.child
+            sim.suspend()
+
+    unknown = Network()
+    with pytest.raises(ValueError, match="unknown component field"):
+        @unknown.process
+        def unknown_actor(env: Network):
+            env.parent.child.missing = 1
+            sim.suspend()
+
+    dynamic = Network()
+    with pytest.raises(ValueError, match="dynamic getattr"):
+        @dynamic.process
+        def dynamic_actor(env: Network):
+            env.parent.child.count = getattr(env.parent.child, "count")
+            sim.suspend()
+
+    nested_field = Network()
+    with pytest.raises(ValueError, match="below component field"):
+        @nested_field.process
+        def nested_actor(env: Network):
+            _ = env.parent.child.count.extra
+            sim.suspend()
+
+
 def test_component_collection_declaration_errors_are_rejected():
     class Item(sim.Component):
         count: sim.State

@@ -26,10 +26,18 @@ model construction, and model callbacks can read component fields with
 ``env.retailer.orders``. Component fields are exposed in experiments with
 flattened names such as ``retailer__orders``.
 
+Components may contain other components, and flattened names follow the same
+recursive convention, for example ``env.attraction.queues.line`` becomes
+``attraction__queues__line``. Nested component process methods are also lowered
+with their component path in the process name.
+
 Fixed repeated structures can be declared with standard ``list[Component]``
 annotations, for example ``attractions: list[Attraction] = [...]``. Model
 callbacks can use indexed access such as ``env.attractions[i].queues[j]``;
-runtime fields remain flattened, for example ``attractions__queues``.
+runtime fields remain flattened, for example ``attractions__queues``. Nested
+collections are linearized behind the scenes, so
+``env.campus.zones[i].gates[j].queue`` remains valid model source while the
+trial table stores a one-dimensional ``campus__zones__gates__queue`` field.
 
 Process DAGs:
 

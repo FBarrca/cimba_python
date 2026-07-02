@@ -79,10 +79,13 @@ Related fields and process methods can be grouped with ``sim.Component``.
 Component methods marked with top-level ``@sim.process`` are authoring-time
 methods; Model lowers them into ordinary flat process functions before Numba
 compilation. Model callbacks can use ``env.retailer.orders``; trial-table
-fields remain flattened with names such as ``retailer__orders``.
+fields remain flattened with names such as ``retailer__orders``. Components
+may contain nested components; paths such as ``env.attraction.queues.line``
+flatten to names such as ``attraction__queues__line``.
 Fixed collections of repeated components can be declared with standard
 ``list[ComponentType]`` annotations. Model callbacks can use indexed access
-such as ``env.attractions[i].queues[j]``; Cimba lowers it to flattened fields
+such as ``env.attractions[i].queues[j]``. Nested collections also work; Cimba
+lowers paths like ``env.campus.zones[i].gates[j].queue`` to flattened fields
 and generated offset tables before compilation.
 
 Module layout: the verbs below alias the raw symbol bindings in
