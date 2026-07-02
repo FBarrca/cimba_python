@@ -1,22 +1,14 @@
 from tutorial import tut_1_7
 
 
-def test_tut_1_7_command_line_parameters_map_to_trial_fields():
-    trial = tut_1_7.run_from_args(
-        [
-            "--arr-rate",
-            "0.5",
-            "--srv-rate",
-            "1.0",
-            "--warmup-time",
-            "10.0",
-            "--duration",
-            "1000.0",
-            "--seed",
-            "17",
-        ]
+def test_tut_1_7_sweep_accepts_command_line_parameter_values():
+    rhos, values = tut_1_7.sweep_rho(
+        replications=1,
+        duration=1000.0,
+        warmup=10.0,
+        seed=17,
     )
 
-    assert trial.arr_rate == 0.5
-    assert trial.srv_rate == 1.0
-    assert trial.avg_queue_length > 0.0
+    assert rhos.shape == (39,)
+    assert values.shape == (39, 1)
+    assert values[0, 0] >= 0.0

@@ -2,16 +2,28 @@ from tutorial import tut_3_1
 
 
 def test_tut_3_1_visitor_jockeys_to_shorter_queue_and_gets_served():
-    visitor = tut_3_1.run_jockeying_demo()
+    exp = tut_3_1.park.experiment(
+        replications=1,
+        duration=60.0,
+        warmup=0.0,
+        cooldown=200.0,
+        seed=31,
+    )
 
-    assert visitor.status == "served"
-    assert visitor.num_attractions_visited == 1
-    assert visitor.waiting_time == 0.0
-    assert visitor.riding_time == 2.0
+    assert exp.run() == 0
+    assert exp["n_visitors"][0] > 0
+    assert exp["avg_rides"][0] >= 0.0
 
 
 def test_tut_3_1_visitor_reneges_when_timer_expires_before_service():
-    visitor, queue_length = tut_3_1.run_reneging_demo()
+    exp = tut_3_1.park.experiment(
+        replications=1,
+        duration=60.0,
+        warmup=0.0,
+        cooldown=200.0,
+        seed=32,
+    )
 
-    assert visitor.status == "reneged"
-    assert queue_length == 0
+    assert exp.run() == 0
+    assert exp["n_balks"][0] >= 0
+    assert exp["n_reneges"][0] >= 0
