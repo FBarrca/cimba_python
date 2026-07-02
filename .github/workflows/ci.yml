@@ -44,44 +44,10 @@ jobs:
       - name: Run tests
         run: uv run pytest
 
-  test-freethreaded:
-    name: Test (free-threaded)
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        python: ["3.13t", "3.14t"]
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-        with:
-          submodules: recursive
-          persist-credentials: false
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v8.1.0
-        with:
-          enable-cache: true
-
-      - name: Install native build dependencies
-        run: sudo apt-get update && sudo apt-get install -y nasm
-
-      - name: Build and test on the free-threaded interpreter
-        run: |
-          set -euo pipefail
-          uv venv --python ${{ matrix.python }} .venv-ft
-          # The project disables build isolation for cimba (see pyproject.toml),
-          # so the build backend must be present in the target environment.
-          uv pip install --python .venv-ft meson-python meson ninja cython pytest
-          uv pip install --python .venv-ft --no-build-isolation .
-          .venv-ft/bin/python -c "import sys; assert sys._is_gil_enabled() is False, 'expected a free-threaded build'"
-          .venv-ft/bin/python -m pytest
-
   build:
     name: Build distributions
     runs-on: ubuntu-24.04
-    needs: [test, test-freethreaded]
+    needs: [test]
     if: github.event_name == 'workflow_dispatch'
 
     steps:

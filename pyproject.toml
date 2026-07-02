@@ -65,12 +65,8 @@ install = ["--skip-subprojects"]
 
 [tool.cibuildwheel]
 # The vendored Cimba C library currently ships x86-64 assembly ports, so we
-# publish Linux x86_64 wheels. We ship both the standard and free-threaded
-# builds of CPython 3.13 and 3.14; the run_experiment thread backend only
-# parallelizes on the free-threaded (cp313t/cp314t) interpreters. enable= is
-# required for cibuildwheel to include the free-threaded builds.
-build = "cp313-manylinux_x86_64 cp313t-manylinux_x86_64 cp314-manylinux_x86_64 cp314t-manylinux_x86_64"
-enable = ["cpython-freethreading"]
+# publish Linux x86_64 wheels for CPython 3.13 and 3.14.
+build = "cp313-manylinux_x86_64 cp314-manylinux_x86_64"
 test-requires = "pytest>=8"
 test-command = "pytest {project}/tests"
 
