@@ -103,9 +103,9 @@ from ._intrinsics import ptr_caster as _ptr_caster
 from ._intrinsics import record_addr as _record_addr
 from ._model import (Component, Condition, Dataset, Env, Event, Experiment,
                      FloatState, Handle, Model, Output, Param, Pool, PQueues,
-                     Predicate, ProcessDAG, ProcessDAGEdge, ProcessDAGNode,
-                     Processes, Queue, Resource, Spawnable, State, Store,
-                     Struct, Trace, capacity, count, process)
+                     Predicate, ProcessDAG, ProcessDAGBlock, ProcessDAGEdge,
+                     ProcessDAGNode, Processes, Queue, Resource, Spawnable,
+                     State, Store, Struct, Trace, capacity, count, process)
 
 __all__ = [
     "Model", "Component", "Experiment", "Env", "Handle",
@@ -113,7 +113,7 @@ __all__ = [
     "Store", "Dataset", "Condition", "Predicate", "Event", "Processes",
     "PQueues", "Spawnable", "Struct", "Trace", "capacity", "count",
     "process",
-    "ProcessDAG", "ProcessDAGNode", "ProcessDAGEdge",
+    "ProcessDAG", "ProcessDAGBlock", "ProcessDAGNode", "ProcessDAGEdge",
     "SUCCESS", "PREEMPTED", "INTERRUPTED", "STOPPED", "CANCELLED", "TIMEOUT",
     "LOGGER_FATAL", "LOGGER_ERROR", "LOGGER_WARNING", "LOGGER_INFO",
     "hold", "now", "current", "interrupt", "stop", "wait_process",

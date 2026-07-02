@@ -33,8 +33,8 @@ from numba.extending import overload as _nb_overload
 
 from . import _bindings as _b
 from ._cimba import ffi, lib
-from ._graph import (ProcessDAG, ProcessDAGEdge, ProcessDAGNode,
-                     infer_process_dag)
+from ._graph import (ProcessDAG, ProcessDAGBlock, ProcessDAGEdge,
+                     ProcessDAGNode, infer_process_dag)
 from ._intrinsics import addressof, ptr_caster
 
 #: Opaque native entity handle (process, queue, resource, ...) as stored
@@ -1269,6 +1269,52 @@ def _lower_model_component_refs(
     return generated
 
 
+_PROCESS_DAG_FIELD_KINDS = (
+    "queue",
+    "resource",
+    "pool",
+    "store",
+    "condition",
+    "state",
+    "fstate",
+    "pqueues",
+    "event",
+)
+
+
+def _process_dag_component_process_members(
+    component_name: str,
+    cls: type[Component],
+    process_names: set[str],
+) -> list[str]:
+    members: list[str] = []
+    for method_name, _method, _spec in _component_process_methods(cls):
+        process_name = f"{component_name}__{method_name}"
+        if process_name in process_names:
+            members.append(f"process:{process_name}")
+    return members
+
+
+def _process_dag_component_field_members(
+    decls: Mapping[str, Any],
+    field_map: Mapping[str, str],
+    entity_kinds: Mapping[str, str],
+) -> list[str]:
+    members: list[str] = []
+    for kind in _PROCESS_DAG_FIELD_KINDS:
+        fields = decls[kind]
+        for field in fields:
+            flat_name = field_map[field]
+            graph_kind = entity_kinds.get(flat_name)
+            if graph_kind is not None:
+                members.append(f"{graph_kind}:{flat_name}")
+    return members
+
+
+def _dedupe_process_dag_members(members: Iterable[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(members))
+
+
 class Model:
     """A simulation model. Subclass it and declare the env fields as
     annotations (Param, Output, Queue, Resource, Pool, Store, Dataset,
@@ -1439,6 +1485,43 @@ class Model:
             component_collections=self._component_collection_maps,
         )
 
+    def _process_dag_blocks(
+        self,
+        entity_kinds: Mapping[str, str],
+    ) -> tuple[ProcessDAGBlock, ...]:
+        process_names = {process.name for process in self._processes}
+        blocks: list[ProcessDAGBlock] = []
+
+        for decl in self._component_decls:
+            members = _process_dag_component_process_members(
+                decl.name, decl.cls, process_names)
+            members.extend(_process_dag_component_field_members(
+                decl.decls, decl.field_map, entity_kinds))
+            blocks.append(
+                ProcessDAGBlock(
+                    decl.name,
+                    _dedupe_process_dag_members(members),
+                )
+            )
+
+        for decl in self._component_collection_decls:
+            members: list[str] = []
+            for index in range(decl.length):
+                component_name = f"{decl.name}__{index}"
+                members.extend(_process_dag_component_process_members(
+                    component_name, decl.cls, process_names))
+            members.extend(_process_dag_component_field_members(
+                decl.decls, decl.field_map, entity_kinds))
+            blocks.append(
+                ProcessDAGBlock(
+                    decl.name,
+                    _dedupe_process_dag_members(members),
+                    kind="component_collection",
+                )
+            )
+
+        return tuple(blocks)
+
     # --- Declaration decorators ------------------------------------------
     @overload
     def process(self, fn: _F) -> _F: ...
@@ -1537,6 +1620,7 @@ class Model:
             process_fields=self._process_fields,
             spawnable_fields=self._spawnable_fields,
             event_callbacks=((field, fn) for _n, fn, field, _d in self._events),
+            blocks=self._process_dag_blocks(entity_kinds),
         )
 
     def predicate(self, fn: _F) -> _F:

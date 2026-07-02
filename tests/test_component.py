@@ -88,6 +88,21 @@ def test_component_process_dag_uses_lowered_source():
             "put") in edges
     assert ("state:retailer__on_hand", "process:retailer__reorder",
             "read") in edges
+    assert graph.blocks == (
+        sim.ProcessDAGBlock(
+            "retailer",
+            (
+                "process:retailer__reorder",
+                "queue:retailer__orders",
+                "state:retailer__on_hand",
+            ),
+        ),
+    )
+    assert 'subgraph n_component_retailer["retailer"]' \
+        in graph.to_mermaid()
+    dot = graph.to_dot()
+    assert "subgraph cluster_component_retailer {" in dot
+    assert 'label="retailer";' in dot
 
 
 def test_model_collect_can_use_component_field_namespace():
@@ -225,6 +240,12 @@ def test_model_process_dag_uses_lowered_component_namespace_source():
     assert ("process:feeder", "queue:station__queue", "put") in edges
     assert ("process:feeder", "state:station__count", "write") in edges
     assert ("state:station__count", "process:feeder", "read") in edges
+    assert graph.blocks == (
+        sim.ProcessDAGBlock(
+            "station",
+            ("queue:station__queue", "state:station__count"),
+        ),
+    )
 
 
 def test_component_duplicate_flattened_name_is_rejected():
@@ -508,6 +529,12 @@ def test_component_collection_process_dag_uses_lowered_source():
         def __init__(self, queue_count: int):
             self.queue_count = queue_count
 
+        @sim.process
+        def server(self, env):
+            sim.pq_put(self.lanes[0], 3, 0)
+            self.visits += sim.pq_take(self.lanes[0])
+            sim.suspend()
+
     class Park(sim.Model):
         attractions: list[Attraction] = [
             Attraction(queue_count=1),
@@ -532,6 +559,19 @@ def test_component_collection_process_dag_uses_lowered_source():
         in edges
     assert ("process:visitor", "state:attractions__visits", "write") \
         in edges
+    (block,) = graph.blocks
+    assert block.name == "attractions"
+    assert block.kind == "component_collection"
+    assert set(block.members) >= {
+        "process:attractions__0__server",
+        "process:attractions__1__server",
+        "pqueues:attractions__lanes",
+        "state:attractions__visits",
+    }
+    assert 'subgraph n_component_collection_attractions["attractions"]' \
+        in graph.to_mermaid()
+    assert "subgraph cluster_component_collection_attractions {" \
+        in graph.to_dot()
 
 
 def test_component_collection_declaration_errors_are_rejected():

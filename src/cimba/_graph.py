@@ -41,19 +41,46 @@ class ProcessDAGEdge:
 
 
 @dataclass(frozen=True)
+class ProcessDAGBlock:
+    """A presentation group for existing process graph nodes."""
+
+    name: str
+    members: tuple[str, ...]
+    kind: str = "component"
+
+    def __init__(
+        self,
+        name: str,
+        members: Iterable[str],
+        kind: str = "component",
+    ) -> None:
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "members", tuple(members))
+        object.__setattr__(self, "kind", kind)
+
+    @property
+    def key(self) -> str:
+        """Stable block key used by renderers."""
+        return f"{self.kind}:{self.name}"
+
+
+@dataclass(frozen=True)
 class ProcessDAG:
     """A model-field-aware graph of registered model processes."""
 
     nodes: tuple[ProcessDAGNode, ...]
     edges: tuple[ProcessDAGEdge, ...]
+    blocks: tuple[ProcessDAGBlock, ...] = ()
 
     def __init__(
         self,
         nodes: tuple[ProcessDAGNode, ...] | list[ProcessDAGNode],
         edges: tuple[ProcessDAGEdge, ...] | list[ProcessDAGEdge],
+        blocks: tuple[ProcessDAGBlock, ...] | list[ProcessDAGBlock] = (),
     ) -> None:
         object.__setattr__(self, "nodes", tuple(nodes))
         object.__setattr__(self, "edges", tuple(edges))
+        object.__setattr__(self, "blocks", tuple(blocks))
 
     def topological_order(self) -> tuple[str, ...]:
         """Return node keys in topological order.
@@ -106,13 +133,25 @@ class ProcessDAG:
     def to_mermaid(self, direction: str = "TD") -> str:
         """Render the graph as Mermaid flowchart text."""
         lines = [f"flowchart {direction}"]
+        nodes_by_key = {node.key: node for node in self.nodes}
+        rendered: set[str] = set()
+        for block in self.blocks:
+            members = [
+                key for key in block.members
+                if key in nodes_by_key and key not in rendered
+            ]
+            if not members:
+                continue
+            block_id = _mermaid_id(block.key)
+            label = _escape_mermaid(block.name)
+            lines.append(f"    subgraph {block_id}[\"{label}\"]")
+            for key in members:
+                lines.append(_mermaid_node_line(nodes_by_key[key], "        "))
+                rendered.add(key)
+            lines.append("    end")
         for node in self.nodes:
-            node_id = _mermaid_id(node.key)
-            label = _escape_mermaid(node.name)
-            if node.kind == "process":
-                lines.append(f"    {node_id}[\"{label}\"]")
-            else:
-                lines.append(f"    {node_id}[(\"{label}\")]")
+            if node.key not in rendered:
+                lines.append(_mermaid_node_line(node, "    "))
         for edge in self.edges:
             source = _mermaid_id(edge.source)
             target = _mermaid_id(edge.target)
@@ -126,12 +165,24 @@ class ProcessDAG:
     def to_dot(self, rankdir: str = "TB") -> str:
         """Render the graph as Graphviz DOT text."""
         lines = ["digraph ProcessDAG {", f"    rankdir={rankdir};"]
+        nodes_by_key = {node.key: node for node in self.nodes}
+        rendered: set[str] = set()
+        for block in self.blocks:
+            members = [
+                key for key in block.members
+                if key in nodes_by_key and key not in rendered
+            ]
+            if not members:
+                continue
+            lines.append(f"    subgraph {_dot_cluster_id(block.key)} {{")
+            lines.append(f"        label={_dot_quote(block.name)};")
+            for key in members:
+                lines.append(_dot_node_line(nodes_by_key[key], "        "))
+                rendered.add(key)
+            lines.append("    }")
         for node in self.nodes:
-            shape = "box" if node.kind == "process" else "ellipse"
-            lines.append(
-                f"    {_dot_quote(node.key)} "
-                f"[label={_dot_quote(node.name)}, shape={shape}];"
-            )
+            if node.key not in rendered:
+                lines.append(_dot_node_line(node, "    "))
         for edge in self.edges:
             line = f"    {_dot_quote(edge.source)} -> {_dot_quote(edge.target)}"
             if edge.label is not None:
@@ -205,6 +256,7 @@ def infer_process_dag(
     process_fields: Iterable[str],
     spawnable_fields: Iterable[str],
     event_callbacks: Iterable[tuple[str, Callable[..., Any]]] = (),
+    blocks: Iterable[ProcessDAGBlock] = (),
 ) -> ProcessDAG:
     """Infer a model-field-aware process graph from registered process bodies."""
     process_list = tuple(processes)
@@ -268,7 +320,7 @@ def infer_process_dag(
                     resource_nodes[key] = ProcessDAGNode(ref.name, ref.kind)
 
     nodes.extend(resource_nodes.values())
-    return ProcessDAG(nodes, edges)
+    return ProcessDAG(nodes, edges, list(blocks))
 
 
 @dataclass
@@ -553,12 +605,33 @@ def _mermaid_id(key: str) -> str:
     return "n_" + re.sub(r"[^0-9A-Za-z_]", "_", key)
 
 
+def _mermaid_node_line(node: ProcessDAGNode, indent: str) -> str:
+    node_id = _mermaid_id(node.key)
+    label = _escape_mermaid(node.name)
+    if node.kind == "process":
+        return f"{indent}{node_id}[\"{label}\"]"
+    return f"{indent}{node_id}[(\"{label}\")]"
+
+
 def _dot_quote(text: str) -> str:
     return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def _dot_cluster_id(key: str) -> str:
+    return "cluster_" + re.sub(r"[^0-9A-Za-z_]", "_", key)
+
+
+def _dot_node_line(node: ProcessDAGNode, indent: str) -> str:
+    shape = "box" if node.kind == "process" else "ellipse"
+    return (
+        f"{indent}{_dot_quote(node.key)} "
+        f"[label={_dot_quote(node.name)}, shape={shape}];"
+    )
+
+
 __all__ = [
     "ProcessDAG",
+    "ProcessDAGBlock",
     "ProcessDAGEdge",
     "ProcessDAGNode",
     "infer_process_dag",
