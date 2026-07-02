@@ -7,6 +7,7 @@ import time
 
 import cimba
 import cimba.sim as sim
+from cimba import Buffer, Process, Simulation, exponential
 
 CAT_WEIGHTS = np.array([2.0, 3.0, 5.0], dtype=np.float64)
 

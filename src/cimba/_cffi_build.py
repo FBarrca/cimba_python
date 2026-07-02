@@ -1,4 +1,4 @@
-"""Generate the cffi C glue for ``cimba._cimba``.
+"""Generate the cffi C glue for ``cimba._cimba_cffi``.
 
 Meson invokes this script at build time; it emits ``_cimba.c`` into the
 given output directory.
@@ -29,7 +29,7 @@ ffibuilder.cdef("""
 """)
 
 ffibuilder.set_source(
-    "cimba._cimba",
+    "cimba._cimba_cffi",
     '#include "cimba.h"\n#include "nbshim.h"',
 )
 
@@ -38,4 +38,4 @@ if __name__ == "__main__":
         sys.exit(f"usage: {sys.argv[0]} <output_dir>")
     out_dir = Path(sys.argv[1])
     out_dir.mkdir(parents=True, exist_ok=True)
-    ffibuilder.emit_c_code(str(out_dir / "_cimba.c"))
+    ffibuilder.emit_c_code(str(out_dir / "_cimba_cffi.c"))

@@ -10,10 +10,10 @@ They are callable only from nopython-compiled code.
 import llvmlite.binding as _llvm
 from numba import types
 
-from . import _cimba
+from . import _cimba_native
 from ._cimba import ffi as _ffi
 
-_llvm.load_library_permanently(_cimba.__file__)
+_llvm.load_library_permanently(_cimba_native.__file__)
 
 _extern = types.ExternalFunction
 _intp = types.intp

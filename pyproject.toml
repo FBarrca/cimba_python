@@ -1,5 +1,5 @@
 [build-system]
-requires = ["meson-python>=0.16", "cffi>=1.15"]
+requires = ["meson-python>=0.16", "cffi>=1.15", "cython>=3.0"]
 build-backend = "mesonpy"
 
 [project]
@@ -39,7 +39,7 @@ Issues = "https://github.com/FBarrca/cimba_python/issues"
 dev = ["pytest>=8"]
 # Build tools in the project venv for the no-build-isolation editable install
 # below. (build-system.requires covers isolated wheel builds.)
-build = ["meson-python>=0.16", "meson>=1.1", "ninja", "cffi>=1.15"]
+build = ["meson-python>=0.16", "meson>=1.1", "ninja", "cffi>=1.15", "cython>=3.0"]
 
 [tool.uv]
 # meson-python editable installs rebuild on import using the tool paths baked
