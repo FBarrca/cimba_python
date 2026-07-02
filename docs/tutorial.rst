@@ -1115,14 +1115,27 @@ spent waiting, and so on.
         walking: float
         rides: int
 
-    class Park(sim.Model):
+    class VisitorFlow(sim.Component):
         visitor: sim.Spawnable
         departed: sim.Store
-        park_queues: sim.PQueues = sim.count(11)
         d_park: sim.Dataset
         d_rides: sim.Dataset
 
-    park = Park("park")
+We will combine this visitor-flow component with the attraction components
+shortly.
+
+A ``sim.Component`` is an authoring-time grouping for related declarations and
+process methods. It is not a separate runtime object inside the compiled trial
+record. Instead, Cimba lowers component fields into ordinary flat fields before
+compilation. That means we can write model code in the natural domain shape
+(``env.flow.d_park`` or ``env.attractions[i].queues.line[j]``) while the
+compiled data layout stays simple and fast.
+
+Components are useful when a concept has both state and behavior. In this
+example, ``VisitorFlow`` owns the visitor lifecycle: arrivals, dynamic visitor
+processes, departure cleanup, counters, and datasets. The attractions will form
+a component collection because the park has several repeated ride stations with
+the same structure but different constants.
 
 ``sim.Spawnable`` means visitor processes are created dynamically. The arrival
 process spawns a new visitor and initializes its fields before the visitor first
@@ -1130,55 +1143,75 @@ runs:
 
 .. code-block:: python
 
-    @park.process
-    def arrivals(env: Park):
-        while True:
-            sim.hold(sim.exponential(2.0))
-            handle = sim.spawn(env.visitor, env, priority=0)
-            vip = Visitor(handle)
-            vip.entry_park = sim.now()
-            vip.patience = sim.triangular(0.5, 1.0, 1.5)
-            vip.priority = 5 if sim.bernoulli(0.25) else 0
-
-The visitor process receives its own view as the final annotated parameter:
-
-.. code-block:: python
-
-    @park.process(struct=Visitor)
-    def visitor(env: Park, vip: Visitor):
-        me = sim.current()
-        vip.entry_queue = sim.now()
-        entry = sim.pq_put(env.park_queues[0], me, vip.priority)
-        sig = sim.suspend()
-        if sig == sim.SUCCESS:
-            vip.rides += 1
-
-The same pattern can be packaged inside a component. The ``sim.Spawnable``
-field binds to the same-named component process method, and the arrival process
-can spawn through ``self.visitor``:
-
-.. code-block:: python
-
-    class Entrance(sim.Component):
+    class VisitorFlow(sim.Component):
         visitor: sim.Spawnable
-        entered: sim.State
-
-        @sim.process
-        def visitor(self, env, vip: Visitor):
-            self.entered += 1
-            vip.entry_park = sim.now()
 
         @sim.process
         def arrivals(self, env):
             while True:
                 sim.hold(sim.exponential(2.0))
-                handle = sim.spawn(self.visitor, env)
-                Visitor(handle).patience = sim.triangular(0.5, 1.0, 1.5)
+                handle = sim.spawn(self.visitor, env, priority=0)
+                vip = Visitor(handle)
+                vip.entry_park = sim.now()
+                vip.patience = sim.triangular(0.5, 1.0, 1.5)
+                vip.priority = 5 if sim.bernoulli(0.25) else 0
 
+The visitor process receives its own view as the final annotated parameter on
+the component method:
 
-    class ParkWithEntrance(sim.Model):
-        entrance: Entrance = Entrance()
+.. code-block:: python
 
+    class VisitorFlow(sim.Component):
+        visitor: sim.Spawnable
+
+        @sim.process
+        def visitor(self, env, vip: Visitor):
+            me = sim.current()
+            vip.entry_queue = sim.now()
+            q = env.attractions[0].queues.line[0]
+            entry = sim.pq_put(q, me, vip.priority)
+            sig = sim.suspend()
+            if sig == sim.SUCCESS:
+                vip.rides += 1
+
+Here, ``self.visitor`` is the component-owned spawnable field, while the ride
+queues live on the attraction components. Model callbacks and component
+processes can still use natural dotted paths such as
+``env.attractions[0].queues.line[0]``; Cimba lowers those paths to the flat
+trial record before compilation.
+
+The same pattern is useful for the whole visitor lifecycle. The component owns
+arrival generation, visitor behavior, departure cleanup, counters, and datasets:
+
+.. code-block:: python
+
+    class VisitorFlow(sim.Component):
+        balks: sim.State
+        jockeys: sim.State
+        reneges: sim.State
+
+        visitor: sim.Spawnable
+        departed: sim.Store
+        d_park: sim.Dataset
+        d_riding: sim.Dataset
+        d_waiting: sim.Dataset
+        d_walking: sim.Dataset
+        d_rides: sim.Dataset
+
+        @sim.process
+        def arrivals(self, env):
+            # spawn visitors until closing time
+            ...
+
+        @sim.process
+        def visitor(self, env, vip: Visitor):
+            # walk, queue, balk, renege, jockey, ride, and leave
+            ...
+
+        @sim.process
+        def departures(self, env):
+            while True:
+                sim.despawn(sim.store_take(self.departed))
 
 Another process can use ``Visitor(handle)`` to view and update the same fields.
 That is how a ride server records waiting and riding time for the visitor it
@@ -1186,42 +1219,89 @@ has just taken from a priority queue. In other words, the visitor is both an
 active process and a small object carrying its own attributes and accumulated
 statistics.
 
-The ride server is a good example. It takes visitor handles from a priority
-queue, clears their impatience timers, records how long they waited, runs the
-ride, and then resumes each visitor:
+The ride servers belong naturally to attractions. Each attraction owns its
+priority queues and starts one server process copy per physical ride server:
+
+``RideQueues`` is a nested component. It gives the queue group its own name
+inside an ``Attraction`` instead of leaving every queue field directly on the
+top-level model. ``Attraction`` then uses a component process method for the
+server loop. Inside that method, ``self.queues.line[...]`` refers to the queues
+of this attraction instance, and ``self.batch_size`` or ``self.dmin`` are
+per-attraction primitive constants captured from ``__init__``.
 
 .. code-block:: python
 
-    @park.process(copies=NUM_SERVERS)
-    def server(env: Park, idx: int):
-        q = env.park_queues[SRV_Q[idx]]
-        attraction = SRV_ATTR[idx]
-        batch_size = BATCH_SIZES[attraction]
-        riders = np.empty(MAX_BATCH, dtype=np.int64)
+    class RideQueues(sim.Component):
+        line: sim.PQueues = sim.count("queue_count")
 
-        while True:
-            riders[0] = sim.pq_take(q)
-            cnt = 1
-            while sim.pq_length(q) > 0 and cnt < batch_size:
-                riders[cnt] = sim.pq_take(q)
-                cnt += 1
+        def __init__(self, queue_count: int):
+            self.queue_count = queue_count
 
-            boarding = sim.now()
-            for i in range(cnt):
-                sim.timers_clear(riders[i])
-                vip = Visitor(riders[i])
-                vip.waiting += boarding - vip.entry_queue
 
-            dur = sim.pert(
-                MIN_DUR[attraction],
-                MODE_DUR[attraction],
-                MAX_DUR[attraction],
-            )
-            sim.hold(dur)
+    class Attraction(sim.Component):
+        queues: RideQueues
 
-            for i in range(cnt):
-                Visitor(riders[i]).riding += dur
-                sim.resume(riders[i], sim.SUCCESS)
+        def __init__(self, attraction: int):
+            self.queue_count = int(NUM_QUEUES[attraction])
+            self.servers_per_q = int(SERVERS_PER_Q[attraction])
+            self.server_count = self.queue_count * self.servers_per_q
+            self.batch_size = int(BATCH_SIZES[attraction])
+            self.dmin = float(MIN_DUR[attraction])
+            self.dmode = float(MODE_DUR[attraction])
+            self.dmax = float(MAX_DUR[attraction])
+            self.queues = RideQueues(self.queue_count)
+
+        @sim.process(copies="server_count")
+        def server(self, env, idx: int):
+            q = self.queues.line[idx // self.servers_per_q]
+            riders = np.empty(MAX_BATCH, dtype=np.int64)
+
+            while True:
+                riders[0] = sim.pq_take(q)
+                cnt = 1
+                while sim.pq_length(q) > 0 and cnt < self.batch_size:
+                    riders[cnt] = sim.pq_take(q)
+                    cnt += 1
+
+                boarding = sim.now()
+                for i in range(cnt):
+                    sim.timers_clear(riders[i])
+                    vip = Visitor(riders[i])
+                    vip.waiting += boarding - vip.entry_queue
+
+                dur = sim.pert(self.dmin, self.dmode, self.dmax)
+                sim.hold(dur)
+
+                for i in range(cnt):
+                    Visitor(riders[i]).riding += dur
+                    sim.resume(riders[i], sim.SUCCESS)
+
+The top-level model is now mostly composition:
+
+The list annotation below creates a component collection. Cimba instantiates one
+lowered process namespace per item, so the nine attraction templates become
+processes such as ``attractions__0__server`` and ``attractions__8__server``.
+Their queue arrays are stored together, but source code can still index them by
+attraction.
+
+.. code-block:: python
+
+    class Park(sim.Model):
+        avg_rides: sim.Output
+        avg_time_in_park: sim.Output
+        avg_riding: sim.Output
+        avg_waiting: sim.Output
+        avg_walking: sim.Output
+        n_visitors: sim.Output
+        n_balks: sim.Output
+        n_jockeys: sim.Output
+        n_reneges: sim.Output
+
+        flow: VisitorFlow = VisitorFlow()
+        attractions: list[Attraction] = [
+            Attraction(attraction)
+            for attraction in range(1, NUM_ATTRACTIONS + 1)
+        ]
 
 Notice the flow of control here. The visitor does not call a ride function. The
 visitor suspends while waiting in the queue. The server later resumes the
@@ -1242,28 +1322,29 @@ fires, or a server boards it and resumes it.
     TIMER_JOCKEYING = 17
     TIMER_RENEGING = 42
 
-    @park.process(struct=Visitor)
-    def visitor(env: Park, vip: Visitor):
-        me = sim.current()
-        q = env.park_queues[0]
-        entry = sim.pq_put(q, me, vip.priority)
+    class VisitorFlow(sim.Component):
+        @sim.process
+        def visitor(self, env, vip: Visitor):
+            me = sim.current()
+            q = env.attractions[0].queues.line[0]
+            entry = sim.pq_put(q, me, vip.priority)
 
-        sim.timer_add(me, vip.patience * 5.0, TIMER_JOCKEYING)
-        sim.timer_add(me, vip.patience * 10.0, TIMER_RENEGING)
+            sim.timer_add(me, vip.patience * 5.0, TIMER_JOCKEYING)
+            sim.timer_add(me, vip.patience * 10.0, TIMER_RENEGING)
 
-        while True:
-            sig = sim.suspend()
-            if sig == TIMER_JOCKEYING:
-                my_pos = sim.pq_position(q, entry)
-                # If another queue is shorter, cancel and re-enter there.
-            elif sig == TIMER_RENEGING:
-                sim.pq_cancel(q, entry)
-                sim.timers_clear(me)
-                return
-            else:
-                sim.timers_clear(me)
-                vip.rides += 1
-                return
+            while True:
+                sig = sim.suspend()
+                if sig == TIMER_JOCKEYING:
+                    my_pos = sim.pq_position(q, entry)
+                    # If another queue is shorter, cancel and re-enter there.
+                elif sig == TIMER_RENEGING:
+                    sim.pq_cancel(q, entry)
+                    sim.timers_clear(me)
+                    return
+                else:
+                    sim.timers_clear(me)
+                    vip.rides += 1
+                    return
 
 ``sim.timer_set()`` schedules an absolute timer, ``sim.timer_add()`` schedules a
 relative timer, ``sim.timer_cancel()`` cancels one timer, and
@@ -1279,12 +1360,20 @@ enters the better queue with slightly higher priority:
 
     if sig == TIMER_JOCKEYING:
         my_pos = sim.pq_position(q, entry)
-        new_qi, new_len = shortest_queue(env, attraction)
+        new_q = env.attractions[ride].queues.line[0]
+        new_len = sim.pq_length(new_q)
+        for candidate in range(1, env.attractions[ride].queues.queue_count):
+            candidate_q = env.attractions[ride].queues.line[candidate]
+            candidate_len = sim.pq_length(candidate_q)
+            if candidate_len < new_len:
+                new_q = candidate_q
+                new_len = candidate_len
+
         if new_len < my_pos:
             sim.pq_cancel(q, entry)
-            q = env.park_queues[new_qi]
+            q = new_q
             entry = sim.pq_put(q, me, vip.priority + 1)
-            env.jockeys += 1
+            self.jockeys += 1
 
 If the reneging timer fires, the visitor cancels the queue entry and goes
 somewhere else:
@@ -1294,7 +1383,7 @@ somewhere else:
     elif sig == TIMER_RENEGING:
         sim.pq_cancel(q, entry)
         sim.timers_clear(me)
-        env.reneges += 1
+        self.reneges += 1
         break
 
 And if the signal is neither timer, the visitor was resumed by the ride server,
@@ -1317,9 +1406,10 @@ provides weighted draws with ``sim.categorical()`` and ``sim.loaded_dice()``.
 
     NEXT_FROM_ENTRANCE = (0.30, 0.20, 0.20, 0.10, 0.05, 0.05, 0.10)
 
-    @park.process(struct=Visitor)
-    def visitor(env: Park, vip: Visitor):
-        next_stop = sim.categorical(NEXT_FROM_ENTRANCE)
+    class VisitorFlow(sim.Component):
+        @sim.process
+        def visitor(self, env, vip: Visitor):
+            next_stop = sim.categorical(NEXT_FROM_ENTRANCE)
 
 For a large transition matrix, keep arrays at module scope and index into the
 appropriate row from helper functions. Fixed arrays outside the process loop
@@ -1329,7 +1419,8 @@ In the runnable tutorial, the helper samples the row explicitly:
 
 .. code-block:: python
 
-    def next_attraction(attraction: int) -> int:
+    @njit
+    def _next_attraction(attraction: int) -> int:
         r = sim.random01()
         acc = 0.0
         for j in range(NUM_ATTRACTIONS + 2):
@@ -1345,12 +1436,12 @@ an explicit cumulative scan, the model concept is a weighted routing decision.
 A day in the park
 ^^^^^^^^^^^^^^^^^
 
-The complete park model has three kinds of process:
+The complete park model has three process groups:
 
-* arrivals spawn visitors until closing time,
-* visitors walk, queue, balk, renege, jockey, ride, and eventually leave,
-* servers take batches from priority queues, hold for ride duration, and resume
-  riders.
+* ``flow`` spawns visitors, runs each visitor's day, and despawns departures,
+* ``attractions`` run the ride servers,
+* ``attractions[].queues`` connect visitors waiting for rides to the servers
+  that board them.
 
 The visitor's journey is a good example of process-oriented modeling. The
 process reads like the entity's day:
@@ -1368,17 +1459,18 @@ Finished dynamic processes should be reclaimed during long trials:
 
 .. code-block:: python
 
-    @park.process
-    def departures(env: Park):
-        while True:
-            sim.despawn(sim.store_take(env.departed))
+    class VisitorFlow(sim.Component):
+        @sim.process
+        def departures(self, env):
+            while True:
+                sim.despawn(sim.store_take(self.departed))
 
-    @park.process(struct=Visitor)
-    def visitor(env: Park, vip: Visitor):
-        # ... after the visitor decides to leave ...
-        sim.tally(env.d_park, sim.now() - vip.entry_park)
-        sim.tally(env.d_rides, 1.0 * vip.rides)
-        sim.store_put(env.departed, sim.current())
+        @sim.process
+        def visitor(self, env, vip: Visitor):
+            # ... after the visitor decides to leave ...
+            sim.tally(self.d_park, sim.now() - vip.entry_park)
+            sim.tally(self.d_rides, 1.0 * vip.rides)
+            sim.store_put(self.departed, sim.current())
 
 The model can then report average time in park, rides per visitor, waiting
 time, walking time, balks, reneges, and jockeys. A typical run of
