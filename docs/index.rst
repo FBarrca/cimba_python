@@ -8,9 +8,14 @@ Cimba Python documentation
     :caption: Contents:
 
     welcome
+    cimba_intro/index
     installation
     tutorial
+    tutorials/index
+    examples/index
     background
     topical_guides/index
-    missing_features
+    api_reference/index
     api/cimba
+    about/index
+    missing_features

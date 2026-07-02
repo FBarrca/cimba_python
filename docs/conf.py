@@ -30,10 +30,18 @@ autodoc_mock_imports = ["cimba._cimba", "numba", "llvmlite"]
 html_theme = "sphinx_rtd_theme"
 html_theme_options = {
     "logo_only": False,
-    "display_version": False,
 }
 html_static_path = ["./static"]
 html_css_files = ["custom.css"]
 
 primary_domain = "py"
 highlight_language = "python"
+
+# External links to the upstream Cimba C documentation on Read the Docs.
+rst_epilog = """
+.. _Cimba C documentation: https://cimba.readthedocs.io/en/latest/
+.. _Cimba C tutorial: https://cimba.readthedocs.io/en/latest/tutorial.html
+.. _Cimba C background: https://cimba.readthedocs.io/en/latest/background.html
+.. _Cimba C API reference: https://cimba.readthedocs.io/en/latest/api/library_root.html
+.. _Cimba C installation guide: https://cimba.readthedocs.io/en/latest/installation.html
+"""
