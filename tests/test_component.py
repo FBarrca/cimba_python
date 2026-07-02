@@ -824,6 +824,153 @@ def test_component_collection_owned_spawnables_get_per_item_descriptors():
     assert exp.trials["flows__count"][0].tolist() == [2, 5]
 
 
+def test_scalar_component_can_own_process_handles():
+    class Workers(sim.Component):
+        total: sim.State
+        worker: sim.Processes
+
+        @sim.process(copies=2)
+        def worker(self, env, idx):
+            sig = sim.suspend()
+            self.total += (idx + 1) * sig
+
+        @sim.process
+        def supervisor(self, env):
+            sim.hold(0.1)
+            sim.interrupt(self.worker[1], 7, 0)
+            sim.suspend()
+
+    class Network(sim.Model):
+        total: sim.Output
+        workers: Workers = Workers()
+
+    model = Network()
+    assert model.dtype["workers__worker"].shape == (2,)
+
+    @model.process
+    def outside_supervisor(env: Network):
+        sim.hold(0.2)
+        sim.interrupt(env.workers.worker[0], 5, 0)
+        sim.suspend()
+
+    @model.collect
+    def collect_stats(env: Network):
+        env.total = env.workers.total
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
+                           seed=33)
+    assert exp.run() == 0
+    assert exp["total"][0] == 19.0
+
+
+def test_component_collection_can_own_ragged_process_handles():
+    class Team(sim.Component):
+        total: sim.State
+        worker: sim.Processes
+
+        def __init__(self, worker_count: int, base: int):
+            self.worker_count = worker_count
+            self.base = base
+
+        @sim.process(copies="worker_count")
+        def worker(self, env, idx):
+            sig = sim.suspend()
+            self.total += self.base + idx + sig
+
+    class Network(sim.Model):
+        total: sim.Output
+        teams: list[Team] = [Team(1, 10), Team(3, 20)]
+
+    model = Network()
+    assert model.dtype["teams__worker"].shape == (4,)
+    (teams,) = model._component_collection_decls
+    assert teams.process_counts["worker"] == (1, 3)
+    assert teams.process_offsets["worker"] == (0, 1)
+
+    @model.process
+    def supervisor(env: Network):
+        sim.hold(0.1)
+        sim.interrupt(env.teams[0].worker[0], 1, 0)
+        sim.interrupt(env.teams[1].worker[2], 2, 0)
+        sim.suspend()
+
+    @model.collect
+    def collect_stats(env: Network):
+        env.total = env.teams[0].total + env.teams[1].total
+
+    assert "env.teams__worker[0]" in model._processes[-1].fn.__cimba_source__
+    assert "env.teams__worker[3]" in model._processes[-1].fn.__cimba_source__
+
+    graph = model.process_dag()
+    assert sim.ProcessDAGEdge(
+        "process:supervisor",
+        "process:teams__0__worker",
+        "interrupt",
+    ) in graph.edges
+    assert sim.ProcessDAGEdge(
+        "process:supervisor",
+        "process:teams__1__worker",
+        "interrupt",
+    ) in graph.edges
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
+                           seed=34)
+    assert exp.run() == 0
+    assert exp["total"][0] == 35.0
+
+
+def test_nested_component_collection_can_own_process_handles():
+    class Gate(sim.Component):
+        total: sim.State
+        worker: sim.Processes
+
+        def __init__(self, worker_count: int, base: int):
+            self.worker_count = worker_count
+            self.base = base
+
+        @sim.process(copies="worker_count")
+        def worker(self, env, idx):
+            sig = sim.suspend()
+            self.total += self.base + idx + sig
+
+    class Zone(sim.Component):
+        gates: list[Gate]
+
+        def __init__(self, gates: list[Gate]):
+            self.gates = gates
+
+    class Campus(sim.Model):
+        total: sim.Output
+        zones: list[Zone] = [
+            Zone([Gate(1, 10)]),
+            Zone([Gate(2, 20), Gate(1, 30)]),
+        ]
+
+    model = Campus()
+    assert model.dtype["zones__gates__worker"].shape == (4,)
+    (zones,) = model._component_collection_decls
+    (gates,) = zones.children
+    assert gates.process_counts["worker"] == (1, 2, 1)
+    assert gates.process_offsets["worker"] == (0, 1, 3)
+
+    @model.process
+    def supervisor(env: Campus):
+        sim.hold(0.1)
+        sim.interrupt(env.zones[1].gates[0].worker[1], 4, 0)
+        sim.suspend()
+
+    @model.collect
+    def collect_stats(env: Campus):
+        env.total = env.zones[1].gates[0].total
+
+    assert "env.zones__gates__worker[2]" in \
+        model._processes[-1].fn.__cimba_source__
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
+                           seed=35)
+    assert exp.run() == 0
+    assert exp["total"][0] == 25.0
+
+
 def test_model_process_can_spawn_component_collection_field():
     class Flow(sim.Component):
         count: sim.State
@@ -1096,6 +1243,15 @@ def test_component_collection_declaration_errors_are_rejected():
 
     with pytest.raises(ValueError, match="must name an int constant"):
         MissingCountModel()
+
+    class MissingWorker(sim.Component):
+        worker: sim.Processes
+
+    class MissingWorkerModel(sim.Model):
+        items: list[MissingWorker] = [MissingWorker()]
+
+    with pytest.raises(ValueError, match="same-named @sim.process"):
+        MissingWorkerModel()
 
 
 def test_component_collection_namespace_errors_are_rejected():

@@ -85,6 +85,9 @@ flatten to names such as ``attraction__queues__line``. A component-owned
 ``sim.Spawnable`` field binds to the same-named component process method and
 can be spawned with paths such as ``sim.spawn(self.visitor, env)`` or
 ``sim.spawn(env.flow.visitor, env)``.
+Component-owned ``sim.Processes`` fields likewise publish handles for
+same-named fixed component process methods; component collections flatten
+ragged per-item copy counts behind paths such as ``env.teams[i].worker[j]``.
 Fixed collections of repeated components can be declared with standard
 ``list[ComponentType]`` annotations. Model callbacks can use indexed access
 such as ``env.attractions[i].queues[j]``. Nested collections also work; Cimba

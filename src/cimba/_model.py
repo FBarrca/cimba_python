@@ -232,6 +232,8 @@ class _ComponentDecl:
     constants: dict[str, tuple[Any, ...]] = field(default_factory=dict)
     pqueue_counts: dict[str, tuple[int, ...]] = field(default_factory=dict)
     pqueue_offsets: dict[str, tuple[int, ...]] = field(default_factory=dict)
+    process_counts: dict[str, tuple[int, ...]] = field(default_factory=dict)
+    process_offsets: dict[str, tuple[int, ...]] = field(default_factory=dict)
     children: tuple["_AnyComponentDecl", ...] = ()
 
 
@@ -246,6 +248,8 @@ class _ComponentCollectionDecl:
     constants: dict[str, tuple[Any, ...]]
     pqueue_counts: dict[str, tuple[int, ...]]
     pqueue_offsets: dict[str, tuple[int, ...]]
+    process_counts: dict[str, tuple[int, ...]]
+    process_offsets: dict[str, tuple[int, ...]]
     local_name: str = ""
     process_names: tuple[str, ...] = ()
     display_name: str = ""
@@ -304,7 +308,7 @@ def _field_declarations(
                     "'qs: sim.PQueues = sim.count(4)'")
         else:
             method_binding = (
-                kind == "spawnable"
+                kind in ("processes", "spawnable")
                 and getattr(default, _COMPONENT_PROCESS_ATTR, None)
                 is not None
             )
@@ -318,7 +322,7 @@ def _field_declarations(
 
 def _component_declarations(cls: type[Component]) -> dict[str, Any]:
     decls = _field_declarations(cls, allow_symbolic_pqueues=True)
-    for kind in ("predicate", "event", "processes"):
+    for kind in ("predicate", "event"):
         if decls[kind]:
             raise ValueError(
                 f"component '{cls.__name__}' declares {kind} fields, which "
@@ -340,7 +344,7 @@ def _component_collection_class(hint: Any) -> type[Component] | None:
 def _component_field_map(name: str, decls: dict[str, Any]) -> dict[str, str]:
     fields: set[str] = set()
     for kind in ("param", "output", "state", "fstate", "resource",
-                 "dataset", "condition", "spawnable", "trace"):
+                 "dataset", "condition", "processes", "spawnable", "trace"):
         fields.update(decls[kind])
     for kind in ("queue", "pool", "store", "pqueues"):
         fields.update(decls[kind])
@@ -400,6 +404,46 @@ def _resolve_component_pqueues(
     return counts_by_field, offsets_by_field
 
 
+def _offsets_from_counts(counts: Iterable[int]) -> tuple[tuple[int, ...],
+                                                         tuple[int, ...]]:
+    counts_tuple = tuple(int(count) for count in counts)
+    offsets: list[int] = []
+    total = 0
+    for count in counts_tuple:
+        offsets.append(total)
+        total += count
+    return counts_tuple, tuple(offsets)
+
+
+def _resolve_component_processes(
+    component_name: str,
+    cls: type[Component],
+    templates: Sequence[Component],
+    decls: Mapping[str, Any],
+) -> tuple[dict[str, tuple[int, ...]], dict[str, tuple[int, ...]]]:
+    methods = {
+        name: spec
+        for name, _method, spec in _component_process_methods(cls)
+    }
+    counts_by_field: dict[str, tuple[int, ...]] = {}
+    offsets_by_field: dict[str, tuple[int, ...]] = {}
+    for field in decls["processes"]:
+        spec = methods.get(field)
+        if spec is None:
+            raise ValueError(
+                f"component '{component_name}' Processes field '{field}' "
+                "must have a same-named @sim.process method")
+        counts = [
+            _resolve_component_process_copies(
+                component_name, template, field, spec)
+            for template in templates
+        ]
+        counts_tuple, offsets = _offsets_from_counts(counts)
+        counts_by_field[field] = counts_tuple
+        offsets_by_field[field] = offsets
+    return counts_by_field, offsets_by_field
+
+
 def _rewrite_component_capacity(
     component_name: str,
     field_name: str,
@@ -431,7 +475,7 @@ def _validate_component_instance_declarations(
                 raise ValueError(
                     f"component collection '{component_name}' declares "
                     f"{kind} fields, which are not supported yet")
-    for kind in ("predicate", "event", "processes"):
+    for kind in ("predicate", "event"):
         if decls[kind]:
             raise ValueError(
                 f"component '{component_name}' declares {kind} fields, which "
@@ -465,6 +509,7 @@ def _flatten_component_declarations(
     field_map: dict[str, str],
     instance_count: int,
     pqueue_counts: Mapping[str, tuple[int, ...]],
+    process_counts: Mapping[str, tuple[int, ...]],
 ) -> None:
     for flat_name in field_map.values():
         if _declarations_contain(target, flat_name):
@@ -485,6 +530,10 @@ def _flatten_component_declarations(
                 target["field_shapes"][field_map[name]] = (instance_count,)
     for name, counts in pqueue_counts.items():
         target["pqueues"][field_map[name]] = sum(counts)
+    for name, counts in process_counts.items():
+        flat_name = field_map[name]
+        target["processes"].append(flat_name)
+        target["field_shapes"][flat_name] = (sum(counts),)
 
 
 def _component_child_default(
@@ -565,8 +614,11 @@ def _build_component_declaration(
     constants = _component_constants(templates, direct_field_map)
     pqueue_counts, pqueue_offsets = _resolve_component_pqueues(
         name, instance_count, decls, constants)
+    process_counts, process_offsets = _resolve_component_processes(
+        name, cls, templates, decls)
     _flatten_component_declarations(
-        target, name, decls, direct_field_map, instance_count, pqueue_counts)
+        target, name, decls, direct_field_map, instance_count, pqueue_counts,
+        process_counts)
 
     children: list[_AnyComponentDecl] = []
     for fname, hint in get_type_hints(cls).items():
@@ -644,6 +696,8 @@ def _build_component_declaration(
             constants=constants,
             pqueue_counts=pqueue_counts,
             pqueue_offsets=pqueue_offsets,
+            process_counts=process_counts,
+            process_offsets=process_offsets,
             local_name=local_name,
             process_names=process_names,
             display_name=display_name,
@@ -668,6 +722,8 @@ def _build_component_declaration(
         constants=constants,
         pqueue_counts=pqueue_counts,
         pqueue_offsets=pqueue_offsets,
+        process_counts=process_counts,
+        process_offsets=process_offsets,
         children=tuple(children),
     )
 
@@ -839,6 +895,8 @@ class _ProcDecl:
     spawnable: bool                # created by sim.spawn(), not at setup
     spawn_field: str | None = None # env Spawnable field descriptor lands in
     spawn_index: int | None = None # shaped Spawnable field element, if any
+    process_field: str | None = None # env Processes field handles land in
+    process_offset: int = 0        # first handle slot for this process
 
     @property
     def alloc_size(self) -> int:
@@ -966,6 +1024,10 @@ def _collection_pqueue_offsets_symbol(collection: str, field: str) -> str:
     return f"_CIMBA_PQOFF_{collection}__{field}"
 
 
+def _collection_process_offsets_symbol(collection: str, field: str) -> str:
+    return f"_CIMBA_PROCOFF_{collection}__{field}"
+
+
 def _component_offsets_symbol(component: str) -> str:
     return f"_CIMBA_OFF_{component}"
 
@@ -987,7 +1049,10 @@ def _subscript(
     return ast.Subscript(value=value, slice=index, ctx=ctx)
 
 
-def _add(left: ast.expr, right: ast.expr) -> ast.BinOp:
+def _add(left: ast.expr, right: ast.expr) -> ast.expr:
+    if (isinstance(left, ast.Constant) and type(left.value) is int
+            and isinstance(right, ast.Constant) and type(right.value) is int):
+        return ast.Constant(left.value + right.value)
     return ast.BinOp(left=left, op=ast.Add(), right=right)
 
 
@@ -1185,6 +1250,23 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             ast.Load(),
         )
 
+    def _process_offset_expr(self, access: _ComponentFieldAccess) -> ast.expr:
+        offsets = access.decl.process_offsets[access.field]
+        if len(offsets) == 1:
+            return ast.Constant(offsets[0])
+        if (isinstance(access.index, ast.Constant)
+                and type(access.index.value) is int):
+            return ast.Constant(offsets[access.index.value])
+        if access.index is None:
+            raise TypeError("component Processes field has no instance index")
+        return _subscript(
+            ast.Name(id=_collection_process_offsets_symbol(access.decl.name,
+                                                           access.field),
+                     ctx=ast.Load()),
+            access.index,
+            ast.Load(),
+        )
+
     def _raise_unknown_field(
         self,
         namespace: _ComponentAccess,
@@ -1237,6 +1319,23 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             )
             return ast.copy_location(_subscript(flat, index, node.ctx), node)
 
+        if access is not None and access.field in access.decl.decls["processes"]:
+            process_index = self.visit(copy.deepcopy(node.slice))
+            if not isinstance(process_index, ast.expr):
+                raise TypeError("component Processes index did not lower "
+                                "to an expression")
+            offset = self._process_offset_expr(access)
+            if isinstance(offset, ast.Constant) and offset.value == 0:
+                index = process_index
+            else:
+                index = _add(offset, process_index)
+            flat = _env_attr(
+                self.env_name,
+                access.decl.direct_field_map[access.field],
+                ast.Load(),
+            )
+            return ast.copy_location(_subscript(flat, index, node.ctx), node)
+
         collection = self._collection_ref(node.value)
         if collection is not None:
             raise ValueError(
@@ -1253,7 +1352,8 @@ class _ComponentPathLowerer(ast.NodeTransformer):
 
         access = self._field_ref(node)
         if access is not None:
-            if access.field in access.decl.decls["pqueues"]:
+            if (access.field in access.decl.decls["pqueues"]
+                    or access.field in access.decl.decls["processes"]):
                 raise ValueError(
                     f"{self._callback_label()} must index {access.text} "
                     "before using it")
@@ -1491,6 +1591,11 @@ def _component_collection_namespace(
             if len(offsets) > 1:
                 namespace[
                     _collection_pqueue_offsets_symbol(decl.name, field)
+                ] = np.asarray(offsets, dtype=np.int64)
+        for field, offsets in decl.process_offsets.items():
+            if len(offsets) > 1:
+                namespace[
+                    _collection_process_offsets_symbol(decl.name, field)
                 ] = np.asarray(offsets, dtype=np.int64)
         if (isinstance(decl, _ComponentCollectionDecl)
                 and len(decl.parent_offsets) > 1):
@@ -1820,13 +1925,20 @@ class Model:
                         spawn_field = decl.direct_field_map[method_name]
                         if _component_instance_count(decl) > 1:
                             spawn_index = index
+                    process_field = None
+                    process_offset = 0
+                    if method_name in decl.decls["processes"]:
+                        process_field = decl.direct_field_map[method_name]
+                        process_offset = decl.process_offsets[method_name][index]
                     lowered = _lower_component_process(
                         component_name, component, decl, index, method_name,
                         method)
                     self.process(lowered, copies=copies,
                                  priority=spec.priority,
                                  _spawn_field=spawn_field,
-                                 _spawn_index=spawn_index)
+                                 _spawn_index=spawn_index,
+                                 _process_field=process_field,
+                                 _process_offset=process_offset)
 
     @property
     def _component_field_maps(self) -> dict[str, dict[str, str]]:
@@ -1926,7 +2038,9 @@ class Model:
 
     def process(self, fn=None, *, copies: int = 1, priority: int = 0,
                 struct=None, _spawn_field: str | None = None,
-                _spawn_index: int | None = None):
+                _spawn_index: int | None = None,
+                _process_field: str | None = None,
+                _process_offset: int = 0):
         """Register a process function `def fn(env)` or `def fn(env, idx)`
         (the latter receives its copy index). A final parameter annotated
         with a sim.Struct subclass receives the process's own field view:
@@ -1941,12 +2055,33 @@ class Model:
             return lambda f: self.process(f, copies=copies,
                                           priority=priority, struct=struct,
                                           _spawn_field=_spawn_field,
-                                          _spawn_index=_spawn_index)
+                                          _spawn_index=_spawn_index,
+                                          _process_field=_process_field,
+                                          _process_offset=_process_offset)
         if copies < 1:
             raise ValueError("copies must be >= 1")
         if struct is not None and not _is_struct_class(struct):
             raise ValueError("struct= expects a sim.Struct subclass")
         name = fn.__name__
+        if _process_field is not None:
+            if _spawn_field is not None:
+                raise ValueError(
+                    f"internal process binding for '{name}' cannot also bind "
+                    "a Spawnable field")
+            if _process_field not in self._process_fields:
+                raise ValueError(
+                    f"internal process binding for '{name}' references "
+                    f"unknown component Processes field '{_process_field}'")
+            shape = self._field_shapes.get(_process_field)
+            if shape is None or len(shape) != 1:
+                raise ValueError(
+                    f"Processes field '{_process_field}' has unsupported "
+                    f"shape {shape}")
+            if _process_offset < 0 or _process_offset + copies > shape[0]:
+                raise ValueError(
+                    f"Processes field '{_process_field}' cannot hold process "
+                    f"'{name}' at offset {_process_offset} with {copies} "
+                    "copies")
         if _spawn_field is not None:
             if _spawn_field not in self._component_spawnable_fields:
                 raise ValueError(
@@ -1977,8 +2112,11 @@ class Model:
         spawn_field = _spawn_field if _spawn_field is not None else (
             name if public_spawnable else None)
         spawn_index = _spawn_index if _spawn_field is not None else None
+        process_field = _process_field if _process_field is not None else (
+            name if name in self._process_fields else None)
+        process_offset = _process_offset if _process_field is not None else 0
         publishes_field = (
-            name in self._process_fields
+            process_field is not None
             or public_spawnable
             or (spawn_field is not None and name == spawn_field)
         )
@@ -1989,6 +2127,8 @@ class Model:
                 raise RuntimeError("model is already compiled")
             if any(p.name == name for p in self._processes):
                 raise ValueError(f"process '{name}' already registered")
+            if process_field is not None and process_field != name:
+                self._register_name(name, "process")
         else:
             self._register_name(name, "process")
         if spawn_field is not None:
@@ -2031,7 +2171,8 @@ class Model:
         self._processes.append(_ProcDecl(name, fn, copies, priority,
                                          indexed, struct, injected,
                                          spawnable, spawn_field,
-                                         spawn_index))
+                                         spawn_index, process_field,
+                                         process_offset))
         return fn
 
     def process_dag(self, *, validate: bool = True) -> ProcessDAG:
@@ -2055,6 +2196,8 @@ class Model:
         entity_kinds.update({name: "event" for name in event_fields})
         spawnable_field_processes: dict[str, list[str]] = {}
         spawnable_index_processes: dict[tuple[str, int], list[str]] = {}
+        process_field_processes: dict[str, list[str]] = {}
+        process_index_processes: dict[tuple[str, int], list[str]] = {}
         for process in self._processes:
             if process.spawnable and process.spawn_field is not None:
                 spawnable_field_processes.setdefault(
@@ -2064,6 +2207,15 @@ class Model:
                         (process.spawn_field, process.spawn_index),
                         [],
                     ).append(process.name)
+            if not process.spawnable and process.process_field is not None:
+                process_field_processes.setdefault(
+                    process.process_field, []).append(process.name)
+                for slot in range(process.process_offset,
+                                  process.process_offset + process.copies):
+                    process_index_processes.setdefault(
+                        (process.process_field, slot),
+                        [],
+                    ).append(process.name)
         return infer_process_dag(
             self._processes,
             entity_kinds=entity_kinds,
@@ -2071,6 +2223,8 @@ class Model:
             spawnable_fields=self._spawnable_fields,
             spawnable_field_processes=spawnable_field_processes,
             spawnable_index_processes=spawnable_index_processes,
+            process_field_processes=process_field_processes,
+            process_index_processes=process_index_processes,
             event_callbacks=((field, fn) for _n, fn, field, _d in self._events),
             blocks=self._process_dag_blocks(entity_kinds),
         )
@@ -2144,16 +2298,16 @@ class Model:
         return (list(self.queues) + self.resources + list(self.pools)
                 + list(self.stores) + self.datasets + self.conditions)
 
-    def _handle_expr(self, pname: str, i: int) -> str:
+    def _handle_expr(self, process: _ProcDecl, i: int) -> str:
         """Env expression for a process handle: an element of the declared
         Processes field, or the hidden per-copy scalar."""
-        if pname in self._process_fields:
-            return f"env['{pname}'][{i}]"
-        return f"env['_p_{pname}_{i}']"
+        if process.process_field is not None:
+            return f"env['{process.process_field}'][{process.process_offset + i}]"
+        return f"env['_p_{process.name}_{i}']"
 
     @property
     def _process_handles(self) -> list[str]:
-        return [self._handle_expr(p.name, i)
+        return [self._handle_expr(p, i)
                 for p in self._processes if not p.spawnable
                 for i in range(p.copies)]
 
@@ -2198,11 +2352,18 @@ class Model:
         fields += [(f, "<i8") for _n, _fn, f, _d in self._events
                    if f.startswith("_ev_")]
         fields += [self._field_spec(s, "<i8") for s in self._spawnable_fields]
+        process_fields_added: set[str] = set()
         for p in self._processes:
             if p.spawnable:
                 continue
-            if p.name in self._process_fields:
-                fields += [(p.name, "<i8", (p.copies,))]
+            if p.process_field is not None:
+                if p.process_field not in process_fields_added:
+                    shape = self._field_shapes.get(p.process_field)
+                    if shape is None:
+                        fields += [(p.process_field, "<i8", (p.copies,))]
+                    else:
+                        fields += [self._field_spec(p.process_field, "<i8")]
+                    process_fields_added.add(p.process_field)
             else:
                 fields += [(f"_p_{p.name}_{i}", "<i8")
                            for i in range(p.copies)]
@@ -2437,7 +2598,7 @@ class Model:
                         f"    process_initialize(p, NAME_{pname}, "
                         f"F_{pname}, ctx, {p.priority})",
                         "    process_start(p)",
-                        f"    {self._handle_expr(pname, i)} = p"]
+                        f"    {self._handle_expr(p, i)} = p"]
         src += ["    event_queue_execute()"]
         if self._collect is not None:
             src += ["    COLLECT(env)"]
@@ -2487,11 +2648,40 @@ class Model:
         if unbound:
             raise ValueError(f"Event field(s) {unbound} declared but "
                              "no @event of that name registered")
-        registered = {p.name for p in self._processes}
-        unbound = [f for f in self._process_fields if f not in registered]
-        if unbound:
-            raise ValueError(f"Processes field(s) {unbound} declared but "
-                             "no @process of that name registered")
+        process_field_slots: dict[str, dict[int, int]] = {}
+        for process in self._processes:
+            if process.spawnable or process.process_field is None:
+                continue
+            slots = process_field_slots.setdefault(process.process_field, {})
+            for slot in range(process.process_offset,
+                              process.process_offset + process.copies):
+                slots[slot] = slots.get(slot, 0) + 1
+        unbound_process_fields: list[str] = []
+        bad_process_fields: list[str] = []
+        for field in self._process_fields:
+            slots = process_field_slots.get(field)
+            if slots is None:
+                unbound_process_fields.append(field)
+                continue
+            shape = self._field_shapes.get(field)
+            if shape is None:
+                expected = len(slots)
+            elif len(shape) == 1:
+                expected = shape[0]
+            else:
+                raise ValueError(f"Processes field '{field}' has unsupported "
+                                 f"shape {shape}")
+            if (set(slots) != set(range(expected))
+                    or any(count != 1 for count in slots.values())):
+                bad_process_fields.append(field)
+        if unbound_process_fields:
+            raise ValueError(
+                f"Processes field(s) {unbound_process_fields} declared but "
+                "no @process of that name registered")
+        if bad_process_fields:
+            raise ValueError(
+                f"Processes field(s) {bad_process_fields} have incomplete or "
+                "overlapping process handle bindings")
         bound_spawn_slots = {
             (p.spawn_field, p.spawn_index)
             for p in self._processes

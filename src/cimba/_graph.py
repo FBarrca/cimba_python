@@ -258,6 +258,9 @@ def infer_process_dag(
     spawnable_field_processes: Mapping[str, Iterable[str]] | None = None,
     spawnable_index_processes: Mapping[
         tuple[str, int], Iterable[str]] | None = None,
+    process_field_processes: Mapping[str, Iterable[str]] | None = None,
+    process_index_processes: Mapping[
+        tuple[str, int], Iterable[str]] | None = None,
     event_callbacks: Iterable[tuple[str, Callable[..., Any]]] = (),
     blocks: Iterable[ProcessDAGBlock] = (),
 ) -> ProcessDAG:
@@ -273,6 +276,14 @@ def infer_process_dag(
     spawnable_indexed_processes = {
         key: set(names)
         for key, names in (spawnable_index_processes or {}).items()
+    }
+    process_field_refs = {
+        field: set(names)
+        for field, names in (process_field_processes or {}).items()
+    }
+    process_index_refs = {
+        key: set(names)
+        for key, names in (process_index_processes or {}).items()
     }
 
     nodes = [
@@ -296,6 +307,8 @@ def infer_process_dag(
         spawnable_fields=spawnable_field_names,
         spawnable_field_processes=spawnable_processes,
         spawnable_index_processes=spawnable_indexed_processes,
+        process_field_processes=process_field_refs,
+        process_index_processes=process_index_refs,
     )
 
     for process in process_list:
@@ -344,6 +357,8 @@ class _InferenceContext:
     spawnable_fields: set[str]
     spawnable_field_processes: dict[str, set[str]]
     spawnable_index_processes: dict[tuple[str, int], set[str]]
+    process_field_processes: dict[str, set[str]]
+    process_index_processes: dict[tuple[str, int], set[str]]
 
 
 class _ProcessAnalyzer(ast.NodeVisitor):
@@ -545,6 +560,14 @@ class _ProcessAnalyzer(ast.NodeVisitor):
         if field in self.context.entity_kinds:
             return {_Ref(self.context.entity_kinds[field], field)}
         if index is not None:
+            processes = self.context.process_index_processes.get(
+                (field, index))
+            if processes:
+                return {
+                    _Ref("process", name)
+                    for name in processes
+                    if name in self.context.process_names
+                }
             processes = self.context.spawnable_index_processes.get(
                 (field, index))
             if processes:
@@ -553,6 +576,13 @@ class _ProcessAnalyzer(ast.NodeVisitor):
                     for name in processes
                     if name in self.context.process_names
                 }
+        processes = self.context.process_field_processes.get(field)
+        if processes:
+            return {
+                _Ref("process", name)
+                for name in processes
+                if name in self.context.process_names
+            }
         processes = self.context.spawnable_field_processes.get(field)
         if processes:
             return {
