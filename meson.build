@@ -5,7 +5,7 @@ project(
     'cimba',
     'c',
     'cython',
-    version: '0.1.0',
+    version: '0.3.0',
     meson_version: '>=1.1.0',
     # Fast wheels by default. Use -Dcimba_debug_logs=true to build the bundled
     # Cimba library with native INFO logging for tutorials/debugging.
