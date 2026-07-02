@@ -6,32 +6,36 @@ import cimba
 import cimba.sim as sim
 
 
+class MM1Station(sim.Component):
+    queue: sim.Queue
+
+    @sim.process
+    def arrival(self, env):
+        while True:
+            t_ia = sim.exponential(1.0 / env.utilization)
+            sim.hold(t_ia)
+            sim.put(self.queue, 1)
+
+    @sim.process
+    def service(self, env):
+        while True:
+            sim.get(self.queue, 1)
+            t_srv = sim.exponential(1.0)
+            sim.hold(t_srv)
+
+
 class MM1(sim.Model):
     utilization: sim.Param
     avg_queue_length: sim.Output
-    queue: sim.Queue
+    station: MM1Station = MM1Station()
 
 
 def build_model() -> MM1:
     model = MM1("MM1")
 
-    @model.process
-    def arrival(env: MM1):
-        while True:
-            t_ia = sim.exponential(1.0 / env.utilization)
-            sim.hold(t_ia)
-            sim.put(env.queue, 1)
-
-    @model.process
-    def service(env: MM1):
-        while True:
-            sim.get(env.queue, 1)
-            t_srv = sim.exponential(1.0)
-            sim.hold(t_srv)
-
     @model.collect
     def collect_stats(env: MM1):
-        env.avg_queue_length = sim.mean_level(env.queue)
+        env.avg_queue_length = sim.mean_level(env.station.queue)
 
     return model
 

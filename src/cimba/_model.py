@@ -14,7 +14,12 @@ functions, then compiles everything on first ``experiment()``:
   which runs trials in parallel across all cores.
 """
 
+import ast
+import copy
+import inspect
 import keyword
+import linecache
+import textwrap
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import (TYPE_CHECKING, Any, TypedDict, TypeVar, get_type_hints,
@@ -43,6 +48,8 @@ Handle = int
 Env = Any
 
 _F = TypeVar("_F", bound=Callable[..., Any])
+_MISSING = object()
+_COMPONENT_PROCESS_ATTR = "__cimba_component_process__"
 
 #: A `pools`/`stores` declaration: list of names (unbounded capacity) or
 #: name -> capacity mapping (an int, a param name, or None for unbounded).
@@ -160,16 +167,73 @@ else:
         return view
 
 
-def _class_declarations(cls: type) -> dict[str, Any]:
-    """Collect env field declarations from a Model subclass's annotations,
-    in declaration order (base classes first)."""
+class Component:
+    """Authoring-time grouping of model fields and process methods.
+
+    Component instances are declared as defaults on a ``Model`` subclass. Their
+    declared fields are flattened into the model's trial record, and methods
+    decorated with :func:`process` are lowered into ordinary model processes.
+    """
+
+
+def _is_component_class(obj: Any) -> bool:
+    return (isinstance(obj, type) and issubclass(obj, Component)
+            and obj is not Component)
+
+
+@dataclass(frozen=True)
+class _ComponentProcessSpec:
+    copies: int = 1
+    priority: int = 0
+
+
+@overload
+def process(fn: _F) -> _F: ...
+
+
+@overload
+def process(fn: None = None, *, copies: int = 1,
+            priority: int = 0) -> Callable[[_F], _F]: ...
+
+
+def process(fn=None, *, copies: int = 1, priority: int = 0):
+    """Mark a ``Component`` method to be registered as a model process."""
+    if copies < 1:
+        raise ValueError("copies must be >= 1")
+
+    def decorate(f):
+        setattr(f, _COMPONENT_PROCESS_ATTR,
+                _ComponentProcessSpec(copies, priority))
+        return f
+
+    if fn is None:
+        return decorate
+    return decorate(fn)
+
+
+@dataclass(frozen=True)
+class _ComponentDecl:
+    name: str
+    cls: type[Component]
+    template: Component
+    decls: dict[str, Any]
+    field_map: dict[str, str]
+
+
+def _empty_declarations() -> dict[str, Any]:
     decls: dict[str, Any] = {"param": [], "output": [], "state": [],
                              "fstate": [], "resource": [],
                              "dataset": [], "condition": [],
                              "predicate": [], "event": [], "processes": [],
                              "spawnable": [], "trace": [],
                              "queue": {}, "pool": {}, "store": {},
-                             "pqueues": {}}
+                             "pqueues": {}, "components": []}
+    return decls
+
+
+def _field_declarations(cls: type) -> dict[str, Any]:
+    """Collect direct env field declarations from a Model/Component class."""
+    decls = _empty_declarations()
     for fname, hint in get_type_hints(cls).items():
         kind = _DECL_KINDS.get(hint)
         if kind is None:
@@ -192,6 +256,107 @@ def _class_declarations(cls: type) -> dict[str, Any]:
                     f"field '{fname}': only Queue/Pool/Store declarations "
                     "may carry a capacity default")
             decls[kind].append(fname)
+    return decls
+
+
+def _component_declarations(cls: type[Component]) -> dict[str, Any]:
+    decls = _field_declarations(cls)
+    for fname, hint in get_type_hints(cls).items():
+        if _is_component_class(hint):
+            raise ValueError(
+                f"component field '{fname}': nested Components are not "
+                "supported yet")
+    for kind in ("predicate", "event", "processes", "spawnable"):
+        if decls[kind]:
+            raise ValueError(
+                f"component '{cls.__name__}' declares {kind} fields, which "
+                "are not supported yet")
+    return decls
+
+
+def _component_field_map(name: str, decls: dict[str, Any]) -> dict[str, str]:
+    fields: set[str] = set()
+    for kind in ("param", "output", "state", "fstate", "resource",
+                 "dataset", "condition", "trace"):
+        fields.update(decls[kind])
+    for kind in ("queue", "pool", "store", "pqueues"):
+        fields.update(decls[kind])
+    return {field: f"{name}__{field}" for field in fields}
+
+
+def _rewrite_component_capacity(
+    component_name: str,
+    field_name: str,
+    cap: int | str | None,
+    decls: dict[str, Any],
+    field_map: dict[str, str],
+) -> int | str | None:
+    if not isinstance(cap, str):
+        return cap
+    if cap in decls["param"]:
+        return field_map[cap]
+    if cap in field_map:
+        raise ValueError(
+            f"component '{component_name}' field '{field_name}' capacity "
+            f"'{cap}' must name a Param field")
+    return cap
+
+
+def _declarations_contain(decls: dict[str, Any], name: str) -> bool:
+    for kind in ("param", "output", "state", "fstate", "resource",
+                 "dataset", "condition", "predicate", "event", "processes",
+                 "spawnable", "trace"):
+        if name in decls[kind]:
+            return True
+    for kind in ("queue", "pool", "store", "pqueues"):
+        if name in decls[kind]:
+            return True
+    return False
+
+
+def _flatten_component_declarations(
+    target: dict[str, Any],
+    component_name: str,
+    decls: dict[str, Any],
+    field_map: dict[str, str],
+) -> None:
+    for flat_name in field_map.values():
+        if _declarations_contain(target, flat_name):
+            raise ValueError(f"duplicate field name '{flat_name}'")
+    for kind in ("param", "output", "state", "fstate", "resource",
+                 "dataset", "condition", "trace"):
+        target[kind].extend(field_map[name] for name in decls[kind])
+    for kind in ("queue", "pool", "store"):
+        for name, cap in decls[kind].items():
+            target[kind][field_map[name]] = _rewrite_component_capacity(
+                component_name, name, cap, decls, field_map)
+    for name, count_value in decls["pqueues"].items():
+        target["pqueues"][field_map[name]] = count_value
+
+
+def _class_declarations(cls: type) -> dict[str, Any]:
+    """Collect env field declarations from a Model subclass's annotations,
+    in declaration order (base classes first)."""
+    decls = _field_declarations(cls)
+    for fname, hint in get_type_hints(cls).items():
+        if not _is_component_class(hint):
+            continue
+        template = getattr(cls, fname, _MISSING)
+        if template is _MISSING:
+            raise ValueError(
+                f"component field '{fname}' needs a {hint.__name__} "
+                "instance default")
+        if not isinstance(template, hint):
+            raise TypeError(
+                f"component field '{fname}' default must be a "
+                f"{hint.__name__} instance")
+        component_decls = _component_declarations(hint)
+        field_map = _component_field_map(fname, component_decls)
+        _flatten_component_declarations(decls, fname, component_decls,
+                                        field_map)
+        decls["components"].append(
+            _ComponentDecl(fname, hint, template, component_decls, field_map)
+        )
     return decls
 
 _STANDARD_FIELDS = [
@@ -370,6 +535,328 @@ def _as_trace_rows(value: Any, n_trials: int, name: str) -> list[np.ndarray]:
                      "arrays")
 
 
+def _component_process_methods(
+    cls: type[Component],
+) -> list[tuple[str, Callable[..., Any], _ComponentProcessSpec]]:
+    methods: dict[str, tuple[Callable[..., Any], _ComponentProcessSpec]] = {}
+    for base in reversed(cls.__mro__):
+        if base in (object, Component):
+            continue
+        for name, value in vars(base).items():
+            spec = getattr(value, _COMPONENT_PROCESS_ATTR, None)
+            if spec is None:
+                methods.pop(name, None)
+                continue
+            if not callable(value):
+                raise TypeError(
+                    f"component process '{cls.__name__}.{name}' is not "
+                    "callable")
+            methods[name] = (value, spec)
+    return [(name, fn, spec) for name, (fn, spec) in methods.items()]
+
+
+def _primitive_constant(value: Any) -> bool:
+    return type(value) in (bool, int, float)
+
+
+class _ComponentMethodLowerer(ast.NodeTransformer):
+    def __init__(self, *, component_name: str, receiver_name: str,
+                 env_name: str, field_map: Mapping[str, str],
+                 constants: Mapping[str, Any]):
+        self.component_name = component_name
+        self.receiver_name = receiver_name
+        self.env_name = env_name
+        self.field_map = field_map
+        self.constants = constants
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        if (isinstance(node.func, ast.Name) and node.func.id == "getattr"
+                and node.args and self._is_receiver(node.args[0])):
+            raise ValueError(
+                f"component '{self.component_name}' process uses dynamic "
+                "getattr(self, ...), which is not supported")
+        if (isinstance(node.func, ast.Attribute)
+                and self._is_receiver(node.func.value)):
+            raise ValueError(
+                f"component '{self.component_name}' process cannot call "
+                f"self.{node.func.attr}() inside compiled code")
+        return self.generic_visit(node)
+
+    def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
+        if not self._is_receiver(node.value):
+            return self.generic_visit(node)
+        name = node.attr
+        if name in self.field_map:
+            return ast.copy_location(
+                ast.Attribute(
+                    value=ast.Name(id=self.env_name, ctx=ast.Load()),
+                    attr=self.field_map[name],
+                    ctx=node.ctx,
+                ),
+                node,
+            )
+        if name in self.constants:
+            if not isinstance(node.ctx, ast.Load):
+                raise ValueError(
+                    f"component '{self.component_name}' process cannot "
+                    f"assign to constant self.{name}")
+            return ast.copy_location(ast.Constant(self.constants[name]), node)
+        raise ValueError(
+            f"component '{self.component_name}' process references "
+            f"unsupported self.{name}")
+
+    def visit_Name(self, node: ast.Name) -> ast.AST:
+        if node.id == self.receiver_name:
+            raise ValueError(
+                f"component '{self.component_name}' process cannot use "
+                "self directly inside compiled code")
+        return node
+
+    def _is_receiver(self, node: ast.AST) -> bool:
+        return isinstance(node, ast.Name) and node.id == self.receiver_name
+
+
+def _closure_namespace(fn: Callable[..., Any]) -> dict[str, Any]:
+    namespace = dict(fn.__globals__)
+    if fn.__closure__ is not None:
+        for name, cell in zip(fn.__code__.co_freevars, fn.__closure__):
+            namespace[name] = cell.cell_contents
+    return namespace
+
+
+def _component_method_source(fn: Callable[..., Any]) -> ast.FunctionDef:
+    try:
+        source = inspect.getsource(fn)
+    except (OSError, TypeError) as exc:
+        raise ValueError(
+            f"component process '{fn.__qualname__}' needs inspectable source"
+        ) from exc
+    tree = ast.parse(textwrap.dedent(source))
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef):
+            return node
+    raise ValueError(f"component process '{fn.__qualname__}' source does not "
+                     "contain a function definition")
+
+
+def _lower_component_process(
+    component_name: str,
+    component: Component,
+    field_map: Mapping[str, str],
+    method_name: str,
+    method: Callable[..., Any],
+) -> Callable[..., Any]:
+    node = copy.deepcopy(_component_method_source(method))
+    args = node.args
+    if (args.posonlyargs or args.vararg or args.kwonlyargs or args.kwarg
+            or args.defaults or args.kw_defaults):
+        raise ValueError(
+            f"component process '{component_name}.{method_name}' must take "
+            "(self, env) or (self, env, idx) without defaults")
+    if len(args.args) not in (2, 3):
+        raise ValueError(
+            f"component process '{component_name}.{method_name}' must take "
+            "(self, env) or (self, env, idx)")
+
+    receiver_name = args.args[0].arg
+    env_name = args.args[1].arg
+    process_name = f"{component_name}__{method_name}"
+    constants = {
+        name: value
+        for name, value in vars(component).items()
+        if not name.startswith("_")
+        and name not in field_map
+        and _primitive_constant(value)
+    }
+
+    node.name = process_name
+    node.decorator_list = []
+    node.returns = None
+    node.type_comment = None
+    args.args = args.args[1:]
+    for arg in args.args:
+        arg.annotation = None
+        arg.type_comment = None
+
+    lowerer = _ComponentMethodLowerer(
+        component_name=component_name,
+        receiver_name=receiver_name,
+        env_name=env_name,
+        field_map=field_map,
+        constants=constants,
+    )
+    lowered = lowerer.visit(node)
+    if not isinstance(lowered, ast.FunctionDef):
+        raise TypeError("component process lowering produced a non-function")
+    module = ast.Module(body=[lowered], type_ignores=[])
+    ast.fix_missing_locations(module)
+    source = ast.unparse(module) + "\n"
+
+    filename = f"<cimba component '{component_name}.{method_name}'>"
+    linecache.cache[filename] = (
+        len(source),
+        None,
+        source.splitlines(keepends=True),
+        filename,
+    )
+    namespace = _closure_namespace(method)
+    exec(compile(source, filename, "exec"), namespace)
+    generated = namespace[process_name]
+    generated.__module__ = method.__module__
+    generated.__qualname__ = process_name
+    generated.__cimba_source__ = source
+    return generated
+
+
+class _ModelComponentRefLowerer(ast.NodeTransformer):
+    def __init__(self, *, model_name: str, fn_name: str, env_name: str,
+                 component_maps: Mapping[str, Mapping[str, str]]):
+        self.model_name = model_name
+        self.fn_name = fn_name
+        self.env_name = env_name
+        self.component_maps = component_maps
+        self.changed = False
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        if (isinstance(node.func, ast.Name) and node.func.id == "getattr"
+                and node.args and self._component_namespace(node.args[0])
+                is not None):
+            component = self._component_namespace(node.args[0])
+            raise ValueError(
+                f"model '{self.model_name}' callback '{self.fn_name}' uses "
+                f"dynamic getattr(env.{component}, ...), which is not "
+                "supported")
+        return self.generic_visit(node)
+
+    def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
+        nested_field = (self._component_field_ref(node.value)
+                        if isinstance(node.value, ast.Attribute) else None)
+        if nested_field is not None:
+            component, field = nested_field
+            raise ValueError(
+                f"model '{self.model_name}' callback '{self.fn_name}' "
+                f"cannot access attributes below component field "
+                f"env.{component}.{field}")
+
+        field_ref = self._component_field_ref(node)
+        if field_ref is not None:
+            component, field = field_ref
+            field_map = self.component_maps[component]
+            if field not in field_map:
+                raise ValueError(
+                    f"model '{self.model_name}' callback '{self.fn_name}' "
+                    f"references unknown component field "
+                    f"env.{component}.{field}")
+            self.changed = True
+            return ast.copy_location(
+                ast.Attribute(
+                    value=ast.Name(id=self.env_name, ctx=ast.Load()),
+                    attr=field_map[field],
+                    ctx=node.ctx,
+                ),
+                node,
+            )
+
+        if self._component_namespace(node) is not None:
+            component = self._component_namespace(node)
+            raise ValueError(
+                f"model '{self.model_name}' callback '{self.fn_name}' "
+                f"cannot use env.{component} directly; access one of its "
+                "fields")
+        return self.generic_visit(node)
+
+    def _component_namespace(self, node: ast.AST) -> str | None:
+        if (isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == self.env_name
+                and node.attr in self.component_maps):
+            return node.attr
+        return None
+
+    def _component_field_ref(
+        self, node: ast.Attribute,
+    ) -> tuple[str, str] | None:
+        component = self._component_namespace(node.value)
+        if component is None:
+            return None
+        return component, node.attr
+
+
+def _function_source(fn: Callable[..., Any]) -> str:
+    source = getattr(fn, "__cimba_source__", None)
+    if source is None:
+        source = inspect.getsource(fn)
+    return textwrap.dedent(source)
+
+
+def _function_def_from_source(fn: Callable[..., Any]) -> ast.FunctionDef:
+    tree = ast.parse(_function_source(fn))
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef):
+            return node
+    raise ValueError(f"callback '{fn.__qualname__}' source does not contain "
+                     "a function definition")
+
+
+def _lower_model_component_refs(
+    fn: Callable[..., Any],
+    *,
+    model_name: str,
+    component_maps: Mapping[str, Mapping[str, str]],
+) -> Callable[..., Any]:
+    if not component_maps:
+        return fn
+    if not any(name in fn.__code__.co_names for name in component_maps):
+        return fn
+    try:
+        node = copy.deepcopy(_function_def_from_source(fn))
+    except (OSError, TypeError) as exc:
+        raise ValueError(
+            f"model '{model_name}' callback '{fn.__qualname__}' needs "
+            "inspectable source to use Component namespaces"
+        ) from exc
+    if not node.args.args:
+        return fn
+
+    env_name = node.args.args[0].arg
+    lowerer = _ModelComponentRefLowerer(
+        model_name=model_name,
+        fn_name=fn.__name__,
+        env_name=env_name,
+        component_maps=component_maps,
+    )
+    lowered = lowerer.visit(node)
+    if not isinstance(lowered, ast.FunctionDef):
+        raise TypeError("model callback lowering produced a non-function")
+    if not lowerer.changed:
+        return fn
+
+    lowered.decorator_list = []
+    lowered.returns = None
+    lowered.type_comment = None
+    for arg in lowered.args.args:
+        arg.annotation = None
+        arg.type_comment = None
+    module = ast.Module(body=[lowered], type_ignores=[])
+    ast.fix_missing_locations(module)
+    source = ast.unparse(module) + "\n"
+
+    filename = f"<cimba model callback '{model_name}.{fn.__name__}'>"
+    linecache.cache[filename] = (
+        len(source),
+        None,
+        source.splitlines(keepends=True),
+        filename,
+    )
+    namespace = _closure_namespace(fn)
+    exec(compile(source, filename, "exec"), namespace)
+    generated = namespace[fn.__name__]
+    generated.__module__ = fn.__module__
+    generated.__qualname__ = fn.__qualname__
+    generated.__cimba_source__ = source
+    return generated
+
+
 class Model:
     """A simulation model. Subclass it and declare the env fields as
     annotations (Param, Output, Queue, Resource, Pool, Store, Dataset,
@@ -416,6 +903,8 @@ class Model:
         self._event_fields: list[str] = decls["event"]
         self._process_fields: list[str] = decls["processes"]
         self._spawnable_fields: list[str] = decls["spawnable"]
+        self._component_decls: list[_ComponentDecl] = decls["components"]
+        self._components: dict[str, Component] = {}
 
         seen: set[str] = set()
         for kind, names in (("param", self.params),
@@ -439,6 +928,11 @@ class Model:
                 if n in seen:
                     raise ValueError(f"duplicate field name '{n}'")
                 seen.add(n)
+        for component in self._component_decls:
+            _check_name(component.name, "component")
+            if component.name in seen:
+                raise ValueError(f"duplicate field name '{component.name}'")
+            seen.add(component.name)
         for cap in (list(self.queues.values()) + list(self.pools.values())
                     + list(self.stores.values())):
             if cap is not None and not isinstance(cap, int) \
@@ -453,6 +947,39 @@ class Model:
         self._events: list[tuple[str, Callable[..., Any], str, bool]] = []
         self._collect: Callable[..., Any] | None = None
         self._compiled: _Compiled | None = None
+        self._bind_components()
+        self._register_component_processes()
+
+    def _bind_components(self) -> None:
+        for decl in self._component_decls:
+            component = copy.copy(decl.template)
+            self._components[decl.name] = component
+            setattr(self, decl.name, component)
+            try:
+                component._cimba_model = self
+                component._cimba_name = decl.name
+            except AttributeError:
+                pass
+
+    def _register_component_processes(self) -> None:
+        for decl in self._component_decls:
+            component = self._components[decl.name]
+            for method_name, method, spec in _component_process_methods(
+                    decl.cls):
+                lowered = _lower_component_process(
+                    decl.name, component, decl.field_map, method_name, method)
+                self.process(lowered, copies=spec.copies,
+                             priority=spec.priority)
+
+    @property
+    def _component_field_maps(self) -> dict[str, dict[str, str]]:
+        return {decl.name: decl.field_map for decl in self._component_decls}
+
+    def _lower_component_refs(self, fn: _F) -> _F:
+        return _lower_model_component_refs(
+            fn, model_name=self.name,
+            component_maps=self._component_field_maps,
+        )
 
     # --- Declaration decorators ------------------------------------------
     @overload
@@ -521,6 +1048,7 @@ class Model:
             if indexed:
                 raise ValueError(f"spawnable process '{name}' takes (env) "
                                  "or (env, view), not a copy index")
+        fn = self._lower_component_refs(fn)
         self._processes.append(_ProcDecl(name, fn, copies, priority,
                                          indexed, struct, injected,
                                          spawnable))
@@ -569,6 +1097,7 @@ class Model:
         else:
             self._register_name(name, "predicate")
             field = f"_pred_{name}"
+        fn = self._lower_component_refs(fn)
         self._predicates.append((name, fn, field))
         return fn
 
@@ -592,6 +1121,7 @@ class Model:
         else:
             self._register_name(name, "event")
             field = f"_ev_{name}"
+        fn = self._lower_component_refs(fn)
         self._events.append((name, fn, field, nargs == 2))
         return fn
 
@@ -602,6 +1132,7 @@ class Model:
             raise ValueError("collect() already registered")
         if self._compiled is not None:
             raise RuntimeError("model is already compiled")
+        fn = self._lower_component_refs(fn)
         self._collect = fn
         return fn
 

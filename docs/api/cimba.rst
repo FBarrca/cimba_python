@@ -14,11 +14,17 @@ Use :mod:`cimba.sim` for modeling.
 
 Model declarations:
 
-``Model``, ``Experiment``, ``Env``, ``Handle``, ``Param``, ``Output``,
-``State``, ``FloatState``, ``Queue``, ``Resource``, ``Pool``, ``Store``,
-``Dataset``, ``Condition``, ``Predicate``, ``Event``, ``Processes``,
-``PQueues``, ``Spawnable``, ``Struct``, ``Trace``, ``capacity()``,
-``count()``.
+``Model``, ``Component``, ``Experiment``, ``Env``, ``Handle``, ``Param``,
+``Output``, ``State``, ``FloatState``, ``Queue``, ``Resource``, ``Pool``,
+``Store``, ``Dataset``, ``Condition``, ``Predicate``, ``Event``,
+``Processes``, ``PQueues``, ``Spawnable``, ``Struct``, ``Trace``,
+``capacity()``, ``count()``, ``process()``.
+
+Components group related declarations and process methods. Methods decorated
+with top-level ``@sim.process`` are lowered into ordinary model processes at
+model construction, and model callbacks can read component fields with
+``env.retailer.orders``. Component fields are exposed in experiments with
+flattened names such as ``retailer__orders``.
 
 Process DAGs:
 

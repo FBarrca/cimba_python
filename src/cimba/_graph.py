@@ -515,10 +515,12 @@ class _ProcessAnalyzer(ast.NodeVisitor):
 
 
 def _function_ast(fn: Callable[..., Any]) -> ast.FunctionDef | None:
-    try:
-        source = inspect.getsource(fn)
-    except (OSError, TypeError):
-        return None
+    source = getattr(fn, "__cimba_source__", None)
+    if source is None:
+        try:
+            source = inspect.getsource(fn)
+        except (OSError, TypeError):
+            return None
     tree = ast.parse(textwrap.dedent(source))
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):

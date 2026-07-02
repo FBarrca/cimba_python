@@ -75,6 +75,12 @@ processes may take a second argument to learn their index:
 `def machine(env, idx)`. The trial function, recording lifecycle, and all
 create/start/stop/destroy plumbing are generated and compiled by Model.
 
+Related fields and process methods can be grouped with ``sim.Component``.
+Component methods marked with top-level ``@sim.process`` are authoring-time
+methods; Model lowers them into ordinary flat process functions before Numba
+compilation. Model callbacks can use ``env.retailer.orders``; trial-table
+fields remain flattened with names such as ``retailer__orders``.
+
 Module layout: the verbs below alias the raw symbol bindings in
 ``_bindings``; the cast helpers live in ``_intrinsics``; Model/Experiment
 and the trial codegen live in ``_model``.
@@ -91,17 +97,18 @@ from numba import types as _nbtypes
 from . import _bindings as _b
 from ._intrinsics import ptr_caster as _ptr_caster
 from ._intrinsics import record_addr as _record_addr
-from ._model import (Condition, Dataset, Env, Event, Experiment, FloatState,
-                     Handle, Model, Output, Param, Pool, PQueues, Predicate,
-                     ProcessDAG, ProcessDAGEdge, ProcessDAGNode, Processes,
-                     Queue, Resource, Spawnable, State, Store, Struct,
-                     Trace, capacity, count)
+from ._model import (Component, Condition, Dataset, Env, Event, Experiment,
+                     FloatState, Handle, Model, Output, Param, Pool, PQueues,
+                     Predicate, ProcessDAG, ProcessDAGEdge, ProcessDAGNode,
+                     Processes, Queue, Resource, Spawnable, State, Store,
+                     Struct, Trace, capacity, count, process)
 
 __all__ = [
-    "Model", "Experiment", "Env", "Handle",
+    "Model", "Component", "Experiment", "Env", "Handle",
     "Param", "Output", "State", "FloatState", "Queue", "Resource", "Pool",
     "Store", "Dataset", "Condition", "Predicate", "Event", "Processes",
     "PQueues", "Spawnable", "Struct", "Trace", "capacity", "count",
+    "process",
     "ProcessDAG", "ProcessDAGNode", "ProcessDAGEdge",
     "SUCCESS", "PREEMPTED", "INTERRUPTED", "STOPPED", "CANCELLED", "TIMEOUT",
     "LOGGER_FATAL", "LOGGER_ERROR", "LOGGER_WARNING", "LOGGER_INFO",

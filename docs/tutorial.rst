@@ -521,35 +521,63 @@ Refactoring for parallelism
 
 Before parallelizing, we will clean up a few rough edges. The first examples put
 everything at module scope. That is fine for a toy, but larger projects benefit
-from a builder function:
+from a builder function and from grouping repeated model structure into
+components. For the M/M/1 model, the queue and its two process loops form a
+natural station:
+
+.. code-block:: python
+
+    class MM1Station(sim.Component):
+        queue: sim.Queue
+
+        @sim.process
+        def arrival(self, env):
+            while True:
+                t_ia = sim.exponential(1.0 / env.utilization)
+                sim.hold(t_ia)
+                sim.put(self.queue, 1)
+
+        @sim.process
+        def service(self, env):
+            while True:
+                sim.get(self.queue, 1)
+                t_srv = sim.exponential(1.0)
+                sim.hold(t_srv)
+
+
+    class MM1(sim.Model):
+        utilization: sim.Param
+        avg_queue_length: sim.Output
+        station: MM1Station = MM1Station()
+
+Component process methods are lowered into ordinary model processes before
+compilation. Inside the component, ``self.queue`` refers to the queue declared
+on the station instance. The compiled trial record remains flat, but the source
+code can stay grouped around the station concept.
+
+The builder now only needs to create the model and register the collector:
 
 .. code-block:: python
 
     def build_model() -> MM1:
         model = MM1("MM1")
 
-        @model.process
-        def arrival(env: MM1):
-            while True:
-                sim.hold(sim.exponential(1.0 / env.utilization))
-                sim.put(env.queue, 1)
-
-        @model.process
-        def service(env: MM1):
-            while True:
-                sim.get(env.queue, 1)
-                sim.hold(sim.exponential(1.0))
-
         @model.collect
         def collect_stats(env: MM1):
-            env.avg_queue_length = sim.mean_level(env.queue)
+            env.avg_queue_length = sim.mean_level(env.station.queue)
 
         return model
 
 This pattern makes it easy to write tests, command-line scripts, notebooks, and
 benchmarks that all build the same model. It also separates model declaration
-from experiment setup. Parameters and outputs belong to the trial table; process
-logic belongs to the model builder.
+from experiment setup. Parameters and outputs belong to the trial table;
+component process logic belongs with the component, and experiment setup belongs
+outside the model.
+
+Model callbacks can read component fields with natural dotted access such as
+``env.station.queue``. Cimba lowers that access to the flat internal field
+before compilation. In the experiment table, component fields still use
+flattened names for now, such as ``station__queue``.
 
 .. code-block:: python
 
