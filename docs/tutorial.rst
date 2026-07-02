@@ -1550,10 +1550,31 @@ Processes, resources, and conditions
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The harbor has parameters, outputs, environmental state, resources, conditions,
-and dynamic ships. The model declaration becomes the table of contents for the
-simulated world:
+and dynamic ships. Components let the model declaration become the table of
+contents for the simulated world:
 
 .. code-block:: python
+
+    class SeaConditions(sim.Component):
+        wind_mag: sim.FloatState
+        wind_dir: sim.FloatState
+        water_depth: sim.FloatState
+
+
+    class HarborFacilities(sim.Component):
+        tugs: sim.Pool = sim.capacity("num_tugs")
+        berths_small: sim.Pool = sim.capacity("num_berths_small")
+        berths_large: sim.Pool = sim.capacity("num_berths_large")
+        comms: sim.Resource
+        harbormaster: sim.Condition
+
+
+    class ShipTraffic(sim.Component):
+        ship: sim.Spawnable
+        departed: sim.Store
+        time_small: sim.Dataset
+        time_large: sim.Dataset
+
 
     class Harbor(sim.Model):
         mean_wind: sim.Param
@@ -1568,23 +1589,17 @@ simulated world:
         avg_time_large: sim.Output
         tug_util: sim.Output
 
-        wind_mag: sim.FloatState
-        water_depth: sim.FloatState
-
-        ship: sim.Spawnable
-        tugs: sim.Pool = sim.capacity("num_tugs")
-        berths_small: sim.Pool = sim.capacity("num_berths_small")
-        berths_large: sim.Pool = sim.capacity("num_berths_large")
-        comms: sim.Resource
-        harbormaster: sim.Condition
         harbormaster_called: sim.Predicate
-        departed: sim.Store
-        time_small: sim.Dataset
-        time_large: sim.Dataset
+
+        sea: SeaConditions = SeaConditions()
+        facilities: HarborFacilities = HarborFacilities()
+        traffic: ShipTraffic = ShipTraffic()
 
 ``sim.capacity("num_tugs")`` means each trial sizes the pool from that
 parameter value. This lets one experiment sweep infrastructure choices without
 rewriting the model. The same idea is used for small and large berths.
+The fields still compile into the flat trial record, but source code can use
+paths such as ``env.facilities.tugs`` and ``env.sea.water_depth``.
 
 Conditions combine a wait list with a predicate:
 
@@ -1594,12 +1609,15 @@ Conditions combine a wait list with a predicate:
     def harbormaster_called(env: Harbor) -> bool:
         return True
 
-    @harbor.process
-    def tide(env: Harbor):
-        while True:
-            env.water_depth = env.reference_depth + sim.normal(0.0, 0.5)
-            sim.signal(env.harbormaster)
-            sim.hold(1.0)
+    class SeaConditions(sim.Component):
+        water_depth: sim.FloatState
+
+        @sim.process
+        def tide(self, env):
+            while True:
+                self.water_depth = env.reference_depth + sim.normal(0.0, 0.5)
+                sim.signal(env.facilities.harbormaster)
+                sim.hold(1.0)
 
 The predicate above simply says "wake and recheck your own detailed rules."
 That is a practical pattern when each waiting ship has different limits. A small
@@ -1628,18 +1646,21 @@ and when it arrived:
         min_depth: float
         arrival: float
 
-    @harbor.process
-    def arrivals(env: Harbor):
-        mean_interarrival = 1.0 / env.arrival_rate
-        while True:
-            sim.hold(sim.exponential(mean_interarrival))
-            handle = sim.spawn(env.ship, env, 0)
-            shp = Ship(handle)
-            shp.size = sim.bernoulli(env.percent_large)
-            shp.tugs_needed = TUGS_NEEDED[shp.size]
-            shp.max_wind = MAX_WIND[shp.size]
-            shp.min_depth = MIN_DEPTH[shp.size]
-            shp.arrival = sim.now()
+    class ShipTraffic(sim.Component):
+        ship: sim.Spawnable
+
+        @sim.process
+        def arrivals(self, env):
+            mean_interarrival = 1.0 / env.arrival_rate
+            while True:
+                sim.hold(sim.exponential(mean_interarrival))
+                handle = sim.spawn(self.ship, env, 0)
+                shp = Ship(handle)
+                shp.size = sim.bernoulli(env.percent_large)
+                shp.tugs_needed = TUGS_NEEDED[shp.size]
+                shp.max_wind = MAX_WIND[shp.size]
+                shp.min_depth = MIN_DEPTH[shp.size]
+                shp.arrival = sim.now()
 
 The spawned process starts when the current process next blocks, so the arrival
 process can initialize the ship fields immediately after ``sim.spawn()``. This
@@ -1655,18 +1676,23 @@ computing water depth:
 
 .. code-block:: python
 
-    @harbor.process(priority=1)
-    def weather(env: Harbor):
-        while True:
-            env.wind_mag = 0.5 * sim.rayleigh(env.mean_wind) + 0.5 * env.wind_mag
-            sim.hold(1.0)
+    class SeaConditions(sim.Component):
+        wind_mag: sim.FloatState
+        water_depth: sim.FloatState
 
-    @harbor.process
-    def tide(env: Harbor):
-        while True:
-            env.water_depth = env.reference_depth + sim.normal(0.0, 0.5)
-            sim.signal(env.harbormaster)
-            sim.hold(1.0)
+        @sim.process(priority=1)
+        def weather(self, env):
+            while True:
+                wmag = sim.rayleigh(env.mean_wind)
+                self.wind_mag = 0.5 * wmag + 0.5 * self.wind_mag
+                sim.hold(1.0)
+
+        @sim.process
+        def tide(self, env):
+            while True:
+                self.water_depth = env.reference_depth + sim.normal(0.0, 0.5)
+                sim.signal(env.facilities.harbormaster)
+                sim.hold(1.0)
 
 Priorities matter when events happen at the same simulated time. Giving
 ``weather`` a higher priority means the hourly weather update happens before
@@ -1677,37 +1703,35 @@ Resources and condition variables
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 A ship can dock only if enough water is available, wind is acceptable, one berth
-of the right size is free, and enough tugs are available. Put the detailed test
-in a helper:
+of the right size is free, and enough tugs are available. In the componentized
+model, the ship process can read those domains through ``env.sea`` and
+``env.facilities``:
 
 .. code-block:: python
 
-    def ship_berths(env: Harbor, shp: Ship):
-        if shp.size == LARGE:
-            return env.berths_large
-        return env.berths_small
+    class ShipTraffic(sim.Component):
+        @sim.process
+        def ship(self, env, shp: Ship):
+            if shp.size == LARGE:
+                berths = env.facilities.berths_large
+            else:
+                berths = env.facilities.berths_small
 
-    def is_ready_to_dock(env: Harbor, shp: Ship) -> bool:
-        berths = ship_berths(env, shp)
-        return (
-            env.water_depth >= shp.min_depth
-            and env.wind_mag <= shp.max_wind
-            and sim.pool_available(env.tugs) >= shp.tugs_needed
-            and sim.pool_available(berths) >= 1
-        )
+            while True:
+                ready = (
+                    env.sea.water_depth >= shp.min_depth
+                    and env.sea.wind_mag <= shp.max_wind
+                    and sim.pool_available(env.facilities.tugs)
+                        >= shp.tugs_needed
+                    and sim.pool_available(berths) >= 1
+                )
+                if ready:
+                    break
+                sim.wait_for(env.facilities.harbormaster,
+                             env.harbormaster_called, env)
 
-Then wait in a loop:
-
-.. code-block:: python
-
-    @harbor.process(struct=Ship)
-    def ship(env: Harbor, shp: Ship):
-        while not is_ready_to_dock(env, shp):
-            sim.wait_for(env.harbormaster, env.harbormaster_called, env)
-
-        berths = ship_berths(env, shp)
-        sim.pool_acquire(berths, 1)
-        sim.pool_acquire(env.tugs, shp.tugs_needed)
+            sim.pool_acquire(berths, 1)
+            sim.pool_acquire(env.facilities.tugs, shp.tugs_needed)
 
 The loop is intentional. Several ships may wake from the same signal, and one
 of them may take the last berth or tug before another resumes. The second ship
@@ -1725,41 +1749,52 @@ process.
 
 .. code-block:: python
 
-    @harbor.process(struct=Ship)
-    def ship(env: Harbor, shp: Ship):
-        me = sim.current()
-        berths = ship_berths(env, shp)
+    class ShipTraffic(sim.Component):
+        time_small: sim.Dataset
+        time_large: sim.Dataset
+        departed: sim.Store
 
-        while not is_ready_to_dock(env, shp):
-            sim.wait_for(env.harbormaster, env.harbormaster_called, env)
+        @sim.process
+        def ship(self, env, shp: Ship):
+            me = sim.current()
+            if shp.size == LARGE:
+                berths = env.facilities.berths_large
+            else:
+                berths = env.facilities.berths_small
 
-        sim.pool_acquire(berths, 1)
-        sim.pool_acquire(env.tugs, shp.tugs_needed)
+            # ... wait until env.sea and env.facilities say docking is ready ...
 
-        sim.acquire(env.comms)
-        sim.hold(sim.gamma(5.0, 0.01))
-        sim.release(env.comms)
+            sim.pool_acquire(berths, 1)
+            sim.pool_acquire(env.facilities.tugs, shp.tugs_needed)
 
-        sim.hold(sim.pert(0.4, 0.5, 0.8))
-        sim.pool_release(env.tugs, shp.tugs_needed)
-        sim.signal(env.harbormaster)
+            sim.acquire(env.facilities.comms)
+            sim.hold(sim.gamma(5.0, 0.01))
+            sim.release(env.facilities.comms)
 
-        unload_avg = 12.0 if shp.size == LARGE else 8.0
-        sim.hold(sim.pert(0.75 * unload_avg, unload_avg, 2.0 * unload_avg))
+            sim.hold(sim.pert(0.4, 0.5, 0.8))
+            sim.pool_release(env.facilities.tugs, shp.tugs_needed)
+            sim.signal(env.facilities.harbormaster)
 
-        sim.pool_acquire(env.tugs, shp.tugs_needed)
-        sim.acquire(env.comms)
-        sim.hold(sim.gamma(5.0, 0.01))
-        sim.release(env.comms)
-        sim.hold(sim.pert(0.4, 0.5, 0.8))
+            unload_avg = env.unload_avg_large if shp.size == LARGE \
+                else env.unload_avg_small
+            sim.hold(sim.pert(0.75 * unload_avg, unload_avg,
+                              2.0 * unload_avg))
 
-        sim.pool_release(berths, 1)
-        sim.pool_release(env.tugs, shp.tugs_needed)
-        sim.signal(env.harbormaster)
+            sim.pool_acquire(env.facilities.tugs, shp.tugs_needed)
+            sim.acquire(env.facilities.comms)
+            sim.hold(sim.gamma(5.0, 0.01))
+            sim.release(env.facilities.comms)
+            sim.hold(sim.pert(0.4, 0.5, 0.8))
 
-        dataset = env.time_large if shp.size == LARGE else env.time_small
-        sim.tally(dataset, sim.now() - shp.arrival)
-        sim.store_put(env.departed, me)
+            sim.pool_release(berths, 1)
+            sim.pool_release(env.facilities.tugs, shp.tugs_needed)
+            sim.signal(env.facilities.harbormaster)
+
+            if shp.size == LARGE:
+                sim.tally(self.time_large, sim.now() - shp.arrival)
+            else:
+                sim.tally(self.time_small, sim.now() - shp.arrival)
+            sim.store_put(self.departed, me)
 
 There are two important modeling habits here. First, release resources as soon
 as the simulated entity no longer needs them. Second, signal the relevant
@@ -1777,13 +1812,13 @@ can also print the same text reports we used earlier:
 
     @harbor.collect
     def harbor_stats(env: Harbor):
-        env.avg_time_small = sim.dataset_mean(env.time_small)
-        env.avg_time_large = sim.dataset_mean(env.time_large)
-        env.tug_util = sim.pool_mean_in_use(env.tugs)
+        env.avg_time_small = sim.dataset_mean(env.traffic.time_small)
+        env.avg_time_large = sim.dataset_mean(env.traffic.time_large)
+        env.tug_util = sim.pool_mean_in_use(env.facilities.tugs)
 
-        sim.dataset_fivenum(env.time_small)
-        sim.dataset_histogram(env.time_small, bins=20)
-        sim.pool_report(env.tugs)
+        sim.dataset_fivenum(env.traffic.time_small)
+        sim.dataset_histogram(env.traffic.time_small, bins=20)
+        sim.pool_report(env.facilities.tugs)
 
 This gives us scalar outputs for the experiment table, plus readable diagnostic
 reports while we are still validating the model. Once the model is trusted, the
@@ -1829,18 +1864,18 @@ collector:
 
     @harbor.collect
     def harbor_stats(env: Harbor):
-        env.avg_time_small = sim.dataset_mean(env.time_small)
-        env.avg_time_large = sim.dataset_mean(env.time_large)
-        env.tug_util = sim.pool_mean_in_use(env.tugs)
+        env.avg_time_small = sim.dataset_mean(env.traffic.time_small)
+        env.avg_time_large = sim.dataset_mean(env.traffic.time_large)
+        env.tug_util = sim.pool_mean_in_use(env.facilities.tugs)
 
-        sim.dataset_fivenum(env.time_large)
-        sim.dataset_histogram(env.time_large, bins=20)
-        sim.pool_report(env.tugs)
-        sim.pool_report(env.berths_small)
-        sim.pool_report(env.berths_large)
-        sim.resource_report(env.comms)
+        sim.dataset_fivenum(env.traffic.time_large)
+        sim.dataset_histogram(env.traffic.time_large, bins=20)
+        sim.pool_report(env.facilities.tugs)
+        sim.pool_report(env.facilities.berths_small)
+        sim.pool_report(env.facilities.berths_large)
+        sim.resource_report(env.facilities.comms)
 
-        tug_history = sim.pool_history(env.tugs)
+        tug_history = sim.pool_history(env.facilities.tugs)
         sim.timeseries_fivenum(tug_history)
         sim.timeseries_histogram(tug_history, bins=20)
 
