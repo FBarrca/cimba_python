@@ -95,8 +95,9 @@ lowers paths like ``env.campus.zones[i].gates[j].queue`` to flattened fields
 and generated offset tables before compilation.
 
 Module layout: the verbs below alias the raw symbol bindings in
-``_bindings``; the cast helpers live in ``_intrinsics``; Model/Experiment
-and the trial codegen live in ``_model``.
+``_bindings``; the cast helpers live in ``_intrinsics``; declaration markers
+live in ``_declarations``; Component lowering lives in ``_components``;
+Model/Experiment and the trial codegen live in ``_model``.
 """
 
 from typing import TYPE_CHECKING, Any
