@@ -22,8 +22,8 @@ import linecache
 import textwrap
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import (TYPE_CHECKING, Any, TypedDict, TypeVar, get_type_hints,
-                    overload)
+from typing import (TYPE_CHECKING, Any, TypedDict, TypeVar, get_args,
+                    get_origin, get_type_hints, overload)
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -104,7 +104,7 @@ if TYPE_CHECKING:
 
     def capacity(cap: int | str) -> Any: ...
 
-    def count(n: int) -> Any: ...
+    def count(n: int | str) -> Any: ...
 
     _DECL_KINDS: dict[Any, str] = {}
 else:
@@ -183,7 +183,7 @@ def _is_component_class(obj: Any) -> bool:
 
 @dataclass(frozen=True)
 class _ComponentProcessSpec:
-    copies: int = 1
+    copies: int | str = 1
     priority: int = 0
 
 
@@ -192,14 +192,19 @@ def process(fn: _F) -> _F: ...
 
 
 @overload
-def process(fn: None = None, *, copies: int = 1,
+def process(fn: None = None, *, copies: int | str = 1,
             priority: int = 0) -> Callable[[_F], _F]: ...
 
 
-def process(fn=None, *, copies: int = 1, priority: int = 0):
+def process(fn=None, *, copies: int | str = 1, priority: int = 0):
     """Mark a ``Component`` method to be registered as a model process."""
-    if copies < 1:
-        raise ValueError("copies must be >= 1")
+    if isinstance(copies, int):
+        if copies < 1:
+            raise ValueError("copies must be >= 1")
+    elif isinstance(copies, str):
+        _check_name(copies, "copies constant")
+    else:
+        raise TypeError("copies must be an int or the name of an int constant")
 
     def decorate(f):
         setattr(f, _COMPONENT_PROCESS_ATTR,
@@ -220,6 +225,19 @@ class _ComponentDecl:
     field_map: dict[str, str]
 
 
+@dataclass(frozen=True)
+class _ComponentCollectionDecl:
+    name: str
+    cls: type[Component]
+    templates: tuple[Component, ...]
+    decls: dict[str, Any]
+    field_map: dict[str, str]
+    length: int
+    constants: dict[str, tuple[Any, ...]]
+    pqueue_counts: dict[str, tuple[int, ...]]
+    pqueue_offsets: dict[str, tuple[int, ...]]
+
+
 def _empty_declarations() -> dict[str, Any]:
     decls: dict[str, Any] = {"param": [], "output": [], "state": [],
                              "fstate": [], "resource": [],
@@ -227,15 +245,24 @@ def _empty_declarations() -> dict[str, Any]:
                              "predicate": [], "event": [], "processes": [],
                              "spawnable": [], "trace": [],
                              "queue": {}, "pool": {}, "store": {},
-                             "pqueues": {}, "components": []}
+                             "pqueues": {}, "components": [],
+                             "component_collections": [],
+                             "field_shapes": {}}
     return decls
 
 
-def _field_declarations(cls: type) -> dict[str, Any]:
+def _field_declarations(
+    cls: type,
+    *,
+    allow_symbolic_pqueues: bool = False,
+) -> dict[str, Any]:
     """Collect direct env field declarations from a Model/Component class."""
     decls = _empty_declarations()
     for fname, hint in get_type_hints(cls).items():
-        kind = _DECL_KINDS.get(hint)
+        try:
+            kind = _DECL_KINDS.get(hint)
+        except TypeError:
+            kind = None
         if kind is None:
             continue
         default = getattr(cls, fname, None)
@@ -244,12 +271,16 @@ def _field_declarations(cls: type) -> dict[str, Any]:
                 default = default.cap
             decls[kind][fname] = default
         elif kind == "pqueues":
-            if not isinstance(default, int) or default < 1:
+            if isinstance(default, int) and default >= 1:
+                decls[kind][fname] = default
+            elif allow_symbolic_pqueues and isinstance(default, str):
+                _check_name(default, "PQueues count constant")
+                decls[kind][fname] = default
+            else:
                 raise ValueError(
                     f"field '{fname}': a PQueues declaration needs a "
                     "positive count default, e.g. "
                     "'qs: sim.PQueues = sim.count(4)'")
-            decls[kind][fname] = default
         else:
             if default is not None:
                 raise ValueError(
@@ -260,9 +291,9 @@ def _field_declarations(cls: type) -> dict[str, Any]:
 
 
 def _component_declarations(cls: type[Component]) -> dict[str, Any]:
-    decls = _field_declarations(cls)
+    decls = _field_declarations(cls, allow_symbolic_pqueues=True)
     for fname, hint in get_type_hints(cls).items():
-        if _is_component_class(hint):
+        if _is_component_class(hint) or _component_collection_class(hint):
             raise ValueError(
                 f"component field '{fname}': nested Components are not "
                 "supported yet")
@@ -274,6 +305,17 @@ def _component_declarations(cls: type[Component]) -> dict[str, Any]:
     return decls
 
 
+def _component_collection_class(hint: Any) -> type[Component] | None:
+    origin = get_origin(hint)
+    args = get_args(hint)
+    if origin is list and len(args) == 1 and _is_component_class(args[0]):
+        return args[0]
+    if (isinstance(hint, list) and len(hint) == 1
+            and _is_component_class(hint[0])):
+        return hint[0]
+    return None
+
+
 def _component_field_map(name: str, decls: dict[str, Any]) -> dict[str, str]:
     fields: set[str] = set()
     for kind in ("param", "output", "state", "fstate", "resource",
@@ -282,6 +324,59 @@ def _component_field_map(name: str, decls: dict[str, Any]) -> dict[str, str]:
     for kind in ("queue", "pool", "store", "pqueues"):
         fields.update(decls[kind])
     return {field: f"{name}__{field}" for field in fields}
+
+
+def _component_collection_constants(
+    items: Sequence[Component],
+    field_map: Mapping[str, str],
+) -> dict[str, tuple[Any, ...]]:
+    constants: dict[str, tuple[Any, ...]] = {}
+    names = {
+        name
+        for item in items
+        for name in vars(item)
+        if not name.startswith("_") and name not in field_map
+    }
+    for name in names:
+        values = tuple(getattr(item, name, _MISSING) for item in items)
+        if all(value is not _MISSING and _primitive_constant(value)
+               for value in values):
+            constants[name] = values
+    return constants
+
+
+def _resolve_component_collection_pqueues(
+    collection_name: str,
+    length: int,
+    decls: Mapping[str, Any],
+    constants: Mapping[str, tuple[Any, ...]],
+) -> tuple[dict[str, tuple[int, ...]], dict[str, tuple[int, ...]]]:
+    counts_by_field: dict[str, tuple[int, ...]] = {}
+    offsets_by_field: dict[str, tuple[int, ...]] = {}
+    for field, count_decl in decls["pqueues"].items():
+        if isinstance(count_decl, int):
+            counts = (count_decl,) * length
+        else:
+            values = constants.get(count_decl)
+            if values is None:
+                raise ValueError(
+                    f"component collection '{collection_name}' field "
+                    f"'{field}' uses PQueues count '{count_decl}', which "
+                    "must name an int constant on every item")
+            if not all(type(value) is int and value >= 1 for value in values):
+                raise ValueError(
+                    f"component collection '{collection_name}' field "
+                    f"'{field}' uses PQueues count '{count_decl}', which "
+                    "must be a positive int on every item")
+            counts = values
+        offsets: list[int] = []
+        total = 0
+        for count in counts:
+            offsets.append(total)
+            total += int(count)
+        counts_by_field[field] = tuple(int(count) for count in counts)
+        offsets_by_field[field] = tuple(offsets)
+    return counts_by_field, offsets_by_field
 
 
 def _rewrite_component_capacity(
@@ -300,6 +395,25 @@ def _rewrite_component_capacity(
             f"component '{component_name}' field '{field_name}' capacity "
             f"'{cap}' must name a Param field")
     return cap
+
+
+def _validate_component_collection_declarations(
+    collection_name: str,
+    decls: dict[str, Any],
+) -> None:
+    for kind in ("param", "trace", "predicate", "event", "processes",
+                 "spawnable"):
+        if decls[kind]:
+            raise ValueError(
+                f"component collection '{collection_name}' declares {kind} "
+                "fields, which are not supported yet")
+    for kind in ("queue", "pool", "store"):
+        for field, cap in decls[kind].items():
+            if isinstance(cap, str):
+                raise ValueError(
+                    f"component collection '{collection_name}' field "
+                    f"'{field}' uses symbolic capacity '{cap}', which is "
+                    "not supported yet")
 
 
 def _declarations_contain(decls: dict[str, Any], name: str) -> bool:
@@ -331,7 +445,35 @@ def _flatten_component_declarations(
             target[kind][field_map[name]] = _rewrite_component_capacity(
                 component_name, name, cap, decls, field_map)
     for name, count_value in decls["pqueues"].items():
+        if isinstance(count_value, str):
+            raise ValueError(
+                f"component '{component_name}' field '{name}' uses symbolic "
+                "PQueues count, which is only supported in component lists")
         target["pqueues"][field_map[name]] = count_value
+
+
+def _flatten_component_collection_declarations(
+    target: dict[str, Any],
+    collection_name: str,
+    decls: dict[str, Any],
+    field_map: dict[str, str],
+    length: int,
+    pqueue_counts: Mapping[str, tuple[int, ...]],
+) -> None:
+    for flat_name in field_map.values():
+        if _declarations_contain(target, flat_name):
+            raise ValueError(f"duplicate field name '{flat_name}'")
+    for kind in ("output", "state", "fstate", "resource", "dataset",
+                 "condition"):
+        target[kind].extend(field_map[name] for name in decls[kind])
+        for name in decls[kind]:
+            target["field_shapes"][field_map[name]] = (length,)
+    for kind in ("queue", "pool", "store"):
+        for name, cap in decls[kind].items():
+            target[kind][field_map[name]] = cap
+            target["field_shapes"][field_map[name]] = (length,)
+    for name, counts in pqueue_counts.items():
+        target["pqueues"][field_map[name]] = sum(counts)
 
 
 def _class_declarations(cls: type) -> dict[str, Any]:
@@ -339,23 +481,59 @@ def _class_declarations(cls: type) -> dict[str, Any]:
     in declaration order (base classes first)."""
     decls = _field_declarations(cls)
     for fname, hint in get_type_hints(cls).items():
-        if not _is_component_class(hint):
+        if _is_component_class(hint):
+            template = getattr(cls, fname, _MISSING)
+            if template is _MISSING:
+                raise ValueError(
+                    f"component field '{fname}' needs a {hint.__name__} "
+                    "instance default")
+            if not isinstance(template, hint):
+                raise TypeError(
+                    f"component field '{fname}' default must be a "
+                    f"{hint.__name__} instance")
+            component_decls = _component_declarations(hint)
+            field_map = _component_field_map(fname, component_decls)
+            _flatten_component_declarations(decls, fname, component_decls,
+                                            field_map)
+            decls["components"].append(
+                _ComponentDecl(fname, hint, template, component_decls,
+                               field_map)
+            )
             continue
-        template = getattr(cls, fname, _MISSING)
-        if template is _MISSING:
+
+        collection_cls = _component_collection_class(hint)
+        if collection_cls is None:
+            continue
+        default = getattr(cls, fname, _MISSING)
+        if default is _MISSING:
             raise ValueError(
-                f"component field '{fname}' needs a {hint.__name__} "
-                "instance default")
-        if not isinstance(template, hint):
-            raise TypeError(
-                f"component field '{fname}' default must be a "
-                f"{hint.__name__} instance")
-        component_decls = _component_declarations(hint)
+                f"component collection '{fname}' needs a non-empty "
+                f"list or tuple of {collection_cls.__name__} instances")
+        if (not isinstance(default, (list, tuple)) or not default):
+            raise ValueError(
+                f"component collection '{fname}' needs a non-empty "
+                f"list or tuple of {collection_cls.__name__} instances")
+        templates = tuple(default)
+        for item in templates:
+            if not isinstance(item, collection_cls):
+                raise TypeError(
+                    f"component collection '{fname}' items must be "
+                    f"{collection_cls.__name__} instances")
+        component_decls = _component_declarations(collection_cls)
+        _validate_component_collection_declarations(fname, component_decls)
         field_map = _component_field_map(fname, component_decls)
-        _flatten_component_declarations(decls, fname, component_decls,
-                                        field_map)
-        decls["components"].append(
-            _ComponentDecl(fname, hint, template, component_decls, field_map)
+        constants = _component_collection_constants(templates, field_map)
+        pqueue_counts, pqueue_offsets = \
+            _resolve_component_collection_pqueues(
+                fname, len(templates), component_decls, constants)
+        _flatten_component_collection_declarations(
+            decls, fname, component_decls, field_map, len(templates),
+            pqueue_counts)
+        decls["component_collections"].append(
+            _ComponentCollectionDecl(fname, collection_cls, templates,
+                                     component_decls, field_map,
+                                     len(templates), constants,
+                                     pqueue_counts, pqueue_offsets)
         )
     return decls
 
@@ -559,15 +737,65 @@ def _primitive_constant(value: Any) -> bool:
     return type(value) in (bool, int, float)
 
 
+def _resolve_component_process_copies(
+    component_name: str,
+    component: Component,
+    method_name: str,
+    spec: _ComponentProcessSpec,
+) -> int:
+    copies = spec.copies
+    if isinstance(copies, int):
+        return copies
+    value = getattr(component, copies, _MISSING)
+    if type(value) is not int or value < 1:
+        raise ValueError(
+            f"component process '{component_name}.{method_name}' copies "
+            f"constant '{copies}' must be a positive int")
+    return value
+
+
+def _collection_const_symbol(collection: str, name: str) -> str:
+    return f"_CIMBA_CONST_{collection}__{name}"
+
+
+def _collection_pqueue_offsets_symbol(collection: str, field: str) -> str:
+    return f"_CIMBA_PQOFF_{collection}__{field}"
+
+
+def _env_attr(env_name: str, field: str, ctx: ast.expr_context) -> ast.Attribute:
+    return ast.Attribute(
+        value=ast.Name(id=env_name, ctx=ast.Load()),
+        attr=field,
+        ctx=ctx,
+    )
+
+
+def _subscript(
+    value: ast.expr,
+    index: ast.expr,
+    ctx: ast.expr_context,
+) -> ast.Subscript:
+    value.ctx = ast.Load()
+    return ast.Subscript(value=value, slice=index, ctx=ctx)
+
+
+def _add(left: ast.expr, right: ast.expr) -> ast.BinOp:
+    return ast.BinOp(left=left, op=ast.Add(), right=right)
+
+
 class _ComponentMethodLowerer(ast.NodeTransformer):
     def __init__(self, *, component_name: str, receiver_name: str,
                  env_name: str, field_map: Mapping[str, str],
-                 constants: Mapping[str, Any]):
+                 constants: Mapping[str, Any],
+                 item_index: int | None = None,
+                 pqueue_offsets: Mapping[str, tuple[int, ...]] | None = None):
         self.component_name = component_name
         self.receiver_name = receiver_name
         self.env_name = env_name
         self.field_map = field_map
         self.constants = constants
+        self.item_index = item_index
+        self.pqueue_offsets = pqueue_offsets or {}
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         if (isinstance(node.func, ast.Name) and node.func.id == "getattr"
@@ -582,17 +810,42 @@ class _ComponentMethodLowerer(ast.NodeTransformer):
                 f"self.{node.func.attr}() inside compiled code")
         return self.generic_visit(node)
 
+    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        if (self.item_index is not None
+                and isinstance(node.value, ast.Attribute)
+                and self._is_receiver(node.value.value)
+                and node.value.attr in self.pqueue_offsets):
+            field = node.value.attr
+            index = self.visit(copy.deepcopy(node.slice))
+            if not isinstance(index, ast.expr):
+                raise TypeError("component PQueues index did not lower "
+                                "to an expression")
+            flat = _env_attr(self.env_name, self.field_map[field], ast.Load())
+            offset = ast.Constant(self.pqueue_offsets[field][self.item_index])
+            return ast.copy_location(
+                _subscript(flat, _add(offset, index), node.ctx),
+                node,
+            )
+        return self.generic_visit(node)
+
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
         if not self._is_receiver(node.value):
             return self.generic_visit(node)
         name = node.attr
         if name in self.field_map:
+            if self.item_index is not None and name in self.pqueue_offsets:
+                raise ValueError(
+                    f"component '{self.component_name}' process must index "
+                    f"self.{name} before using it")
+            target = _env_attr(self.env_name, self.field_map[name], node.ctx)
+            if self.item_index is not None:
+                return ast.copy_location(
+                    _subscript(target, ast.Constant(self.item_index),
+                               node.ctx),
+                    node,
+                )
             return ast.copy_location(
-                ast.Attribute(
-                    value=ast.Name(id=self.env_name, ctx=ast.Load()),
-                    attr=self.field_map[name],
-                    ctx=node.ctx,
-                ),
+                target,
                 node,
             )
         if name in self.constants:
@@ -645,6 +898,9 @@ def _lower_component_process(
     field_map: Mapping[str, str],
     method_name: str,
     method: Callable[..., Any],
+    *,
+    item_index: int | None = None,
+    pqueue_offsets: Mapping[str, tuple[int, ...]] | None = None,
 ) -> Callable[..., Any]:
     node = copy.deepcopy(_component_method_source(method))
     args = node.args
@@ -684,6 +940,8 @@ def _lower_component_process(
         env_name=env_name,
         field_map=field_map,
         constants=constants,
+        item_index=item_index,
+        pqueue_offsets=pqueue_offsets,
     )
     lowered = lowerer.visit(node)
     if not isinstance(lowered, ast.FunctionDef):
@@ -710,27 +968,85 @@ def _lower_component_process(
 
 class _ModelComponentRefLowerer(ast.NodeTransformer):
     def __init__(self, *, model_name: str, fn_name: str, env_name: str,
-                 component_maps: Mapping[str, Mapping[str, str]]):
+                 component_maps: Mapping[str, Mapping[str, str]],
+                 component_collections: Mapping[str,
+                                                _ComponentCollectionDecl]):
         self.model_name = model_name
         self.fn_name = fn_name
         self.env_name = env_name
         self.component_maps = component_maps
+        self.component_collections = component_collections
         self.changed = False
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         if (isinstance(node.func, ast.Name) and node.func.id == "getattr"
-                and node.args and self._component_namespace(node.args[0])
-                is not None):
-            component = self._component_namespace(node.args[0])
+                and node.args):
+            component = self._single_component_namespace(node.args[0])
+            if component is not None:
+                raise ValueError(
+                    f"model '{self.model_name}' callback '{self.fn_name}' "
+                    f"uses dynamic getattr(env.{component}, ...), which is "
+                    "not supported")
+            collection = self._collection_namespace(node.args[0])
+            if collection is not None:
+                raise ValueError(
+                    f"model '{self.model_name}' callback '{self.fn_name}' "
+                    f"uses dynamic getattr(env.{collection}, ...), which is "
+                    "not supported")
+            item_ref = self._collection_item_ref(node.args[0])
+            if item_ref is not None:
+                collection, _index = item_ref
+                raise ValueError(
+                    f"model '{self.model_name}' callback '{self.fn_name}' "
+                    f"uses dynamic getattr(env.{collection}[...], ...), "
+                    "which is not supported")
+        return self.generic_visit(node)
+
+    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        collection_field = (
+            self._collection_field_ref(node.value)
+            if isinstance(node.value, ast.Attribute) else None
+        )
+        if collection_field is not None:
+            collection, item_index, field = collection_field
+            decl = self.component_collections[collection]
+            if field not in decl.field_map:
+                raise ValueError(
+                    f"model '{self.model_name}' callback '{self.fn_name}' "
+                    f"references unknown component collection field "
+                    f"env.{collection}[...].{field}")
+            if field not in decl.pqueue_offsets:
+                return self.generic_visit(node)
+            item_index = self.visit(copy.deepcopy(item_index))
+            queue_index = self.visit(copy.deepcopy(node.slice))
+            if (not isinstance(item_index, ast.expr)
+                    or not isinstance(queue_index, ast.expr)):
+                raise TypeError("component collection index did not lower "
+                                "to an expression")
+            flat = _env_attr(self.env_name, decl.field_map[field], ast.Load())
+            offset_array = ast.Name(
+                id=_collection_pqueue_offsets_symbol(collection, field),
+                ctx=ast.Load(),
+            )
+            offset = _subscript(offset_array, item_index, ast.Load())
+            self.changed = True
+            return ast.copy_location(
+                _subscript(flat, _add(offset, queue_index), node.ctx),
+                node,
+            )
+
+        collection = self._collection_namespace(node.value)
+        if collection is not None:
             raise ValueError(
                 f"model '{self.model_name}' callback '{self.fn_name}' uses "
-                f"dynamic getattr(env.{component}, ...), which is not "
-                "supported")
+                f"env.{collection}[...] directly; access one of its fields")
         return self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
-        nested_field = (self._component_field_ref(node.value)
-                        if isinstance(node.value, ast.Attribute) else None)
+        nested_field = (
+            self._single_component_field_ref(node.value)
+            if isinstance(node.value, ast.Attribute) else None
+        )
         if nested_field is not None:
             component, field = nested_field
             raise ValueError(
@@ -738,7 +1054,54 @@ class _ModelComponentRefLowerer(ast.NodeTransformer):
                 f"cannot access attributes below component field "
                 f"env.{component}.{field}")
 
-        field_ref = self._component_field_ref(node)
+        collection_field = self._collection_field_ref(node)
+        if collection_field is not None:
+            collection, item_index, field = collection_field
+            decl = self.component_collections[collection]
+            if field in decl.field_map:
+                if field in decl.pqueue_offsets:
+                    raise ValueError(
+                        f"model '{self.model_name}' callback "
+                        f"'{self.fn_name}' must index "
+                        f"env.{collection}[...].{field} before using it")
+                item_index = self.visit(copy.deepcopy(item_index))
+                if not isinstance(item_index, ast.expr):
+                    raise TypeError("component collection index did not "
+                                    "lower to an expression")
+                target = _env_attr(self.env_name, decl.field_map[field],
+                                   node.ctx)
+                self.changed = True
+                return ast.copy_location(
+                    _subscript(target, item_index, node.ctx),
+                    node,
+                )
+            if field in decl.constants:
+                if not isinstance(node.ctx, ast.Load):
+                    raise ValueError(
+                        f"model '{self.model_name}' callback "
+                        f"'{self.fn_name}' cannot assign to constant "
+                        f"env.{collection}[...].{field}")
+                item_index = self.visit(copy.deepcopy(item_index))
+                if not isinstance(item_index, ast.expr):
+                    raise TypeError("component collection index did not "
+                                    "lower to an expression")
+                self.changed = True
+                return ast.copy_location(
+                    _subscript(
+                        ast.Name(id=_collection_const_symbol(collection,
+                                                             field),
+                                 ctx=ast.Load()),
+                        item_index,
+                        ast.Load(),
+                    ),
+                    node,
+                )
+            raise ValueError(
+                f"model '{self.model_name}' callback '{self.fn_name}' "
+                f"references unknown component collection field "
+                f"env.{collection}[...].{field}")
+
+        field_ref = self._single_component_field_ref(node)
         if field_ref is not None:
             component, field = field_ref
             field_map = self.component_maps[component]
@@ -749,23 +1112,25 @@ class _ModelComponentRefLowerer(ast.NodeTransformer):
                     f"env.{component}.{field}")
             self.changed = True
             return ast.copy_location(
-                ast.Attribute(
-                    value=ast.Name(id=self.env_name, ctx=ast.Load()),
-                    attr=field_map[field],
-                    ctx=node.ctx,
-                ),
+                _env_attr(self.env_name, field_map[field], node.ctx),
                 node,
             )
 
-        if self._component_namespace(node) is not None:
-            component = self._component_namespace(node)
+        if self._single_component_namespace(node) is not None:
+            component = self._single_component_namespace(node)
             raise ValueError(
                 f"model '{self.model_name}' callback '{self.fn_name}' "
                 f"cannot use env.{component} directly; access one of its "
                 "fields")
+        if self._collection_namespace(node) is not None:
+            collection = self._collection_namespace(node)
+            raise ValueError(
+                f"model '{self.model_name}' callback '{self.fn_name}' "
+                f"cannot use env.{collection} directly; index it and access "
+                "one of its fields")
         return self.generic_visit(node)
 
-    def _component_namespace(self, node: ast.AST) -> str | None:
+    def _single_component_namespace(self, node: ast.AST) -> str | None:
         if (isinstance(node, ast.Attribute)
                 and isinstance(node.value, ast.Name)
                 and node.value.id == self.env_name
@@ -773,13 +1138,56 @@ class _ModelComponentRefLowerer(ast.NodeTransformer):
             return node.attr
         return None
 
-    def _component_field_ref(
+    def _single_component_field_ref(
         self, node: ast.Attribute,
     ) -> tuple[str, str] | None:
-        component = self._component_namespace(node.value)
+        component = self._single_component_namespace(node.value)
         if component is None:
             return None
         return component, node.attr
+
+    def _collection_namespace(self, node: ast.AST) -> str | None:
+        if (isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == self.env_name
+                and node.attr in self.component_collections):
+            return node.attr
+        return None
+
+    def _collection_item_ref(
+        self, node: ast.AST,
+    ) -> tuple[str, ast.expr] | None:
+        if not isinstance(node, ast.Subscript):
+            return None
+        collection = self._collection_namespace(node.value)
+        if collection is None:
+            return None
+        if not isinstance(node.slice, ast.expr):
+            return None
+        return collection, node.slice
+
+    def _collection_field_ref(
+        self, node: ast.Attribute,
+    ) -> tuple[str, ast.expr, str] | None:
+        item_ref = self._collection_item_ref(node.value)
+        if item_ref is None:
+            return None
+        collection, index = item_ref
+        return collection, index, node.attr
+
+
+def _component_collection_namespace(
+    component_collections: Mapping[str, _ComponentCollectionDecl],
+) -> dict[str, Any]:
+    namespace: dict[str, Any] = {}
+    for decl in component_collections.values():
+        for name, values in decl.constants.items():
+            namespace[_collection_const_symbol(decl.name, name)] = \
+                np.asarray(values)
+        for field, offsets in decl.pqueue_offsets.items():
+            namespace[_collection_pqueue_offsets_symbol(decl.name, field)] = \
+                np.asarray(offsets, dtype=np.int64)
+    return namespace
 
 
 def _function_source(fn: Callable[..., Any]) -> str:
@@ -803,10 +1211,12 @@ def _lower_model_component_refs(
     *,
     model_name: str,
     component_maps: Mapping[str, Mapping[str, str]],
+    component_collections: Mapping[str, _ComponentCollectionDecl],
 ) -> Callable[..., Any]:
-    if not component_maps:
+    if not component_maps and not component_collections:
         return fn
-    if not any(name in fn.__code__.co_names for name in component_maps):
+    component_names = set(component_maps) | set(component_collections)
+    if not any(name in fn.__code__.co_names for name in component_names):
         return fn
     try:
         node = copy.deepcopy(_function_def_from_source(fn))
@@ -824,6 +1234,7 @@ def _lower_model_component_refs(
         fn_name=fn.__name__,
         env_name=env_name,
         component_maps=component_maps,
+        component_collections=component_collections,
     )
     lowered = lowerer.visit(node)
     if not isinstance(lowered, ast.FunctionDef):
@@ -849,6 +1260,7 @@ def _lower_model_component_refs(
         filename,
     )
     namespace = _closure_namespace(fn)
+    namespace.update(_component_collection_namespace(component_collections))
     exec(compile(source, filename, "exec"), namespace)
     generated = namespace[fn.__name__]
     generated.__module__ = fn.__module__
@@ -904,7 +1316,12 @@ class Model:
         self._process_fields: list[str] = decls["processes"]
         self._spawnable_fields: list[str] = decls["spawnable"]
         self._component_decls: list[_ComponentDecl] = decls["components"]
+        self._component_collection_decls: list[_ComponentCollectionDecl] = \
+            decls["component_collections"]
+        self._field_shapes: dict[str, tuple[int, ...]] = \
+            decls["field_shapes"]
         self._components: dict[str, Component] = {}
+        self._component_collections: dict[str, tuple[Component, ...]] = {}
 
         seen: set[str] = set()
         for kind, names in (("param", self.params),
@@ -933,6 +1350,11 @@ class Model:
             if component.name in seen:
                 raise ValueError(f"duplicate field name '{component.name}'")
             seen.add(component.name)
+        for collection in self._component_collection_decls:
+            _check_name(collection.name, "component collection")
+            if collection.name in seen:
+                raise ValueError(f"duplicate field name '{collection.name}'")
+            seen.add(collection.name)
         for cap in (list(self.queues.values()) + list(self.pools.values())
                     + list(self.stores.values())):
             if cap is not None and not isinstance(cap, int) \
@@ -960,25 +1382,61 @@ class Model:
                 component._cimba_name = decl.name
             except AttributeError:
                 pass
+        for decl in self._component_collection_decls:
+            components = tuple(copy.copy(template)
+                               for template in decl.templates)
+            self._component_collections[decl.name] = components
+            setattr(self, decl.name, list(components))
+            for index, component in enumerate(components):
+                try:
+                    component._cimba_model = self
+                    component._cimba_name = f"{decl.name}[{index}]"
+                    component._cimba_collection = decl.name
+                    component._cimba_index = index
+                except AttributeError:
+                    pass
 
     def _register_component_processes(self) -> None:
         for decl in self._component_decls:
             component = self._components[decl.name]
             for method_name, method, spec in _component_process_methods(
                     decl.cls):
+                copies = _resolve_component_process_copies(
+                    decl.name, component, method_name, spec)
                 lowered = _lower_component_process(
                     decl.name, component, decl.field_map, method_name, method)
-                self.process(lowered, copies=spec.copies,
+                self.process(lowered, copies=copies,
                              priority=spec.priority)
+        for decl in self._component_collection_decls:
+            components = self._component_collections[decl.name]
+            for index, component in enumerate(components):
+                component_name = f"{decl.name}__{index}"
+                for method_name, method, spec in _component_process_methods(
+                        decl.cls):
+                    copies = _resolve_component_process_copies(
+                        component_name, component, method_name, spec)
+                    lowered = _lower_component_process(
+                        component_name, component, decl.field_map,
+                        method_name, method, item_index=index,
+                        pqueue_offsets=decl.pqueue_offsets)
+                    self.process(lowered, copies=copies,
+                                 priority=spec.priority)
 
     @property
     def _component_field_maps(self) -> dict[str, dict[str, str]]:
         return {decl.name: decl.field_map for decl in self._component_decls}
 
+    @property
+    def _component_collection_maps(
+        self,
+    ) -> dict[str, _ComponentCollectionDecl]:
+        return {decl.name: decl for decl in self._component_collection_decls}
+
     def _lower_component_refs(self, fn: _F) -> _F:
         return _lower_model_component_refs(
             fn, model_name=self.name,
             component_maps=self._component_field_maps,
+            component_collections=self._component_collection_maps,
         )
 
     # --- Declaration decorators ------------------------------------------
@@ -1163,15 +1621,38 @@ class Model:
                 for p in self._processes if not p.spawnable
                 for i in range(p.copies)]
 
+    def _field_spec(self, name: str, fmt: str) -> tuple[Any, ...]:
+        shape = self._field_shapes.get(name)
+        if shape is None:
+            return (name, fmt)
+        return (name, fmt, shape)
+
+    def _field_refs(self, name: str) -> list[str]:
+        shape = self._field_shapes.get(name)
+        if shape is None:
+            return [f"env['{name}']"]
+        if len(shape) != 1:
+            raise ValueError(f"field '{name}' has unsupported shape {shape}")
+        return [f"env['{name}'][{i}]" for i in range(shape[0])]
+
+    def _field_name_keys(self, name: str) -> list[tuple[str, str]]:
+        shape = self._field_shapes.get(name)
+        if shape is None:
+            return [(f"NAME_{name}", name)]
+        if len(shape) != 1:
+            raise ValueError(f"field '{name}' has unsupported shape {shape}")
+        return [(f"NAME_{name}_{i}", f"{name}_{i}")
+                for i in range(shape[0])]
+
     @property
     def dtype(self) -> np.dtype:
         # (name, format) or (name, format, shape) numpy field specs
         fields: list[Any] = list(_STANDARD_FIELDS)
         fields += [(p, "<f8") for p in self.params]
-        fields += [(o, "<f8") for o in self.outputs]
-        fields += [(h, "<i8") for h in self._entities]
-        fields += [(s, "<i8") for s in self.state]
-        fields += [(s, "<f8") for s in self.float_state]
+        fields += [self._field_spec(o, "<f8") for o in self.outputs]
+        fields += [self._field_spec(h, "<i8") for h in self._entities]
+        fields += [self._field_spec(s, "<i8") for s in self.state]
+        fields += [self._field_spec(s, "<f8") for s in self.float_state]
         fields += [(t, "<i8", (2,)) for t in self.traces]
         fields += [(f, "<i8", (n,)) for f, n in self.pqueues.items()]
         fields += [(p, "<i8") for p in self._predicate_fields]
@@ -1279,7 +1760,8 @@ class Model:
         ns.update(carray=carray, addressof=addressof, np=np,
                   COLLECT=collect_inner, CAP=_UNBOUNDED)
         for e in self._entities:
-            ns[f"NAME_{e}"] = _b.cstring(e)
+            for key, name in self._field_name_keys(e):
+                ns[key] = _b.cstring(name)
         for f, n in self.pqueues.items():
             for k in range(n):
                 ns[f"NAME_{f}_{k}"] = _b.cstring(f"{f}_{k}")
@@ -1311,17 +1793,23 @@ class Model:
 
         src = ["def _start_rec(subject, obj):",
                "    env = carray(subject, 1)[0]"]
-        src += [f"    {k}_recording_start(env['{n}'])" for k, n in recorded]
+        for kind, name in recorded:
+            src += [f"    {kind}_recording_start({ref})"
+                    for ref in self._field_refs(name)]
         for f, n in self.pqueues.items():
             for k in range(n):
                 src += [
                     f"    priorityqueue_recording_start(env['{f}'][{k}])"
                 ]
         # Datasets tally over the measurement window only
-        src += [f"    dataset_reset(env['{d}'])" for d in self.datasets]
+        for dataset in self.datasets:
+            src += [f"    dataset_reset({ref})"
+                    for ref in self._field_refs(dataset)]
         src += ["def _stop_rec(subject, obj):",
                 "    env = carray(subject, 1)[0]"]
-        src += [f"    {k}_recording_stop(env['{n}'])" for k, n in recorded]
+        for kind, name in recorded:
+            src += [f"    {kind}_recording_stop({ref})"
+                    for ref in self._field_refs(name)]
         for f, n in self.pqueues.items():
             for k in range(n):
                 src += [
@@ -1351,31 +1839,43 @@ class Model:
                 "    t = t + env['cooldown_s']",
                 "    event_schedule(EV_END, self_addr, 0, t, 0)"]
         for q, cap in self.queues.items():
-            src += ["    h = buffer_create()",
-                    f"    buffer_initialize(h, NAME_{q}, {cap_expr(cap)})",
-                    f"    env['{q}'] = h"]
+            for i, ref in enumerate(self._field_refs(q)):
+                name_key = self._field_name_keys(q)[i][0]
+                src += ["    h = buffer_create()",
+                        f"    buffer_initialize(h, {name_key}, "
+                        f"{cap_expr(cap)})",
+                        f"    {ref} = h"]
         for r in self.resources:
-            src += ["    h = resource_create()",
-                    f"    resource_initialize(h, NAME_{r})",
-                    f"    env['{r}'] = h"]
+            for i, ref in enumerate(self._field_refs(r)):
+                name_key = self._field_name_keys(r)[i][0]
+                src += ["    h = resource_create()",
+                        f"    resource_initialize(h, {name_key})",
+                        f"    {ref} = h"]
         for p, cap in self.pools.items():
-            src += ["    h = resourcepool_create()",
-                    f"    resourcepool_initialize(h, NAME_{p}, "
-                    f"{cap_expr(cap)})",
-                    f"    env['{p}'] = h"]
+            for i, ref in enumerate(self._field_refs(p)):
+                name_key = self._field_name_keys(p)[i][0]
+                src += ["    h = resourcepool_create()",
+                        f"    resourcepool_initialize(h, {name_key}, "
+                        f"{cap_expr(cap)})",
+                        f"    {ref} = h"]
         for s, cap in self.stores.items():
-            src += ["    h = objectqueue_create()",
-                    f"    objectqueue_initialize(h, NAME_{s}, "
-                    f"{cap_expr(cap)})",
-                    f"    env['{s}'] = h"]
+            for i, ref in enumerate(self._field_refs(s)):
+                name_key = self._field_name_keys(s)[i][0]
+                src += ["    h = objectqueue_create()",
+                        f"    objectqueue_initialize(h, {name_key}, "
+                        f"{cap_expr(cap)})",
+                        f"    {ref} = h"]
         for d in self.datasets:
-            src += ["    h = dataset_create()",
-                    "    dataset_initialize(h)",
-                    f"    env['{d}'] = h"]
+            for ref in self._field_refs(d):
+                src += ["    h = dataset_create()",
+                        "    dataset_initialize(h)",
+                        f"    {ref} = h"]
         for c in self.conditions:
-            src += ["    h = condition_create()",
-                    f"    condition_initialize(h, NAME_{c})",
-                    f"    env['{c}'] = h"]
+            for i, ref in enumerate(self._field_refs(c)):
+                name_key = self._field_name_keys(c)[i][0]
+                src += ["    h = condition_create()",
+                        f"    condition_initialize(h, {name_key})",
+                        f"    {ref} = h"]
         for f, n in self.pqueues.items():
             for k in range(n):
                 src += ["    h = priorityqueue_create()",
@@ -1411,17 +1911,23 @@ class Model:
         if has_spawns:
             src += ["    spawned_reclaim()"]
         for q in self.queues:
-            src += [f"    buffer_destroy(env['{q}'])"]
+            src += [f"    buffer_destroy({ref})"
+                    for ref in self._field_refs(q)]
         for r in self.resources:
-            src += [f"    resource_destroy(env['{r}'])"]
+            src += [f"    resource_destroy({ref})"
+                    for ref in self._field_refs(r)]
         for p in self.pools:
-            src += [f"    resourcepool_destroy(env['{p}'])"]
+            src += [f"    resourcepool_destroy({ref})"
+                    for ref in self._field_refs(p)]
         for s in self.stores:
-            src += [f"    objectqueue_destroy(env['{s}'])"]
+            src += [f"    objectqueue_destroy({ref})"
+                    for ref in self._field_refs(s)]
         for d in self.datasets:
-            src += [f"    dataset_destroy(env['{d}'])"]
+            src += [f"    dataset_destroy({ref})"
+                    for ref in self._field_refs(d)]
         for c in self.conditions:
-            src += [f"    condition_destroy(env['{c}'])"]
+            src += [f"    condition_destroy({ref})"
+                    for ref in self._field_refs(c)]
         for f, n in self.pqueues.items():
             for k in range(n):
                 src += [f"    priorityqueue_terminate(env['{f}'][{k}])",
@@ -1600,9 +2106,10 @@ class Experiment:
         if not self.model.outputs:
             self.failures = 0
         else:
-            self.failures = int(
-                np.isnan(self.trials[self.model.outputs[0]]).sum()
-            )
+            failed = np.isnan(self.trials[self.model.outputs[0]])
+            if failed.ndim > 1:
+                failed = failed.reshape(failed.shape[0], -1).any(axis=1)
+            self.failures = int(failed.sum())
         return self.failures
 
     def __getitem__(self, field: str) -> np.ndarray:

@@ -579,6 +579,35 @@ Model callbacks can read component fields with natural dotted access such as
 before compilation. In the experiment table, component fields still use
 flattened names for now, such as ``station__queue``.
 
+Repeated structures can be grouped the same way with standard Python list
+annotations:
+
+.. code-block:: python
+
+    class Attraction(sim.Component):
+        queues: sim.PQueues = sim.count("queue_count")
+
+        def __init__(self, queue_count: int, server_count: int):
+            self.queue_count = queue_count
+            self.server_count = server_count
+
+        @sim.process(copies="server_count")
+        def server(self, env, idx):
+            q = self.queues[idx % self.queue_count]
+            # serve one visitor from q ...
+
+
+    class Park(sim.Model):
+        attractions: list[Attraction] = [
+            Attraction(queue_count=1, server_count=1),
+            Attraction(queue_count=3, server_count=3),
+        ]
+
+Model callbacks can index the collection with
+``env.attractions[i].queues[j]``. Cimba lowers that to flattened fields and
+generated offset arrays; experiment fields still use names such as
+``attractions__queues`` and ``attractions__server_state``.
+
 .. code-block:: python
 
     def run_mm1_trial(

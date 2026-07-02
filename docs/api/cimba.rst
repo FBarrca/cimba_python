@@ -26,6 +26,11 @@ model construction, and model callbacks can read component fields with
 ``env.retailer.orders``. Component fields are exposed in experiments with
 flattened names such as ``retailer__orders``.
 
+Fixed repeated structures can be declared with standard ``list[Component]``
+annotations, for example ``attractions: list[Attraction] = [...]``. Model
+callbacks can use indexed access such as ``env.attractions[i].queues[j]``;
+runtime fields remain flattened, for example ``attractions__queues``.
+
 Process DAGs:
 
 Call ``model.process_dag()`` to infer a resource-aware graph from registered

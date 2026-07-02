@@ -356,3 +356,260 @@ def test_model_component_namespace_errors_are_rejected():
         def nested_actor(env: UsesBox):
             _ = env.box.value.extra
             sim.suspend()
+
+
+def test_component_collection_declarations_flatten_to_shaped_fields():
+    class Attraction(sim.Component):
+        active: sim.State
+        score: sim.Output
+        queue: sim.Queue
+        lanes: sim.PQueues = sim.count("queue_count")
+
+        def __init__(self, queue_count: int, bias: int):
+            self.queue_count = queue_count
+            self.bias = bias
+
+    class Park(sim.Model):
+        attractions: list[Attraction] = [
+            Attraction(queue_count=1, bias=10),
+            Attraction(queue_count=3, bias=20),
+        ]
+
+    model = Park()
+    assert model.state == ["attractions__active"]
+    assert model.outputs == ["attractions__score"]
+    assert model.queues == {"attractions__queue": None}
+    assert model.pqueues == {"attractions__lanes": 4}
+    assert model.dtype["attractions__active"].shape == (2,)
+    assert model.dtype["attractions__score"].shape == (2,)
+    assert model.dtype["attractions__queue"].shape == (2,)
+    assert model.dtype["attractions__lanes"].shape == (4,)
+    (decl,) = model._component_collection_decls
+    assert decl.constants["queue_count"] == (1, 3)
+    assert decl.constants["bias"] == (10, 20)
+    assert decl.pqueue_counts["lanes"] == (1, 3)
+    assert decl.pqueue_offsets["lanes"] == (0, 1)
+
+
+def test_component_collection_shorthand_annotation_is_accepted():
+    class Item(sim.Component):
+        count: sim.State
+
+    class Network(sim.Model):
+        items: [Item] = [Item(), Item()]
+
+    model = Network()
+    assert model.dtype["items__count"].shape == (2,)
+
+
+def test_model_process_can_index_component_collection_fields_and_constants():
+    class Attraction(sim.Component):
+        visits: sim.State
+        lanes: sim.PQueues = sim.count("queue_count")
+
+        def __init__(self, queue_count: int, bias: int):
+            self.queue_count = queue_count
+            self.bias = bias
+
+    class Park(sim.Model):
+        total: sim.Output
+        attractions: list[Attraction] = [
+            Attraction(queue_count=1, bias=10),
+            Attraction(queue_count=2, bias=20),
+        ]
+
+    model = Park()
+
+    @model.process
+    def visitor(env: Park):
+        at = 1
+        qi = 1
+        q = env.attractions[at].lanes[qi]
+        sim.pq_put(q, env.attractions[at].bias, 0)
+        env.attractions[at].visits += sim.pq_take(q)
+        env.total = env.attractions[at].visits \
+            + env.attractions[at].queue_count
+        sim.suspend()
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
+                           seed=21)
+    assert exp.run() == 0
+    assert exp["total"][0] == 22.0
+    assert exp.trials["attractions__visits"][0].tolist() == [0, 20]
+
+
+def test_component_collection_outputs_run_and_count_failures_by_trial():
+    class Item(sim.Component):
+        score: sim.Output
+
+    class Network(sim.Model):
+        items: list[Item] = [Item(), Item()]
+
+    model = Network()
+
+    @model.process
+    def actor(env: Network):
+        env.items[0].score = 1.0
+        env.items[1].score = 2.0
+        sim.suspend()
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
+                           seed=23)
+    assert exp.run() == 0
+    assert exp["items__score"][0].tolist() == [1.0, 2.0]
+
+
+def test_component_collection_processes_run_per_item_with_symbolic_copies():
+    class Attraction(sim.Component):
+        done: sim.State
+        lanes: sim.PQueues = sim.count("queue_count")
+
+        def __init__(self, queue_count: int, server_count: int, base: int):
+            self.queue_count = queue_count
+            self.server_count = server_count
+            self.base = base
+
+        @sim.process(copies="server_count", priority=6)
+        def server(self, env, idx):
+            q = self.lanes[idx % self.queue_count]
+            sim.pq_put(q, self.base + idx, 0)
+            self.done += sim.pq_take(q)
+            sim.suspend()
+
+    class Park(sim.Model):
+        total: sim.Output
+        attractions: list[Attraction] = [
+            Attraction(queue_count=1, server_count=1, base=10),
+            Attraction(queue_count=2, server_count=2, base=20),
+        ]
+
+    model = Park()
+    assert [(p.name, p.copies, p.priority) for p in model._processes] == [
+        ("attractions__0__server", 1, 6),
+        ("attractions__1__server", 2, 6),
+    ]
+
+    @model.collect
+    def collect_stats(env: Park):
+        env.total = env.attractions[0].done + env.attractions[1].done
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
+                           seed=22)
+    assert exp.run() == 0
+    assert exp["total"][0] == 51.0
+    assert exp.trials["attractions__done"][0].tolist() == [10, 41]
+
+
+def test_component_collection_process_dag_uses_lowered_source():
+    class Attraction(sim.Component):
+        visits: sim.State
+        lanes: sim.PQueues = sim.count("queue_count")
+
+        def __init__(self, queue_count: int):
+            self.queue_count = queue_count
+
+    class Park(sim.Model):
+        attractions: list[Attraction] = [
+            Attraction(queue_count=1),
+            Attraction(queue_count=2),
+        ]
+
+    model = Park()
+
+    @model.process
+    def visitor(env: Park):
+        at = 1
+        sim.pq_put(env.attractions[at].lanes[0], 7, 0)
+        env.attractions[at].visits += 1
+        sim.suspend()
+
+    graph = model.process_dag()
+    nodes = {node.key for node in graph.nodes}
+    edges = {(edge.source, edge.target, edge.label) for edge in graph.edges}
+    assert "pqueues:attractions__lanes" in nodes
+    assert "state:attractions__visits" in nodes
+    assert ("process:visitor", "pqueues:attractions__lanes", "pq_put") \
+        in edges
+    assert ("process:visitor", "state:attractions__visits", "write") \
+        in edges
+
+
+def test_component_collection_declaration_errors_are_rejected():
+    class Item(sim.Component):
+        count: sim.State
+
+    class Empty(sim.Model):
+        items: list[Item] = []
+
+    with pytest.raises(ValueError, match="non-empty"):
+        Empty()
+
+    class Wrong(sim.Model):
+        items: list[Item] = [object()]
+
+    with pytest.raises(TypeError, match="items must be Item instances"):
+        Wrong()
+
+    class WithParam(sim.Component):
+        rate: sim.Param
+
+    class ParamModel(sim.Model):
+        items: list[WithParam] = [WithParam()]
+
+    with pytest.raises(ValueError, match="declares param fields"):
+        ParamModel()
+
+    class MissingCount(sim.Component):
+        lanes: sim.PQueues = sim.count("queue_count")
+
+    class MissingCountModel(sim.Model):
+        items: list[MissingCount] = [MissingCount()]
+
+    with pytest.raises(ValueError, match="must name an int constant"):
+        MissingCountModel()
+
+
+def test_component_collection_namespace_errors_are_rejected():
+    class Item(sim.Component):
+        count: sim.State
+
+        def __init__(self):
+            self.values = [1]
+
+    class Network(sim.Model):
+        items: list[Item] = [Item()]
+
+    direct = Network()
+    with pytest.raises(ValueError, match="cannot use env.items directly"):
+        @direct.process
+        def direct_actor(env: Network):
+            _ = env.items
+            sim.suspend()
+
+    item_alias = Network()
+    with pytest.raises(ValueError, match=r"env.items\[\.\.\.\] directly"):
+        @item_alias.process
+        def item_alias_actor(env: Network):
+            _ = env.items[0]
+            sim.suspend()
+
+    unknown = Network()
+    with pytest.raises(ValueError, match="unknown component collection field"):
+        @unknown.process
+        def unknown_actor(env: Network):
+            env.items[0].missing = 1
+            sim.suspend()
+
+    dynamic = Network()
+    with pytest.raises(ValueError, match="dynamic getattr"):
+        @dynamic.process
+        def dynamic_actor(env: Network):
+            env.items[0].count = getattr(env.items[0], "count")
+            sim.suspend()
+
+    unsupported_constant = Network()
+    with pytest.raises(ValueError, match="unknown component collection field"):
+        @unsupported_constant.process
+        def unsupported_actor(env: Network):
+            env.items[0].count = env.items[0].values[0]
+            sim.suspend()

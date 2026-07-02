@@ -80,6 +80,10 @@ Component methods marked with top-level ``@sim.process`` are authoring-time
 methods; Model lowers them into ordinary flat process functions before Numba
 compilation. Model callbacks can use ``env.retailer.orders``; trial-table
 fields remain flattened with names such as ``retailer__orders``.
+Fixed collections of repeated components can be declared with standard
+``list[ComponentType]`` annotations. Model callbacks can use indexed access
+such as ``env.attractions[i].queues[j]``; Cimba lowers it to flattened fields
+and generated offset tables before compilation.
 
 Module layout: the verbs below alias the raw symbol bindings in
 ``_bindings``; the cast helpers live in ``_intrinsics``; Model/Experiment
