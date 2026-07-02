@@ -303,7 +303,12 @@ def _field_declarations(
                     "positive count default, e.g. "
                     "'qs: sim.PQueues = sim.count(4)'")
         else:
-            if default is not None:
+            method_binding = (
+                kind == "spawnable"
+                and getattr(default, _COMPONENT_PROCESS_ATTR, None)
+                is not None
+            )
+            if default is not None and not method_binding:
                 raise ValueError(
                     f"field '{fname}': only Queue/Pool/Store declarations "
                     "may carry a capacity default")
@@ -313,7 +318,7 @@ def _field_declarations(
 
 def _component_declarations(cls: type[Component]) -> dict[str, Any]:
     decls = _field_declarations(cls, allow_symbolic_pqueues=True)
-    for kind in ("predicate", "event", "processes", "spawnable"):
+    for kind in ("predicate", "event", "processes"):
         if decls[kind]:
             raise ValueError(
                 f"component '{cls.__name__}' declares {kind} fields, which "
@@ -335,7 +340,7 @@ def _component_collection_class(hint: Any) -> type[Component] | None:
 def _component_field_map(name: str, decls: dict[str, Any]) -> dict[str, str]:
     fields: set[str] = set()
     for kind in ("param", "output", "state", "fstate", "resource",
-                 "dataset", "condition", "trace"):
+                 "dataset", "condition", "spawnable", "trace"):
         fields.update(decls[kind])
     for kind in ("queue", "pool", "store", "pqueues"):
         fields.update(decls[kind])
@@ -426,7 +431,7 @@ def _validate_component_instance_declarations(
                 raise ValueError(
                     f"component collection '{component_name}' declares "
                     f"{kind} fields, which are not supported yet")
-    for kind in ("predicate", "event", "processes", "spawnable"):
+    for kind in ("predicate", "event", "processes"):
         if decls[kind]:
             raise ValueError(
                 f"component '{component_name}' declares {kind} fields, which "
@@ -467,7 +472,7 @@ def _flatten_component_declarations(
     for kind in ("param", "trace"):
         target[kind].extend(field_map[name] for name in decls[kind])
     for kind in ("output", "state", "fstate", "resource", "dataset",
-                 "condition"):
+                 "condition", "spawnable"):
         target[kind].extend(field_map[name] for name in decls[kind])
         if instance_count > 1:
             for name in decls[kind]:
@@ -832,6 +837,8 @@ class _ProcDecl:
     struct: type[Struct] | None    # per-process fields, if any
     injected: bool                 # fn receives its own struct view
     spawnable: bool                # created by sim.spawn(), not at setup
+    spawn_field: str | None = None # env Spawnable field descriptor lands in
+    spawn_index: int | None = None # shaped Spawnable field element, if any
 
     @property
     def alloc_size(self) -> int:
@@ -851,6 +858,9 @@ class _Compiled(TypedDict):
     #: per-Spawnable-field descriptor arrays sim.spawn() reads:
     #: [cfunc address, name cstring, allocation size]
     spawns: dict[str, np.ndarray]
+    #: (Spawnable env field, optional shaped-field index, process name)
+    #: assignments applied to the experiment table.
+    spawn_assignments: tuple[tuple[str, int | None, str], ...]
     collect: Any
     dtype: np.dtype
 
@@ -985,6 +995,22 @@ def _component_instance_count(decl: _AnyComponentDecl) -> int:
     if isinstance(decl, _ComponentCollectionDecl):
         return len(decl.templates)
     return len(decl.instances)
+
+
+def _component_spawnable_field_names(
+    roots: Iterable[_AnyComponentDecl],
+) -> set[str]:
+    fields: set[str] = set()
+    for decl in _walk_component_declarations(roots):
+        fields.update(
+            decl.direct_field_map[name]
+            for name in decl.decls["spawnable"]
+        )
+    return fields
+
+
+def _spawnable_slot_label(field: str, index: int | None) -> str:
+    return field if index is None else f"{field}[{index}]"
 
 
 @dataclass(frozen=True)
@@ -1335,11 +1361,27 @@ def _lower_component_process(
             or args.defaults or args.kw_defaults):
         raise ValueError(
             f"component process '{component_name}.{method_name}' must take "
-            "(self, env) or (self, env, idx) without defaults")
-    if len(args.args) not in (2, 3):
+            "(self, env), (self, env, idx), and optionally a final "
+            "sim.Struct view parameter, without defaults")
+
+    params = args.args
+    hints = get_type_hints(method)
+    own = hints.get(params[-1].arg) if len(params) > 2 else None
+    injected_struct = own if _is_struct_class(own) else None
+    injected = injected_struct is not None
+    for arg in params[2:len(params) - 1 if injected else len(params)]:
+        hint = hints.get(arg.arg)
+        if _is_struct_class(hint):
+            raise ValueError(
+                f"component process '{component_name}.{method_name}': the "
+                f"{hint.__name__} view must be the last parameter")
+
+    base_arg_count = len(params) - (1 if injected else 0)
+    if base_arg_count not in (2, 3):
         raise ValueError(
             f"component process '{component_name}.{method_name}' must take "
-            "(self, env) or (self, env, idx)")
+            "(self, env), (self, env, idx), and optionally a final "
+            "view parameter annotated with a sim.Struct subclass")
 
     receiver_name = args.args[0].arg
     env_name = args.args[1].arg
@@ -1349,8 +1391,12 @@ def _lower_component_process(
     node.returns = None
     node.type_comment = None
     args.args = args.args[1:]
-    for arg in args.args:
-        arg.annotation = None
+    for index, arg in enumerate(args.args):
+        if injected and index == len(args.args) - 1:
+            arg.annotation = ast.Name(id="_CIMBA_STRUCT_VIEW",
+                                      ctx=ast.Load())
+        else:
+            arg.annotation = None
         arg.type_comment = None
 
     lowerer = _ComponentMethodLowerer(
@@ -1375,6 +1421,8 @@ def _lower_component_process(
         filename,
     )
     namespace = _closure_namespace(method)
+    if injected_struct is not None:
+        namespace["_CIMBA_STRUCT_VIEW"] = injected_struct
     namespace.update(_component_collection_namespace((component_decl,)))
     exec(compile(source, filename, "exec"), namespace)
     generated = namespace[process_name]
@@ -1629,6 +1677,8 @@ class Model:
         self._components: dict[str, Component] = {}
         self._component_collections: dict[str, tuple[Component, ...]] = {}
         self._component_bindings: dict[str, tuple[Component, ...]] = {}
+        self._component_spawnable_fields = _component_spawnable_field_names(
+            (*self._component_decls, *self._component_collection_decls))
 
         seen: set[str] = set()
         for kind, names in (("param", self.params),
@@ -1764,11 +1814,19 @@ class Model:
                         decl.cls):
                     copies = _resolve_component_process_copies(
                         component_name, component, method_name, spec)
+                    spawn_field = None
+                    spawn_index = None
+                    if method_name in decl.decls["spawnable"]:
+                        spawn_field = decl.direct_field_map[method_name]
+                        if _component_instance_count(decl) > 1:
+                            spawn_index = index
                     lowered = _lower_component_process(
                         component_name, component, decl, index, method_name,
                         method)
                     self.process(lowered, copies=copies,
-                                 priority=spec.priority)
+                                 priority=spec.priority,
+                                 _spawn_field=spawn_field,
+                                 _spawn_index=spawn_index)
 
     @property
     def _component_field_maps(self) -> dict[str, dict[str, str]]:
@@ -1867,7 +1925,8 @@ class Model:
                 ) -> Callable[[_F], _F]: ...
 
     def process(self, fn=None, *, copies: int = 1, priority: int = 0,
-                struct=None):
+                struct=None, _spawn_field: str | None = None,
+                _spawn_index: int | None = None):
         """Register a process function `def fn(env)` or `def fn(env, idx)`
         (the latter receives its copy index). A final parameter annotated
         with a sim.Struct subclass receives the process's own field view:
@@ -1875,18 +1934,55 @@ class Model:
         copies=n starts n identical processes; priority sets the cimba
         process priority; struct= attaches the per-process fields without
         the view parameter. A process named in a sim.Spawnable field is
-        not started at setup -- sim.spawn(env.<name>, env) creates its
-        copies at runtime."""
+        not started at setup -- sim.spawn(env.<name>, env) creates it at
+        runtime. Component-owned sim.Spawnable fields bind to same-named
+        component process methods."""
         if fn is None:
             return lambda f: self.process(f, copies=copies,
-                                          priority=priority, struct=struct)
+                                          priority=priority, struct=struct,
+                                          _spawn_field=_spawn_field,
+                                          _spawn_index=_spawn_index)
         if copies < 1:
             raise ValueError("copies must be >= 1")
         if struct is not None and not _is_struct_class(struct):
             raise ValueError("struct= expects a sim.Struct subclass")
         name = fn.__name__
-        spawnable = name in self._spawnable_fields
-        if name in self._process_fields or spawnable:
+        if _spawn_field is not None:
+            if _spawn_field not in self._component_spawnable_fields:
+                raise ValueError(
+                    f"internal spawn binding for '{name}' references "
+                    f"unknown component Spawnable field '{_spawn_field}'")
+            shape = self._field_shapes.get(_spawn_field)
+            if shape is None:
+                if _spawn_index is not None:
+                    raise ValueError(
+                        f"Spawnable field '{_spawn_field}' is scalar but "
+                        "got an indexed process binding")
+            else:
+                if len(shape) != 1:
+                    raise ValueError(
+                        f"Spawnable field '{_spawn_field}' has unsupported "
+                        f"shape {shape}")
+                if (_spawn_index is None or _spawn_index < 0
+                        or _spawn_index >= shape[0]):
+                    raise ValueError(
+                        f"Spawnable field '{_spawn_field}' needs an index "
+                        f"in [0, {shape[0]})")
+
+        public_spawnable = (
+            name in self._spawnable_fields
+            and name not in self._component_spawnable_fields
+        )
+        spawnable = public_spawnable or _spawn_field is not None
+        spawn_field = _spawn_field if _spawn_field is not None else (
+            name if public_spawnable else None)
+        spawn_index = _spawn_index if _spawn_field is not None else None
+        publishes_field = (
+            name in self._process_fields
+            or public_spawnable
+            or (spawn_field is not None and name == spawn_field)
+        )
+        if publishes_field:
             # The declared field publishes the handles (Processes) or the
             # spawn reference (Spawnable)
             if self._compiled is not None:
@@ -1895,6 +1991,14 @@ class Model:
                 raise ValueError(f"process '{name}' already registered")
         else:
             self._register_name(name, "process")
+        if spawn_field is not None:
+            for p in self._processes:
+                if (p.spawn_field == spawn_field
+                        and p.spawn_index == spawn_index):
+                    label = _spawnable_slot_label(spawn_field, spawn_index)
+                    raise ValueError(
+                        f"Spawnable field '{label}' already has a process "
+                        "binding")
 
         nargs = fn.__code__.co_argcount
         params = fn.__code__.co_varnames[:nargs]
@@ -1926,7 +2030,8 @@ class Model:
         fn = self._lower_component_refs(fn)
         self._processes.append(_ProcDecl(name, fn, copies, priority,
                                          indexed, struct, injected,
-                                         spawnable))
+                                         spawnable, spawn_field,
+                                         spawn_index))
         return fn
 
     def process_dag(self, *, validate: bool = True) -> ProcessDAG:
@@ -1948,11 +2053,24 @@ class Model:
         event_fields = set(self._event_fields)
         event_fields.update(field for _n, _fn, field, _d in self._events)
         entity_kinds.update({name: "event" for name in event_fields})
+        spawnable_field_processes: dict[str, list[str]] = {}
+        spawnable_index_processes: dict[tuple[str, int], list[str]] = {}
+        for process in self._processes:
+            if process.spawnable and process.spawn_field is not None:
+                spawnable_field_processes.setdefault(
+                    process.spawn_field, []).append(process.name)
+                if process.spawn_index is not None:
+                    spawnable_index_processes.setdefault(
+                        (process.spawn_field, process.spawn_index),
+                        [],
+                    ).append(process.name)
         return infer_process_dag(
             self._processes,
             entity_kinds=entity_kinds,
             process_fields=self._process_fields,
             spawnable_fields=self._spawnable_fields,
+            spawnable_field_processes=spawnable_field_processes,
+            spawnable_index_processes=spawnable_index_processes,
             event_callbacks=((field, fn) for _n, fn, field, _d in self._events),
             blocks=self._process_dag_blocks(entity_kinds),
         )
@@ -2079,7 +2197,7 @@ class Model:
         fields += [(e, "<i8") for e in self._event_fields]
         fields += [(f, "<i8") for _n, _fn, f, _d in self._events
                    if f.startswith("_ev_")]
-        fields += [(s, "<i8") for s in self._spawnable_fields]
+        fields += [self._field_spec(s, "<i8") for s in self._spawnable_fields]
         for p in self._processes:
             if p.spawnable:
                 continue
@@ -2374,7 +2492,27 @@ class Model:
         if unbound:
             raise ValueError(f"Processes field(s) {unbound} declared but "
                              "no @process of that name registered")
-        unbound = [f for f in self._spawnable_fields if f not in registered]
+        bound_spawn_slots = {
+            (p.spawn_field, p.spawn_index)
+            for p in self._processes
+            if p.spawnable
+        }
+        expected_spawn_slots: list[tuple[str, int | None]] = []
+        for field in self._spawnable_fields:
+            shape = self._field_shapes.get(field)
+            if shape is None:
+                expected_spawn_slots.append((field, None))
+            elif len(shape) == 1:
+                expected_spawn_slots.extend(
+                    (field, index) for index in range(shape[0]))
+            else:
+                raise ValueError(f"Spawnable field '{field}' has "
+                                 f"unsupported shape {shape}")
+        unbound = [
+            _spawnable_slot_label(field, index)
+            for field, index in expected_spawn_slots
+            if (field, index) not in bound_spawn_slots
+        ]
         if unbound:
             raise ValueError(f"Spawnable field(s) {unbound} declared but "
                              "no @process of that name registered")
@@ -2392,6 +2530,11 @@ class Model:
                              dtype=np.int64)
             for p in self._processes if p.spawnable
         }
+        spawn_assignments = tuple(
+            (p.spawn_field, p.spawn_index, p.name)
+            for p in self._processes
+            if p.spawnable and p.spawn_field is not None
+        )
         ns = self._codegen_namespace(proc_cfuncs, collect_inner)
         self._source = self._trial_source(dtype)
         exec(compile(self._source, f"<cimba model '{self.name}'>", "exec"),
@@ -2413,6 +2556,7 @@ class Model:
             "preds": pred_cfuncs,
             "user_events": event_cfuncs,
             "spawns": spawn_descs,
+            "spawn_assignments": spawn_assignments,
             "collect": collect_inner,
             "dtype": dtype,
         }
@@ -2469,8 +2613,12 @@ class Model:
             trials[field] = pred.address
         for field, ev in compiled["user_events"].items():
             trials[field] = ev.address
-        for field, desc in compiled["spawns"].items():
-            trials[field] = desc.ctypes.data
+        for field, index, process_name in compiled["spawn_assignments"]:
+            desc = compiled["spawns"][process_name]
+            if index is None:
+                trials[field] = desc.ctypes.data
+            else:
+                trials[field][:, index] = desc.ctypes.data
 
         trace_rows: list[np.ndarray] = []
         for tname in self.traces:

@@ -31,6 +31,13 @@ recursive convention, for example ``env.attraction.queues.line`` becomes
 ``attraction__queues__line``. Nested component process methods are also lowered
 with their component path in the process name.
 
+Components may declare ``sim.Spawnable`` fields. A component-owned spawnable
+binds to a same-named ``@sim.process`` method on that component, and can be
+spawned from component or model code with natural paths such as
+``sim.spawn(self.visitor, env)`` or
+``sim.spawn(env.park.entrance.visitor, env)``. Spawnable component processes
+may receive a final ``sim.Struct`` view parameter.
+
 Fixed repeated structures can be declared with standard ``list[Component]``
 annotations, for example ``attractions: list[Attraction] = [...]``. Model
 callbacks can use indexed access such as ``env.attractions[i].queues[j]``;
@@ -92,7 +99,9 @@ Dynamic processes:
 A process named in a ``sim.Spawnable`` field is created at runtime with
 ``sim.spawn(env.<name>, env, priority=0)``. The returned handle can be used to
 initialize its ``sim.Struct`` fields before it first runs. Finished spawned
-processes can be reclaimed with ``sim.despawn(handle)``.
+processes can be reclaimed with ``sim.despawn(handle)``. Component-owned
+spawnables use the same call through the component namespace, for example
+``sim.spawn(env.flow.visitor, env)``.
 
 Low-level events:
 

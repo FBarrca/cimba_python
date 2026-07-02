@@ -1153,6 +1153,33 @@ The visitor process receives its own view as the final annotated parameter:
         if sig == sim.SUCCESS:
             vip.rides += 1
 
+The same pattern can be packaged inside a component. The ``sim.Spawnable``
+field binds to the same-named component process method, and the arrival process
+can spawn through ``self.visitor``:
+
+.. code-block:: python
+
+    class Entrance(sim.Component):
+        visitor: sim.Spawnable
+        entered: sim.State
+
+        @sim.process
+        def visitor(self, env, vip: Visitor):
+            self.entered += 1
+            vip.entry_park = sim.now()
+
+        @sim.process
+        def arrivals(self, env):
+            while True:
+                sim.hold(sim.exponential(2.0))
+                handle = sim.spawn(self.visitor, env)
+                Visitor(handle).patience = sim.triangular(0.5, 1.0, 1.5)
+
+
+    class ParkWithEntrance(sim.Model):
+        entrance: Entrance = Entrance()
+
+
 Another process can use ``Visitor(handle)`` to view and update the same fields.
 That is how a ride server records waiting and riding time for the visitor it
 has just taken from a priority queue. In other words, the visitor is both an

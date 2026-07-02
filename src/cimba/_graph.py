@@ -255,6 +255,9 @@ def infer_process_dag(
     entity_kinds: Mapping[str, str],
     process_fields: Iterable[str],
     spawnable_fields: Iterable[str],
+    spawnable_field_processes: Mapping[str, Iterable[str]] | None = None,
+    spawnable_index_processes: Mapping[
+        tuple[str, int], Iterable[str]] | None = None,
     event_callbacks: Iterable[tuple[str, Callable[..., Any]]] = (),
     blocks: Iterable[ProcessDAGBlock] = (),
 ) -> ProcessDAG:
@@ -263,6 +266,14 @@ def infer_process_dag(
     process_names = {p.name for p in process_list}
     process_field_names = set(process_fields)
     spawnable_field_names = set(spawnable_fields)
+    spawnable_processes = {
+        field: set(names)
+        for field, names in (spawnable_field_processes or {}).items()
+    }
+    spawnable_indexed_processes = {
+        key: set(names)
+        for key, names in (spawnable_index_processes or {}).items()
+    }
 
     nodes = [
         ProcessDAGNode(
@@ -283,6 +294,8 @@ def infer_process_dag(
         process_names=process_names,
         process_fields=process_field_names,
         spawnable_fields=spawnable_field_names,
+        spawnable_field_processes=spawnable_processes,
+        spawnable_index_processes=spawnable_indexed_processes,
     )
 
     for process in process_list:
@@ -329,6 +342,8 @@ class _InferenceContext:
     process_names: set[str]
     process_fields: set[str]
     spawnable_fields: set[str]
+    spawnable_field_processes: dict[str, set[str]]
+    spawnable_index_processes: dict[tuple[str, int], set[str]]
 
 
 class _ProcessAnalyzer(ast.NodeVisitor):
@@ -476,6 +491,12 @@ class _ProcessAnalyzer(ast.NodeVisitor):
                 return self._env_field_refs(node.attr)
             return set()
         if isinstance(node, ast.Subscript):
+            if (isinstance(node.value, ast.Attribute)
+                    and self._is_env_expr(node.value.value)):
+                index = self._literal_int_index(node.slice)
+                refs = self._env_field_refs(node.value.attr, index)
+                if refs:
+                    return refs
             return self._refs(node.value)
         if isinstance(node, ast.Call):
             verb = _sim_verb(node.func)
@@ -515,9 +536,30 @@ class _ProcessAnalyzer(ast.NodeVisitor):
             self.aliases = old_aliases
         return refs
 
-    def _env_field_refs(self, field: str) -> set[_Ref]:
+    def _literal_int_index(self, node: ast.AST) -> int | None:
+        if isinstance(node, ast.Constant) and type(node.value) is int:
+            return node.value
+        return None
+
+    def _env_field_refs(self, field: str, index: int | None = None) -> set[_Ref]:
         if field in self.context.entity_kinds:
             return {_Ref(self.context.entity_kinds[field], field)}
+        if index is not None:
+            processes = self.context.spawnable_index_processes.get(
+                (field, index))
+            if processes:
+                return {
+                    _Ref("process", name)
+                    for name in processes
+                    if name in self.context.process_names
+                }
+        processes = self.context.spawnable_field_processes.get(field)
+        if processes:
+            return {
+                _Ref("process", name)
+                for name in processes
+                if name in self.context.process_names
+            }
         if field in self.context.spawnable_fields and field in self.context.process_names:
             return {_Ref("process", field)}
         if field in self.context.process_fields and field in self.context.process_names:

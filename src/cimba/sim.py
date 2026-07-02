@@ -81,7 +81,10 @@ methods; Model lowers them into ordinary flat process functions before Numba
 compilation. Model callbacks can use ``env.retailer.orders``; trial-table
 fields remain flattened with names such as ``retailer__orders``. Components
 may contain nested components; paths such as ``env.attraction.queues.line``
-flatten to names such as ``attraction__queues__line``.
+flatten to names such as ``attraction__queues__line``. A component-owned
+``sim.Spawnable`` field binds to the same-named component process method and
+can be spawned with paths such as ``sim.spawn(self.visitor, env)`` or
+``sim.spawn(env.flow.visitor, env)``.
 Fixed collections of repeated components can be declared with standard
 ``list[ComponentType]`` annotations. Model callbacks can use indexed access
 such as ``env.attractions[i].queues[j]``. Nested collections also work; Cimba
@@ -228,10 +231,10 @@ if TYPE_CHECKING:
 
     def spawn(process: int, env: Env, priority: int = 0) -> Handle:
         """Create and start a new copy of a spawnable process; `process`
-        is the sim.Spawnable env field of the same name. The new process
-        only begins running once the caller blocks, so its sim.Struct
-        fields (zeroed at creation) can be initialized through the
-        returned handle first."""
+        is a sim.Spawnable env field or a lowered component-owned
+        sim.Spawnable path. The new process only begins running once the
+        caller blocks, so its sim.Struct fields (zeroed at creation) can
+        be initialized through the returned handle first."""
         ...
 
     def despawn(process: Handle) -> None:

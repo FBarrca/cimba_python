@@ -737,6 +737,266 @@ def test_nested_component_collection_pqueues_use_nested_offsets():
     assert exp.trials["zones__gates__hits"][0].tolist() == [0, 12, 0]
 
 
+def test_nested_component_owned_spawnable_runs_with_struct_view():
+    class Visitor(sim.Struct):
+        weight: float
+
+    class Entrance(sim.Component):
+        total: sim.FloatState
+        visitor: sim.Spawnable
+
+        @sim.process
+        def visitor(self, env, vip: Visitor):
+            self.total += vip.weight
+
+    class Flow(sim.Component):
+        entrance: Entrance = Entrance()
+
+        @sim.process
+        def arrivals(self, env):
+            handle = sim.spawn(self.entrance.visitor, env)
+            Visitor(handle).weight = 3.5
+            sim.wait_process(handle)
+            sim.despawn(handle)
+            sim.suspend()
+
+    class Network(sim.Model):
+        total: sim.Output
+        flow: Flow = Flow()
+
+    model = Network()
+    assert model._spawnable_fields == ["flow__entrance__visitor"]
+    assert [
+        (p.name, p.spawnable, p.spawn_field, p.spawn_index)
+        for p in model._processes
+    ] == [
+        ("flow__arrivals", False, None, None),
+        ("flow__entrance__visitor", True, "flow__entrance__visitor", None),
+    ]
+
+    @model.collect
+    def collect_stats(env: Network):
+        env.total = env.flow.entrance.total
+
+    exp = model.experiment(replications=1, duration=5.0, warmup=0.0,
+                           seed=28)
+    assert exp.run() == 0
+    assert exp["total"][0] == 3.5
+
+
+def test_component_collection_owned_spawnables_get_per_item_descriptors():
+    class Flow(sim.Component):
+        count: sim.State
+        worker: sim.Spawnable
+
+        def __init__(self, amount: int):
+            self.amount = amount
+
+        @sim.process
+        def worker(self, env):
+            self.count += self.amount
+
+        @sim.process
+        def launch(self, env):
+            handle = sim.spawn(self.worker, env)
+            sim.wait_process(handle)
+            sim.despawn(handle)
+            sim.suspend()
+
+    class Network(sim.Model):
+        flows: list[Flow] = [Flow(2), Flow(5)]
+
+    model = Network()
+    assert model.dtype["flows__worker"].shape == (2,)
+    worker_bindings = [
+        (p.name, p.spawn_field, p.spawn_index)
+        for p in model._processes
+        if p.spawnable
+    ]
+    assert worker_bindings == [
+        ("flows__0__worker", "flows__worker", 0),
+        ("flows__1__worker", "flows__worker", 1),
+    ]
+
+    exp = model.experiment(replications=1, duration=5.0, warmup=0.0,
+                           seed=29)
+    assert exp.run() == 0
+    assert exp.trials["flows__count"][0].tolist() == [2, 5]
+
+
+def test_model_process_can_spawn_component_collection_field():
+    class Flow(sim.Component):
+        count: sim.State
+        visitor: sim.Spawnable
+
+        @sim.process
+        def visitor(self, env):
+            self.count += 1
+
+    class Network(sim.Model):
+        flows: list[Flow] = [Flow(), Flow()]
+
+    model = Network()
+
+    @model.process
+    def launcher(env: Network):
+        handle = sim.spawn(env.flows[1].visitor, env)
+        sim.wait_process(handle)
+        sim.despawn(handle)
+        sim.suspend()
+
+    assert "env.flows__visitor[1]" in model._processes[-1].fn.__cimba_source__
+    exp = model.experiment(replications=1, duration=5.0, warmup=0.0,
+                           seed=30)
+    assert exp.run() == 0
+    assert exp.trials["flows__count"][0].tolist() == [0, 1]
+
+
+def test_model_process_can_spawn_nested_component_spawnable_path():
+    class Entrance(sim.Component):
+        count: sim.State
+        visitor: sim.Spawnable
+
+        @sim.process
+        def visitor(self, env):
+            self.count += 1
+
+    class ParkArea(sim.Component):
+        entrance: Entrance = Entrance()
+
+    class Park(sim.Model):
+        park: ParkArea = ParkArea()
+
+    model = Park()
+
+    @model.process
+    def arrivals(env: Park):
+        handle = sim.spawn(env.park.entrance.visitor, env)
+        sim.wait_process(handle)
+        sim.despawn(handle)
+        sim.suspend()
+
+    exp = model.experiment(replications=1, duration=5.0, warmup=0.0,
+                           seed=31)
+    assert exp.run() == 0
+    assert exp.trials["park__entrance__count"][0] == 1
+
+
+def test_component_process_supports_indexed_struct_injection():
+    class Tag(sim.Struct):
+        value: int
+
+    class Workers(sim.Component):
+        total: sim.State
+
+        @sim.process(copies=2)
+        def worker(self, env, idx, tag: Tag):
+            tag.value = idx + 1
+            self.total += tag.value
+
+    class Network(sim.Model):
+        workers: Workers = Workers()
+
+    exp = Network().experiment(replications=1, duration=1.0, warmup=0.0,
+                               seed=32)
+    assert exp.run() == 0
+    assert exp.trials["workers__total"][0] == 3
+
+
+def test_component_owned_spawnable_process_dag_edges():
+    class Flow(sim.Component):
+        worker: sim.Spawnable
+
+        @sim.process
+        def worker(self, env):
+            sim.suspend()
+
+        @sim.process
+        def launch(self, env):
+            sim.spawn(self.worker, env)
+            sim.suspend()
+
+    class Network(sim.Model):
+        flows: list[Flow] = [Flow(), Flow()]
+
+    graph = Network().process_dag()
+    edges = {(edge.source, edge.target, edge.label) for edge in graph.edges}
+    assert ("process:flows__0__launch", "process:flows__0__worker",
+            "spawn") in edges
+    assert ("process:flows__1__launch", "process:flows__1__worker",
+            "spawn") in edges
+    assert ("process:flows__0__launch", "process:flows__1__worker",
+            "spawn") not in edges
+
+
+def test_component_spawnable_declaration_errors_are_rejected():
+    class MissingWorker(sim.Component):
+        worker: sim.Spawnable
+
+    class MissingModel(sim.Model):
+        flow: MissingWorker = MissingWorker()
+
+    missing = MissingModel()
+
+    @missing.process
+    def idle(env: MissingModel):
+        sim.suspend()
+
+    with pytest.raises(ValueError, match="flow__worker"):
+        missing.experiment()
+
+    class CopiesWorker(sim.Component):
+        worker: sim.Spawnable
+
+        @sim.process(copies=2)
+        def worker(self, env):
+            sim.suspend()
+
+    class CopiesModel(sim.Model):
+        flow: CopiesWorker = CopiesWorker()
+
+    with pytest.raises(ValueError, match="cannot take copies"):
+        CopiesModel()
+
+    class IndexedWorker(sim.Component):
+        worker: sim.Spawnable
+
+        @sim.process
+        def worker(self, env, idx):
+            sim.suspend()
+
+    class IndexedModel(sim.Model):
+        flow: IndexedWorker = IndexedWorker()
+
+    with pytest.raises(ValueError, match="copy index"):
+        IndexedModel()
+
+    class Tag(sim.Struct):
+        value: int
+
+    class MisplacedView(sim.Component):
+        worker: sim.Spawnable
+
+        @sim.process
+        def worker(self, env, tag: Tag, idx):
+            sim.suspend()
+
+    class MisplacedModel(sim.Model):
+        flow: MisplacedView = MisplacedView()
+
+    with pytest.raises(ValueError, match="last parameter"):
+        MisplacedModel()
+
+    class BadDefault(sim.Component):
+        worker: sim.Spawnable = object()
+
+    class BadDefaultModel(sim.Model):
+        flow: BadDefault = BadDefault()
+
+    with pytest.raises(ValueError, match="only Queue/Pool/Store"):
+        BadDefaultModel()
+
+
 def test_nested_component_declaration_and_namespace_errors_are_rejected():
     class Child(sim.Component):
         count: sim.State
