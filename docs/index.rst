@@ -8,6 +8,7 @@ Cimba Python documentation
     :caption: Contents:
 
     welcome
+    concepts/index
     cimba_intro/index
     installation
     tutorial

@@ -164,9 +164,13 @@ verification commands, wheel builds, and troubleshooting.
 Where should I start?
 ---------------------
 
-Start with :ref:`the tutorial <tutorial>` if you want to build models. It moves
-from a simple queue to parallel experiments, resources, process interruptions,
-dynamic agents, conditions, and a larger harbor example.
+Start with :doc:`concepts/index` if you want the modeling vocabulary first:
+``sim.Model``, trial-local ``env``, process functions, shared entities,
+experiments, and outputs.
+
+Then read :ref:`the tutorial <tutorial>` when you want to build complete
+models. It moves from a simple queue to parallel experiments, resources,
+process interruptions, dynamic agents, conditions, and a larger harbor example.
 
 Read :ref:`the background section <background>` if you want to understand why
 Cimba Python is structured this way: process-oriented simulation, event queues,
