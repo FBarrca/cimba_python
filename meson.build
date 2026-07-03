@@ -49,7 +49,6 @@ py.install_sources(
     'src/cimba/_graph.py',
     'src/cimba/_intrinsics.py',
     'src/cimba/_model.py',
-    'src/cimba/bootstrap.py',
     'src/cimba/cimba.py',
     'src/cimba/cmb_buffer.py',
     'src/cimba/cmb_condition.py',
@@ -86,6 +85,17 @@ py.install_sources(
     'src/cimba/cmb_timeseries.pyi',
     'src/cimba/cmb_wtdsummary.pyi',
     subdir: 'cimba',
+)
+
+py.install_sources(
+    'src/cimba/bootstrap/__init__.py',
+    'src/cimba/bootstrap/_common.py',
+    'src/cimba/bootstrap/_decompose.py',
+    'src/cimba/bootstrap/blocks.py',
+    'src/cimba/bootstrap/demand.py',
+    'src/cimba/bootstrap/model.py',
+    'src/cimba/bootstrap/panel.py',
+    subdir: 'cimba/bootstrap',
 )
 
 cimba_native_ext = py.extension_module(
