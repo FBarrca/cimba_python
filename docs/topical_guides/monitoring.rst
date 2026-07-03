@@ -1,81 +1,159 @@
 Monitoring and Statistics
 =========================
 
-Recording state over time
--------------------------
+Statistics in a ``sim.Model`` flow through three layers:
 
-Buffers, queues, resources, and resource pools can record their state as a
-time series:
+1. **Inside the trial**, entities record time-weighted state and datasets
+   collect tallied observations, both over the measurement window.
+2. **At the end of each trial**, the ``@model.collect`` callback reduces
+   those recordings to ``sim.Output`` fields.
+3. **Across trials**, the experiment table holds one record per trial;
+   ``exp["field"]`` reads aligned arrays and ``exp.summary()`` condenses
+   them into means and confidence intervals.
 
-.. code-block:: python
+This guide walks the layers in order. The classic in-process objects
+(``cimba.DataSummary`` and friends) are covered at the end -- they belong to
+the classic API, not to ``sim.Model`` code.
 
-   queue.start_recording()
-   sim.execute()
-   queue.stop_recording()
+The measurement window
+----------------------
 
-   history = queue.history()
-   print(history.values())
-   print(history.summary().mean)
+``model.experiment(warmup=..., duration=..., cooldown=...)`` defines the
+window. Recording starts when the warmup ends: time-weighted statistics
+begin accumulating and datasets are reset, so anything tallied during warmup
+is discarded. Recording stops after ``duration``; the optional cooldown then
+lets the model drain before processes are stopped.
 
-The summary of a :class:`cimba.TimeSeries` is duration-weighted, so it is the
-right tool for average queue lengths, utilization, and occupancy.
+Everything below reports over that window only -- no manual start/stop calls
+are needed.
 
-Unweighted samples
-------------------
+Time-weighted state
+-------------------
 
-Use :class:`cimba.DataSummary` when every observation has equal weight:
+Shared entities track their own occupancy. One verb per entity kind returns
+the duration-weighted mean over the window:
 
-.. code-block:: python
+* ``sim.mean_level(queue)`` -- mean content of a ``sim.Queue``
+* ``sim.mean_in_use(resource)`` -- utilization of a ``sim.Resource``
+* ``sim.pool_mean_in_use(pool)`` -- mean units held of a ``sim.Pool``
+* ``sim.store_mean_length(store)`` -- mean length of a ``sim.Store``
+* ``sim.pq_mean_length(pqueue)`` -- mean length of a ``sim.PQueues`` entry
 
-   waits = cimba.DataSummary()
-   waits.add(customer_wait)
-   print(waits.mean)
+Duration weighting makes these the right tool for average queue lengths,
+utilization, and occupancy: a level held for ten hours counts ten times as
+much as one held for one hour.
 
-Use :class:`cimba.Dataset` when you need to keep all sample values and compute a
-median later.
-
-Weighted samples
+Tally statistics
 ----------------
 
-Use :class:`cimba.WeightedSummary` when samples have explicit weights:
+For per-observation data -- waiting times, cycle times, batch sizes --
+declare a ``sim.Dataset`` field and tally into it from process code:
 
 .. code-block:: python
 
-   summary = cimba.WeightedSummary()
-   summary.add(value=5.0, weight=2.0)
+   class Clinic(sim.Model):
+       avg_wait: sim.Output
+       p95_wait: sim.Output
+       waits: sim.Dataset
+       ...
 
-Replications
-------------
+   @model.process
+   def patient(env: Clinic):
+       ...
+       t0 = sim.now()
+       sim.acquire(env.doctor)
+       sim.tally(env.waits, sim.now() - t0)
+       ...
 
-For replications, write a trial function that creates one
-:class:`cimba.Simulation`, runs one trial, computes per-trial metrics, and
-returns ordinary Python results:
+A dataset keeps every value, so both moment and order statistics are
+available: ``sim.dataset_mean()``, ``sim.dataset_count()``,
+``sim.dataset_min()``, ``sim.dataset_max()``, ``sim.dataset_std()``,
+``sim.dataset_median()``, and ``sim.dataset_quantile(dataset, q)``.
+
+The median and quantile getters sort a copy of the data, so call them once
+per trial rather than per observation -- the collector is the natural place.
+
+Collecting outputs
+------------------
+
+``@model.collect`` runs once per trial, after the window closes and before
+entities are torn down. It reads the recordings and writes ``sim.Output``
+fields:
 
 .. code-block:: python
 
-   def trial(index, seed):
-       with cimba.Simulation(seed=seed) as sim:
-           queue = cimba.Buffer("Queue")
-           queue.start_recording()
-           cimba.Process("Arrival", arrival, queue).start()
-           cimba.Process("Service", service, queue).start()
-           sim.stop_at(2000.0)
-           sim.execute()
-           queue.stop_recording()
-           return queue.history().summary().mean
+   @model.collect
+   def stats(env: Clinic):
+       env.avg_wait = sim.dataset_mean(env.waits)
+       env.p95_wait = sim.dataset_quantile(env.waits, 0.95)
+       env.doctor_util = sim.mean_in_use(env.doctor)
 
+Entities are destroyed when the trial function returns, so anything worth
+keeping must land in an output here (or be written to a file with the report
+verbs below).
 
-   means = cimba.run_experiment(trial, n=100, seed=12345)
+Across trials
+-------------
 
-   across_replications = cimba.DataSummary()
-   for mean in means:
-       across_replications.add(mean)
+After ``exp.run()``, each output is a per-trial array aligned with the
+parameter columns, and ``exp.summary()`` reduces the table to one record per
+design point with means and Student-t confidence half-widths:
 
-The default ``backend="process"`` is recommended for Python simulations. It
-requires return values that can be pickled, so return floats, tuples, or
-dictionaries instead of native Cimba statistics objects.
+.. code-block:: python
 
-Use ``backend="thread"`` when a trial needs to return native in-process objects
-such as :class:`cimba.TimeSeries`, :class:`cimba.DataSummary`, or
-:class:`cimba.WeightedSummary`. The thread backend only parallelizes on
-free-threaded Python builds; on GIL-enabled interpreters it runs serially.
+   exp = model.experiment(arrival_rate=[0.7, 0.8, 0.9],
+                          replications=20, duration=10_000.0, seed=42)
+   exp.run()
+   for row in exp.summary("p95_wait"):
+       print(f"rate={row['arrival_rate']:.1f}: "
+             f"p95 wait {row['p95_wait']:.2f} +- {row['p95_wait_hw']:.2f}")
+
+See :doc:`../concepts/experiments_results` for the full experiment
+lifecycle, failure handling, and summary options.
+
+Histories and text reports
+--------------------------
+
+For inspection beyond a mean, every recorded entity keeps a native time
+series of its state over the window. ``sim.queue_history()``,
+``sim.resource_history()``, ``sim.pool_history()``, ``sim.store_history()``,
+and ``sim.pq_history()`` return a handle accepted by the ``timeseries_*``
+getters: ``count``, ``min``, ``max``, and the duration-weighted ``mean``,
+``std``, and ``median``, typically called from the collector:
+
+.. code-block:: python
+
+   @model.collect
+   def stats(env: Clinic):
+       h = sim.queue_history(env.waiting_room)
+       env.median_queue = sim.timeseries_median(h)
+
+Datasets and histories can also render text reports from inside compiled
+code: ``sim.queue_report()``, ``sim.dataset_fivenum()``,
+``sim.dataset_histogram()``, ``sim.timeseries_histogram()``,
+``sim.dataset_correlogram()``, and their siblings print to stdout, and each
+has a ``*_file()`` variant that appends to a path handle created with
+``sim.log_text("waits.txt")``. These are diagnostic tools: with parallel
+trials the stdout variants interleave, so print from single-replication
+runs, or write per-trial files.
+
+The classic in-process layer
+----------------------------
+
+The objects in this section belong to the classic API
+(:class:`cimba.Simulation` and Python callback processes) and to offline
+analysis. They are not usable inside ``sim.Model`` process bodies, which
+compile to machine code.
+
+* :class:`cimba.DataSummary` -- running summary of equally weighted samples.
+* :class:`cimba.WeightedSummary` -- samples with explicit weights.
+* :class:`cimba.Dataset` -- keeps all values for medians and quantiles.
+* :class:`cimba.TimeSeries` -- a recorded state history.
+
+``cimba.reporting`` builds on them with ``summarize()``, ``five_number()``,
+``histogram()``, ``correlogram()``, and matplotlib helpers such as
+``plot_history()`` -- see :doc:`../api_reference/reporting`. In classic
+models, recording is manual (``queue.start_recording()`` /
+``queue.stop_recording()``), and replications run through
+``cimba.run_experiment(trial, n=..., seed=...)`` with a trial function that
+returns plain Python values.
