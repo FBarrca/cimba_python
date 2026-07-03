@@ -119,6 +119,90 @@ def test_3d_trace_rejected(replay_model):
         replay_model.experiment(scale=1.0, demand=np.zeros((2, 2, 2)))
 
 
+def test_callable_trace_reproduces_from_the_experiment_seed(replay_model):
+    def bootstrap(rng):
+        return rng.normal(10.0, 2.0, size=6)
+
+    a = run(replay_model, scale=1.0, demand=bootstrap,
+            replications=4, seed=11)
+    b = run(replay_model, scale=1.0, demand=bootstrap,
+            replications=4, seed=11)
+    c = run(replay_model, scale=1.0, demand=bootstrap,
+            replications=4, seed=12)
+    assert np.allclose(a["total"], b["total"])
+    assert not np.allclose(a["total"], c["total"])
+    # Each trial draws its own stream
+    assert len(np.unique(a["total"])) == 4
+
+
+def test_callable_trace_uses_the_trial_trace_rng(replay_model):
+    def bootstrap(rng):
+        return rng.normal(10.0, 2.0, size=6)
+
+    exp = run(replay_model, scale=1.0, demand=bootstrap,
+              replications=3, seed=21)
+    for i in range(3):
+        expected = bootstrap(sim.trace_rng(exp["seed"][i], "demand"))
+        assert np.isclose(exp["total"][i], expected.sum())
+        assert np.isclose(exp["last"][i], expected[-1])
+
+
+def test_callable_trace_receives_the_trial_index(replay_model):
+    def ramp(rng, trial):
+        return np.full(2, float(trial))
+
+    exp = run(replay_model, scale=1.0, demand=ramp,
+              replications=3, seed=31)
+    assert np.allclose(exp["total"], [0.0, 2.0, 4.0])
+
+
+def test_trial_seeds_match_the_experiment_assignment(replay_model):
+    seeds = replay_model.trial_seeds(seed=7, scale=[1.0, 2.0],
+                                     replications=3)
+    exp = run(replay_model, scale=[1.0, 2.0], demand=np.zeros(1),
+              replications=3, seed=7)
+    assert np.array_equal(seeds, exp["seed"])
+
+
+def test_precomputed_rows_reproduce_the_callable_form(replay_model):
+    def bootstrap(rng):
+        return rng.normal(10.0, 2.0, size=6)
+
+    seeds = replay_model.trial_seeds(seed=41, scale=1.0, replications=4)
+    rows = [bootstrap(sim.trace_rng(s, "demand")) for s in seeds]
+    pre = run(replay_model, scale=1.0, demand=rows,
+              replications=4, seed=41)
+    live = run(replay_model, scale=1.0, demand=bootstrap,
+               replications=4, seed=41)
+    assert np.array_equal(pre["total"], live["total"])
+    assert np.array_equal(pre["last"], live["last"])
+
+
+def test_trial_seeds_ignores_trace_kwargs_but_checks_params(replay_model):
+    seeds = replay_model.trial_seeds(seed=7, scale=1.0, demand=np.zeros(1))
+    assert seeds.shape == (1,)
+    with pytest.raises(ValueError, match="missing parameter"):
+        replay_model.trial_seeds(seed=7)
+    with pytest.raises(ValueError, match="unknown"):
+        replay_model.trial_seeds(seed=7, scale=1.0, bogus=1.0)
+
+
+def test_callable_default_args_do_not_receive_the_trial_index(replay_model):
+    def bootstrap(rng, size=4):
+        return rng.normal(10.0, 2.0, size=size)
+
+    exp = run(replay_model, scale=1.0, demand=bootstrap,
+              replications=3, seed=51)
+    # size must keep its default; only two required params opt in
+    assert np.allclose(exp["length"], 4.0)
+
+
+def test_callable_trace_must_return_1d(replay_model):
+    with pytest.raises(ValueError, match="must return a 1-D array"):
+        replay_model.experiment(scale=1.0, replications=2,
+                                demand=lambda rng: np.zeros((2, 2)))
+
+
 def test_trace_view_requires_compiled_code():
     with pytest.raises(TypeError, match="compiled model code"):
         sim.Trace(np.zeros(2, dtype=np.int64))

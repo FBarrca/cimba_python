@@ -79,7 +79,33 @@ Declare ``demand: sim.Trace`` and pass per-trial replay data to
 ``model.experiment(demand=...)``: a 1-D array is shared by every trial, a 2-D
 array maps row *i* to trial *i* (trial order is design-point-major with
 replications innermost), and a sequence of 1-D arrays gives ragged per-trial
-traces. Inside a process body, ``values = sim.Trace(env.demand)`` returns the
+traces.
+
+A trace field also accepts a callable ``f(rng)`` or ``f(rng, trial_index)``
+returning a 1-D array -- the idiom for bootstrap resampling and fitted
+generators. It runs once per trial with a ``numpy.random.Generator`` seeded
+from that trial's own cimba seed and the field name, so the single
+``experiment(seed=...)`` argument reproduces the simulation streams and the
+generated traces together, and distinct trace fields draw independent
+streams. ``sim.trace_rng(trial_seed, field_name)`` rebuilds any trial's
+generator from its recorded ``exp["seed"]``, e.g. to inspect the trace a
+failed trial replayed.
+
+Callable traces run serially inside ``experiment()``, before the parallel
+trial run -- negligible for bootstrap resampling, but a bottleneck when a
+single generation is expensive (fitted time-series or ML models).
+``model.trial_seeds(seed=..., replications=..., **params)`` returns the exact
+per-trial seeds that ``experiment()`` will assign, so such traces can be
+generated in parallel outside cimba and passed in as finished rows, with
+bit-identical results::
+
+   seeds = model.trial_seeds(seed=42, scale=[1.0, 2.0], replications=100)
+   rows = Parallel(n_jobs=-1)(
+       delayed(slow_generator)(sim.trace_rng(s, "demand")) for s in seeds)
+   exp = model.experiment(scale=[1.0, 2.0], demand=rows,
+                          replications=100, seed=42)
+
+Inside a process body, ``values = sim.Trace(env.demand)`` returns the
 trial's trace as a ``float64`` NumPy view supporting ``len()``, indexing,
 slicing, and iteration; treat it as read-only. A generator that exhausts its
 trace simply finishes -- the trial still runs to its configured recording

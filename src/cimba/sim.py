@@ -63,8 +63,15 @@ Concept translation (cimba -> sim API):
 Data-driven generators replay per-trial trajectories generated outside
 the simulation (bootstrap, fitted models, recorded traces): declare a
 ``sim.Trace`` field and pass the data to experiment() -- a 1-D array
-shared by all trials, a 2-D array with one row per trial, or a list of
-1-D arrays. Inside a process body, ``values = sim.Trace(env.<field>)``
+shared by all trials, a 2-D array with one row per trial, a list of
+1-D arrays, or a callable ``f(rng)`` / ``f(rng, trial_index)`` invoked
+once per trial with a numpy Generator derived from that trial's own
+seed (``sim.trace_rng(trial_seed, field_name)``), so the experiment
+``seed`` also reproduces generated traces (bootstrap resamples, fitted
+models). Callables run serially before the parallel trial run; for
+expensive generators, ``model.trial_seeds()`` exposes the same per-trial
+seeds so rows can be generated in parallel outside cimba and passed in
+precomputed. Inside a process body, ``values = sim.Trace(env.<field>)``
 returns the trial's trace as a plain float64 array supporting len(),
 indexing, slicing, and iteration. When a generator exhausts its trace
 it simply finishes; the trial still runs to its configured window, so
@@ -115,14 +122,15 @@ from ._model import (Component, Condition, Dataset, Env, Event, Experiment,
                      FloatState, Handle, Model, Output, Param, Pool, PQueues,
                      Predicate, ProcessDAG, ProcessDAGBlock, ProcessDAGEdge,
                      ProcessDAGNode, Processes, Queue, Resource, Spawnable,
-                     State, Store, Struct, Trace, capacity, count, process)
+                     State, Store, Struct, Trace, capacity, count, process,
+                     trace_rng)
 
 __all__ = [
     "Model", "Component", "Experiment", "Env", "Handle",
     "Param", "Output", "State", "FloatState", "Queue", "Resource", "Pool",
     "Store", "Dataset", "Condition", "Predicate", "Event", "Processes",
     "PQueues", "Spawnable", "Struct", "Trace", "capacity", "count",
-    "process",
+    "process", "trace_rng",
     "ProcessDAG", "ProcessDAGBlock", "ProcessDAGNode", "ProcessDAGEdge",
     "SUCCESS", "PREEMPTED", "INTERRUPTED", "STOPPED", "CANCELLED", "TIMEOUT",
     "LOGGER_FATAL", "LOGGER_ERROR", "LOGGER_WARNING", "LOGGER_INFO",

@@ -15,6 +15,8 @@ functions, then compiles everything on first ``experiment()``:
 """
 
 import copy
+import hashlib
+import inspect
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import (TYPE_CHECKING, Any, TypedDict, TypeVar, get_type_hints,
@@ -242,6 +244,51 @@ def _as_trace_rows(value: Any, n_trials: int, name: str) -> list[np.ndarray]:
     raise ValueError(f"trace '{name}': expected a 1-D array (shared), a "
                      "2-D array (row per trial), or a sequence of 1-D "
                      "arrays")
+
+
+def _draw_trial_seeds(seed: int | None, n_trials: int) -> np.ndarray:
+    """The per-trial seed draw shared by experiment() and trial_seeds():
+    one uint64 per trial seeds the in-sim RNG and, through trace_rng(),
+    any callable trace generators."""
+    rng = np.random.default_rng(
+        seed if seed is not None else int(lib.cmb_random_hwseed()))
+    return rng.integers(1, np.iinfo(np.uint64).max, size=n_trials,
+                        dtype=np.uint64)
+
+
+def trace_rng(trial_seed: int, field_name: str) -> np.random.Generator:
+    """The generator a callable trace field sees for one trial: seeded
+    from the trial's own cimba seed plus the field name, so a single
+    experiment seed reproduces both the simulation streams and the
+    generated traces, each trace field draws an independent stream, and
+    any trial's trace can be regenerated post-hoc from its recorded
+    ``exp["seed"]``."""
+    tag = int.from_bytes(
+        hashlib.sha256(field_name.encode()).digest()[:8], "little")
+    return np.random.default_rng([int(trial_seed), tag])
+
+
+def _generate_trace_rows(fn: Callable[..., ArrayLike], seeds: np.ndarray,
+                         name: str) -> list[np.ndarray]:
+    """Call a trace generator once per trial with that trial's
+    trace_rng(); ``fn(rng)`` or ``fn(rng, trial_index)``."""
+    try:
+        required = [p for p in inspect.signature(fn).parameters.values()
+                    if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+                    and p.default is p.empty]
+        wants_index = len(required) >= 2
+    except (TypeError, ValueError):
+        wants_index = False
+    rows: list[np.ndarray] = []
+    for i, s in enumerate(seeds):
+        rng = trace_rng(int(s), name)
+        out = fn(rng, i) if wants_index else fn(rng)
+        row = np.ascontiguousarray(out, dtype=np.float64)
+        if row.ndim != 1:
+            raise ValueError(f"trace '{name}': generator must return a "
+                             f"1-D array, got {row.ndim}-D for trial {i}")
+        rows.append(row)
+    return rows
 
 
 def _dedupe_process_dag_members(members: Iterable[str]) -> tuple[str, ...]:
@@ -1273,6 +1320,35 @@ class Model:
         return self._compiled
 
     # --- Experiments ----------------------------------------------------------
+    def trial_seeds(self, *,
+                    seed: int,
+                    replications: int = 1,
+                    **param_values: Any) -> np.ndarray:
+        """The per-trial seeds that experiment() with this seed, these
+        swept parameter values, and this replication count will assign,
+        in trial order (design-point-major, replications innermost).
+
+        Use this to generate trace data outside experiment() -- e.g. in
+        parallel when a generator is expensive -- while staying
+        reproducible from the experiment seed: feed
+        ``trace_rng(seeds[i], field_name)`` to the generator and pass
+        the finished rows to experiment() with the same seed. Trace
+        fields passed here are ignored, so the experiment() keyword
+        arguments can be reused as-is."""
+        missing = set(self.params) - set(param_values)
+        unknown = set(param_values) - set(self.params) - set(self.traces)
+        if missing:
+            raise ValueError(f"missing parameter values: {sorted(missing)}")
+        if unknown:
+            raise ValueError(f"unknown parameters: {sorted(unknown)}")
+        if replications < 1:
+            raise ValueError("replications must be >= 1")
+        n_points = 1
+        for p in self.params:
+            n_points *= np.atleast_1d(
+                np.asarray(param_values[p], dtype=np.float64)).size
+        return _draw_trial_seeds(seed, n_points * replications)
+
     def experiment(self,
                    *,
                    replications: int = 1,
@@ -1281,14 +1357,21 @@ class Model:
                    cooldown: float = 0.0,
                    start_time: float = 0.0,
                    seed: int | None = None,
-                   **param_values: ArrayLike) -> "Experiment":
+                   **param_values: "ArrayLike | Callable[..., ArrayLike]",
+                   ) -> "Experiment":
         """Build an experiment: the cross product of the swept parameter
         values (scalars are held fixed), replicated with distinct seeds.
 
         Trace fields take their replay data here as well: a 1-D array
         shared by every trial, a 2-D array whose row i replays in trial i
         (trial order is design-point-major with replications innermost),
-        or a sequence of 1-D arrays for ragged per-trial traces."""
+        or a sequence of 1-D arrays for ragged per-trial traces.
+
+        A trace field also accepts a callable ``f(rng)`` or
+        ``f(rng, trial_index)`` returning a 1-D array; it is invoked once
+        per trial with ``trace_rng(trial_seed, field_name)``, a numpy
+        Generator derived from that trial's own seed, so the experiment
+        ``seed`` reproduces the generated traces too."""
         compiled = self._compile()
 
         missing = set(self.params) - set(param_values)
@@ -1330,20 +1413,21 @@ class Model:
             else:
                 trials[field][:, index] = desc.ctypes.data
 
+        trials["seed"] = _draw_trial_seeds(seed, n_trials)
+
         trace_rows: list[np.ndarray] = []
         for tname in self.traces:
-            rows = _as_trace_rows(param_values[tname], n_trials, tname)
+            value = param_values[tname]
+            if callable(value):
+                rows = _generate_trace_rows(value, trials["seed"], tname)
+            else:
+                rows = _as_trace_rows(value, n_trials, tname)
             trace_rows += rows
             field = trials[tname]
             for i, row in enumerate(rows):
                 field[i, 0] = row.ctypes.data
                 field[i, 1] = row.size
 
-        rng = np.random.default_rng(
-            seed if seed is not None else int(lib.cmb_random_hwseed())
-        )
-        trials["seed"] = rng.integers(1, np.iinfo(np.uint64).max,
-                                      size=n_trials, dtype=np.uint64)
         return Experiment(self, trials, compiled["trial"].address,
                           keepalive=trace_rows)
 
