@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 
 import cimba.sim as sim
@@ -478,6 +479,161 @@ def test_component_collection_outputs_run_and_count_failures_by_trial():
                            seed=23)
     assert exp.run() == 0
     assert exp["items__score"][0].tolist() == [1.0, 2.0]
+
+
+def test_component_collection_can_own_params_and_sweep_vectors():
+    class Item(sim.Component):
+        rate: sim.Param
+        score: sim.Output
+
+        def __init__(self, bias: int):
+            self.bias = bias
+
+        @sim.process
+        def record(self, env):
+            self.score = self.rate + self.bias
+
+    class Network(sim.Model):
+        second_rate: sim.Output
+        items: list[Item] = [Item(10), Item(20)]
+
+    model = Network()
+
+    @model.process
+    def inspect_second(env: Network):
+        env.second_rate = env.items[1].rate
+
+    rates = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float64)
+    seeds = model.trial_seeds(seed=35, items__rate=rates, replications=2)
+
+    assert model.params == ["items__rate"]
+    assert model.dtype["items__rate"].shape == (2,)
+    assert len(seeds) == 4
+    with pytest.raises(ValueError, match="parameter 'items__rate'"):
+        model.trial_seeds(seed=35, items__rate=[1.0, 2.0, 3.0])
+
+    exp = model.experiment(
+        items__rate=rates,
+        replications=2,
+        duration=1.0,
+        warmup=0.0,
+        seed=35,
+    )
+    assert exp.run() == 0
+    assert np.array_equal(exp["seed"], seeds)
+    assert exp.trials["items__rate"].tolist() == [
+        [1.0, 2.0],
+        [1.0, 2.0],
+        [3.0, 4.0],
+        [3.0, 4.0],
+    ]
+    assert exp["items__score"].tolist() == [
+        [11.0, 22.0],
+        [11.0, 22.0],
+        [13.0, 24.0],
+        [13.0, 24.0],
+    ]
+    assert exp["second_rate"].tolist() == [2.0, 2.0, 4.0, 4.0]
+
+
+def test_component_collection_params_can_size_entity_capacities():
+    class Item(sim.Component):
+        cap: sim.Param
+        queue: sim.Queue = sim.capacity("cap")
+        open_space: sim.Output
+
+        @sim.process
+        def inspect(self, env):
+            self.open_space = sim.space(self.queue)
+
+    class Network(sim.Model):
+        items: list[Item] = [Item(), Item()]
+
+    exp = Network().experiment(
+        items__cap=[2.0, 5.0],
+        replications=1,
+        duration=1.0,
+        warmup=0.0,
+        seed=36,
+    )
+    assert exp.run() == 0
+    assert exp["items__open_space"][0].tolist() == [2.0, 5.0]
+
+
+def test_component_collection_can_own_traces():
+    class Source(sim.Component):
+        demand: sim.Trace
+        total: sim.Output
+
+        @sim.process
+        def consume(self, env):
+            values = sim.Trace(self.demand)
+            total = 0.0
+            for value in values:
+                total += value
+            self.total = total
+
+    class Network(sim.Model):
+        second_first: sim.Output
+        sources: list[Source] = [Source(), Source()]
+
+    model = Network()
+
+    @model.process
+    def inspect_second(env: Network):
+        values = sim.Trace(env.sources[1].demand)
+        env.second_first = values[0]
+
+    assert model.traces == ["sources__demand"]
+    assert model.dtype["sources__demand"].shape == (2, 2)
+
+    exp = model.experiment(
+        sources__demand=[
+            np.array([1.0, 2.0], dtype=np.float64),
+            np.array([3.0, 4.0, 5.0], dtype=np.float64),
+        ],
+        replications=1,
+        duration=1.0,
+        warmup=0.0,
+        seed=36,
+    )
+    assert exp.run() == 0
+    assert exp["sources__total"][0].tolist() == [3.0, 12.0]
+    assert exp["second_first"][0] == 3.0
+
+
+def test_component_collection_trace_callable_returns_component_rows():
+    class Source(sim.Component):
+        demand: sim.Trace
+        total: sim.Output
+
+        @sim.process
+        def consume(self, env):
+            values = sim.Trace(self.demand)
+            total = 0.0
+            for value in values:
+                total += value
+            self.total = total
+
+    class Network(sim.Model):
+        sources: list[Source] = [Source(), Source()]
+
+    def generator(rng, trial):
+        base = float(trial + 1)
+        return np.array([
+            [base, base + 1.0],
+            [10.0 * base, 20.0 * base],
+        ])
+
+    exp = Network().experiment(
+        sources__demand=generator,
+        replications=2,
+        duration=1.0,
+        warmup=0.0,
+        seed=37,
+    )
+    assert exp.run() == 0
+    assert exp["sources__total"].tolist() == [[3.0, 30.0], [5.0, 60.0]]
 
 
 def test_component_collection_processes_run_per_item_with_symbolic_copies():
@@ -1225,15 +1381,6 @@ def test_component_collection_declaration_errors_are_rejected():
 
     with pytest.raises(TypeError, match="items must be Item instances"):
         Wrong()
-
-    class WithParam(sim.Component):
-        rate: sim.Param
-
-    class ParamModel(sim.Model):
-        items: list[WithParam] = [WithParam()]
-
-    with pytest.raises(ValueError, match="declares param fields"):
-        ParamModel()
 
     class MissingCount(sim.Component):
         lanes: sim.PQueues = sim.count("queue_count")

@@ -263,25 +263,11 @@ def _validate_component_instance_declarations(
     instance_count: int,
     collection: bool,
 ) -> None:
-    if collection or instance_count > 1:
-        for kind in ("param", "trace"):
-            if decls[kind]:
-                raise ValueError(
-                    f"component collection '{component_name}' declares "
-                    f"{kind} fields, which are not supported yet")
     for kind in ("predicate", "event"):
         if decls[kind]:
             raise ValueError(
                 f"component '{component_name}' declares {kind} fields, which "
                 "are not supported yet")
-    if collection or instance_count > 1:
-        for kind in ("queue", "pool", "store"):
-            for field, cap in decls[kind].items():
-                if isinstance(cap, str):
-                    raise ValueError(
-                        f"component collection '{component_name}' field "
-                        f"'{field}' uses symbolic capacity '{cap}', which is "
-                        "not supported yet")
 
 
 def _flatten_component_declarations(
@@ -296,8 +282,13 @@ def _flatten_component_declarations(
     for flat_name in field_map.values():
         if _declarations_contain(target, flat_name):
             raise ValueError(f"duplicate field name '{flat_name}'")
-    for kind in ("param", "trace"):
-        target[kind].extend(field_map[name] for name in decls[kind])
+    target["param"].extend(field_map[name] for name in decls["param"])
+    target["trace"].extend(field_map[name] for name in decls["trace"])
+    if instance_count > 1:
+        for name in decls["param"]:
+            target["field_shapes"][field_map[name]] = (instance_count,)
+        for name in decls["trace"]:
+            target["field_shapes"][field_map[name]] = (instance_count,)
     for kind in ("output", "state", "fstate", "resource", "dataset",
                  "condition", "spawnable"):
         target[kind].extend(field_map[name] for name in decls[kind])
@@ -1323,4 +1314,3 @@ def _process_dag_component_field_members(
             if graph_kind is not None:
                 members.append(f"{graph_kind}:{flat_name}")
     return members
-

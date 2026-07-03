@@ -246,6 +246,38 @@ def _as_trace_rows(value: Any, n_trials: int, name: str) -> list[np.ndarray]:
                      "arrays")
 
 
+def _as_param_axis(
+    value: Any,
+    shape: tuple[int, ...] | None,
+    name: str,
+) -> np.ndarray:
+    arr = np.asarray(value, dtype=np.float64)
+    if shape is None:
+        return np.atleast_1d(arr).reshape(-1)
+    if arr.ndim == 0:
+        return np.full((1, *shape), float(arr), dtype=np.float64)
+    if arr.shape == shape:
+        return np.ascontiguousarray(arr.reshape((1, *shape)),
+                                    dtype=np.float64)
+    if arr.ndim == len(shape) + 1 and arr.shape[1:] == shape:
+        return np.ascontiguousarray(arr, dtype=np.float64)
+    raise ValueError(
+        f"parameter '{name}': expected a scalar, shape {shape}, or "
+        f"(n, {', '.join(str(dim) for dim in shape)}) design rows; "
+        f"got shape {arr.shape}")
+
+
+def _trace_generator_wants_index(fn: Callable[..., ArrayLike]) -> bool:
+    try:
+        required = [p for p in inspect.signature(fn).parameters.values()
+                    if p.kind in (p.POSITIONAL_ONLY,
+                                  p.POSITIONAL_OR_KEYWORD)
+                    and p.default is p.empty]
+    except (TypeError, ValueError):
+        return False
+    return len(required) >= 2
+
+
 def _draw_trial_seeds(seed: int | None, n_trials: int) -> np.ndarray:
     """The per-trial seed draw shared by experiment() and trial_seeds():
     one uint64 per trial seeds the in-sim RNG and, through trace_rng(),
@@ -277,13 +309,7 @@ def _generate_trace_rows(fn: Callable[..., ArrayLike], seeds: np.ndarray,
                          name: str) -> list[np.ndarray]:
     """Call a trace generator once per trial with that trial's
     trace_rng(); ``fn(rng)`` or ``fn(rng, trial_index)``."""
-    try:
-        required = [p for p in inspect.signature(fn).parameters.values()
-                    if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
-                    and p.default is p.empty]
-        wants_index = len(required) >= 2
-    except (TypeError, ValueError):
-        wants_index = False
+    wants_index = _trace_generator_wants_index(fn)
     rows: list[np.ndarray] = []
     tag = getattr(fn, "trace_rng_name", None) or name
     for i, s in enumerate(seeds):
@@ -295,6 +321,155 @@ def _generate_trace_rows(fn: Callable[..., ArrayLike], seeds: np.ndarray,
                              f"1-D array, got {row.ndim}-D for trial {i}")
         rows.append(row)
     return rows
+
+
+def _trace_rows_from_value(value: Any, seeds: np.ndarray, name: str,
+                           n_trials: int) -> list[np.ndarray]:
+    if callable(value):
+        return _generate_trace_rows(value, seeds, name)
+    return _as_trace_rows(value, n_trials, name)
+
+
+def _trace_slot_name(name: str, index: int) -> str:
+    return f"{name}[{index}]"
+
+
+def _as_single_trace_row(value: Any, name: str, context: str) -> np.ndarray:
+    if callable(value):
+        raise ValueError(
+            f"trace '{name}': callable values are not valid for {context}")
+    row = np.ascontiguousarray(value, dtype=np.float64)
+    if row.ndim != 1:
+        raise ValueError(
+            f"trace '{name}': {context} must be 1-D, got {row.ndim}-D")
+    return row
+
+
+def _trace_grid_shape_error(name: str, n_trials: int, slots: int) -> str:
+    return (
+        f"trace '{name}': expected a 1-D array shared by every trial and "
+        f"component, a 2-D array with {slots} component rows or {n_trials} "
+        f"trial rows, a 3-D array with shape ({n_trials}, {slots}, length), "
+        "or a sequence of component trace values"
+    )
+
+
+def _as_trace_array_grid(value: Any, n_trials: int, slots: int,
+                         name: str) -> list[list[np.ndarray]]:
+    arr = np.ascontiguousarray(value, dtype=np.float64)
+    if arr.ndim == 1:
+        return [[arr for _ in range(slots)] for _ in range(n_trials)]
+    if arr.ndim == 2:
+        if arr.shape[0] == slots:
+            rows = [np.ascontiguousarray(arr[i])
+                    for i in range(slots)]
+            return [[rows[j] for j in range(slots)]
+                    for _ in range(n_trials)]
+        if arr.shape[0] == n_trials:
+            rows = [np.ascontiguousarray(arr[i])
+                    for i in range(n_trials)]
+            return [[rows[i] for _ in range(slots)]
+                    for i in range(n_trials)]
+        raise ValueError(_trace_grid_shape_error(name, n_trials, slots))
+    if arr.ndim == 3:
+        if arr.shape[0] != n_trials or arr.shape[1] != slots:
+            raise ValueError(_trace_grid_shape_error(name, n_trials, slots))
+        return [
+            [np.ascontiguousarray(arr[i, j]) for j in range(slots)]
+            for i in range(n_trials)
+        ]
+    raise ValueError(_trace_grid_shape_error(name, n_trials, slots))
+
+
+def _as_trace_sequence_grid(value: Any, seeds: np.ndarray, n_trials: int,
+                            slots: int, name: str) -> list[list[np.ndarray]]:
+    try:
+        values = list(value)
+    except TypeError as exc:
+        raise ValueError(_trace_grid_shape_error(name, n_trials, slots)) \
+            from exc
+
+    if len(values) == slots:
+        slot_rows = [
+            _trace_rows_from_value(slot_value, seeds,
+                                   _trace_slot_name(name, slot), n_trials)
+            for slot, slot_value in enumerate(values)
+        ]
+        return [
+            [slot_rows[slot][trial] for slot in range(slots)]
+            for trial in range(n_trials)
+        ]
+
+    if len(values) == n_trials:
+        rows: list[list[np.ndarray]] = []
+        for trial, trial_value in enumerate(values):
+            try:
+                slot_values = list(trial_value)
+            except TypeError as exc:
+                raise ValueError(_trace_grid_shape_error(
+                    name, n_trials, slots)) from exc
+            if len(slot_values) != slots:
+                raise ValueError(_trace_grid_shape_error(
+                    name, n_trials, slots))
+            rows.append([
+                _as_single_trace_row(
+                    slot_values[slot],
+                    _trace_slot_name(name, slot),
+                    f"trial {trial}, component {slot}",
+                )
+                for slot in range(slots)
+            ])
+        return rows
+
+    raise ValueError(_trace_grid_shape_error(name, n_trials, slots))
+
+
+def _generate_trace_grid(fn: Callable[..., ArrayLike], seeds: np.ndarray,
+                         n_trials: int, slots: int,
+                         name: str) -> list[list[np.ndarray]]:
+    wants_index = _trace_generator_wants_index(fn)
+    tag = getattr(fn, "trace_rng_name", None) or name
+    rows: list[list[np.ndarray]] = []
+    for trial, seed in enumerate(seeds):
+        rng = trace_rng(int(seed), tag)
+        out = fn(rng, trial) if wants_index else fn(rng)
+        try:
+            rows.append(_as_trace_array_grid(out, 1, slots, name)[0])
+        except ValueError:
+            try:
+                slot_values = list(out)
+            except TypeError as exc:
+                raise ValueError(
+                    f"trace '{name}': generator must return a 1-D array or "
+                    f"{slots} component rows for trial {trial}") from exc
+            if len(slot_values) != slots:
+                raise ValueError(
+                    f"trace '{name}': generator must return a 1-D array or "
+                    f"{slots} component rows for trial {trial}")
+            rows.append([
+                _as_single_trace_row(
+                    slot_values[slot],
+                    _trace_slot_name(name, slot),
+                    f"trial {trial}, component {slot}",
+                )
+                for slot in range(slots)
+            ])
+    return rows
+
+
+def _as_trace_grid(value: Any, seeds: np.ndarray, n_trials: int,
+                   slots: int, name: str) -> list[list[np.ndarray]]:
+    if slots == 1:
+        return [[row] for row in _trace_rows_from_value(
+            value, seeds, name, n_trials)]
+    if callable(value):
+        return _generate_trace_grid(value, seeds, n_trials, slots, name)
+    if isinstance(value, np.ndarray):
+        return _as_trace_array_grid(value, n_trials, slots, name)
+    try:
+        return _as_trace_array_grid(value, n_trials, slots, name)
+    except (ValueError, TypeError):
+        return _as_trace_sequence_grid(value, seeds, n_trials, slots, name)
 
 
 def _dedupe_process_dag_members(members: Iterable[str]) -> tuple[str, ...]:
@@ -890,6 +1065,21 @@ class Model:
             return (name, fmt)
         return (name, fmt, shape)
 
+    def _param_axes(self, param_values: Mapping[str, Any]) -> list[np.ndarray]:
+        return [
+            _as_param_axis(param_values[p], self._field_shapes.get(p), p)
+            for p in self.params
+        ]
+
+    def _trace_field_spec(self, name: str) -> tuple[Any, ...]:
+        shape = self._field_shapes.get(name)
+        if shape is None:
+            return (name, "<i8", (2,))
+        if len(shape) != 1:
+            raise ValueError(f"trace field '{name}' has unsupported "
+                             f"shape {shape}")
+        return (name, "<i8", (*shape, 2))
+
     def _field_refs(self, name: str) -> list[str]:
         shape = self._field_shapes.get(name)
         if shape is None:
@@ -911,12 +1101,12 @@ class Model:
     def dtype(self) -> np.dtype:
         # (name, format) or (name, format, shape) numpy field specs
         fields: list[Any] = list(_STANDARD_FIELDS)
-        fields += [(p, "<f8") for p in self.params]
+        fields += [self._field_spec(p, "<f8") for p in self.params]
         fields += [self._field_spec(o, "<f8") for o in self.outputs]
         fields += [self._field_spec(h, "<i8") for h in self._entities]
         fields += [self._field_spec(s, "<i8") for s in self.state]
         fields += [self._field_spec(s, "<f8") for s in self.float_state]
-        fields += [(t, "<i8", (2,)) for t in self.traces]
+        fields += [self._trace_field_spec(t) for t in self.traces]
         fields += [(f, "<i8", (n,)) for f, n in self.pqueues.items()]
         fields += [(p, "<i8") for p in self._predicate_fields]
         fields += [(f, "<i8") for _n, _fn, f in self._predicates
@@ -1048,11 +1238,20 @@ class Model:
         callbacks as Python source (njit-compilable against the namespace
         from _codegen_namespace)."""
 
-        def cap_expr(cap):
+        def cap_expr(cap, index: int | None = None):
             if cap is None:
                 return "CAP"
             if isinstance(cap, int):
                 return f"np.uint64({cap})"
+            shape = self._field_shapes.get(cap)
+            if shape is not None:
+                if len(shape) != 1:
+                    raise ValueError(f"capacity parameter '{cap}' has "
+                                     f"unsupported shape {shape}")
+                if index is None:
+                    raise ValueError(f"capacity parameter '{cap}' needs "
+                                     "an entity index")
+                return f"np.uint64(env['{cap}'][{index}])"
             return f"np.uint64(env['{cap}'])"
 
         recorded = [("buffer", q) for q in self.queues]
@@ -1113,7 +1312,7 @@ class Model:
                 name_key = self._field_name_keys(q)[i][0]
                 src += ["    h = buffer_create()",
                         f"    buffer_initialize(h, {name_key}, "
-                        f"{cap_expr(cap)})",
+                        f"{cap_expr(cap, i)})",
                         f"    {ref} = h"]
         for r in self.resources:
             for i, ref in enumerate(self._field_refs(r)):
@@ -1126,14 +1325,14 @@ class Model:
                 name_key = self._field_name_keys(p)[i][0]
                 src += ["    h = resourcepool_create()",
                         f"    resourcepool_initialize(h, {name_key}, "
-                        f"{cap_expr(cap)})",
+                        f"{cap_expr(cap, i)})",
                         f"    {ref} = h"]
         for s, cap in self.stores.items():
             for i, ref in enumerate(self._field_refs(s)):
                 name_key = self._field_name_keys(s)[i][0]
                 src += ["    h = objectqueue_create()",
                         f"    objectqueue_initialize(h, {name_key}, "
-                        f"{cap_expr(cap)})",
+                        f"{cap_expr(cap, i)})",
                         f"    {ref} = h"]
         for d in self.datasets:
             for ref in self._field_refs(d):
@@ -1350,9 +1549,8 @@ class Model:
         if replications < 1:
             raise ValueError("replications must be >= 1")
         n_points = 1
-        for p in self.params:
-            n_points *= np.atleast_1d(
-                np.asarray(param_values[p], dtype=np.float64)).size
+        for axis in self._param_axes(param_values):
+            n_points *= axis.shape[0]
         return _draw_trial_seeds(seed, n_points * replications)
 
     def experiment(self,
@@ -1395,9 +1593,11 @@ class Model:
         if replications < 1:
             raise ValueError("replications must be >= 1")
 
-        axes = [np.atleast_1d(np.asarray(param_values[p], dtype=np.float64))
-                for p in self.params]
-        mesh = np.meshgrid(*axes, indexing="ij") if axes else []
+        axes = self._param_axes(param_values)
+        axis_indexes = [
+            np.arange(axis.shape[0], dtype=np.int64) for axis in axes
+        ]
+        mesh = np.meshgrid(*axis_indexes, indexing="ij") if axes else []
         n_points = mesh[0].size if mesh else 1
         n_trials = n_points * replications
 
@@ -1406,8 +1606,9 @@ class Model:
         trials["warmup_s"] = warmup
         trials["duration_s"] = duration
         trials["cooldown_s"] = cooldown
-        for p, m in zip(self.params, mesh):
-            trials[p] = np.repeat(m.ravel(), replications)
+        for p, axis, indexes in zip(self.params, axes, mesh):
+            selected = axis[indexes.ravel()]
+            trials[p] = np.repeat(selected, replications, axis=0)
         for o in self.outputs:
             trials[o] = np.nan
         for field, pred in compiled["preds"].items():
@@ -1426,15 +1627,26 @@ class Model:
         trace_rows: list[np.ndarray] = []
         for tname in self.traces:
             value = param_values[tname]
-            if callable(value):
-                rows = _generate_trace_rows(value, trials["seed"], tname)
-            else:
-                rows = _as_trace_rows(value, n_trials, tname)
-            trace_rows += rows
+            shape = self._field_shapes.get(tname)
+            if shape is not None and len(shape) != 1:
+                raise ValueError(f"trace field '{tname}' has unsupported "
+                                 f"shape {shape}")
+            slots = 1 if shape is None else shape[0]
+            rows = _as_trace_grid(value, trials["seed"], n_trials, slots,
+                                  tname)
+            trace_rows.extend(row for trial_rows in rows
+                              for row in trial_rows)
             field = trials[tname]
-            for i, row in enumerate(rows):
-                field[i, 0] = row.ctypes.data
-                field[i, 1] = row.size
+            if shape is None:
+                for i, trial_rows in enumerate(rows):
+                    row = trial_rows[0]
+                    field[i, 0] = row.ctypes.data
+                    field[i, 1] = row.size
+            else:
+                for i, trial_rows in enumerate(rows):
+                    for slot, row in enumerate(trial_rows):
+                        field[i, slot, 0] = row.ctypes.data
+                        field[i, slot, 1] = row.size
 
         return Experiment(self, trials, compiled["trial"].address,
                           keepalive=trace_rows)
