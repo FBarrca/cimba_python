@@ -62,6 +62,8 @@ CIMBA_PY_EXPORT uint64_t cpy_resource_available(const void *rp);
 CIMBA_PY_EXPORT double cpy_dataset_min(const void *dsp);
 CIMBA_PY_EXPORT double cpy_dataset_max(const void *dsp);
 CIMBA_PY_EXPORT double cpy_dataset_stddev(const void *dsp);
+CIMBA_PY_EXPORT double cpy_dataset_quantile(const void *dsp, double q);
+CIMBA_PY_EXPORT double cpy_dataset_median(const void *dsp);
 CIMBA_PY_EXPORT int64_t cpy_process_yield(void);
 CIMBA_PY_EXPORT uint64_t cpy_wtdsummary_sizeof(void);
 CIMBA_PY_EXPORT double cpy_wtdsummary_mean(const void *wsp);

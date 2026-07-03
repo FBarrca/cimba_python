@@ -54,7 +54,7 @@ Concept translation (cimba -> sim API):
                       _time()/_priority(), sim.current_event(),
                       sim.event_count(), sim.clear_events()
     cmb_dataset       sim.Dataset, sim.tally(), sim.dataset_mean()/
-                      _count()/_min()/_max()/_std()
+                      _count()/_min()/_max()/_std()/_median()/_quantile()
     statistics        recorded over the measurement window (after warmup,
                       datasets are reset when it opens): sim.mean_level(),
                       sim.mean_in_use(), sim.pool_mean_in_use(),
@@ -158,7 +158,8 @@ __all__ = [
     "store_position", "store_mean_length", "store_history",
     "store_report", "store_report_file",
     "tally", "dataset_mean", "dataset_count", "dataset_min", "dataset_max",
-    "dataset_std", "dataset_print", "dataset_print_file",
+    "dataset_std", "dataset_median", "dataset_quantile",
+    "dataset_print", "dataset_print_file",
     "dataset_fivenum", "dataset_fivenum_file",
     "dataset_histogram", "dataset_histogram_file",
     "dataset_correlogram", "dataset_correlogram_file",
@@ -528,6 +529,19 @@ if TYPE_CHECKING:
 
     def dataset_std(dataset: Handle) -> float:
         """Sample standard deviation of the observations (0 if < 2)."""
+        ...
+
+    def dataset_median(dataset: Handle) -> float:
+        """Median of the observations tallied so far (0 if empty).
+        Sorts a copy of the data, so prefer calling it once per trial,
+        e.g. from the @model.collect callback."""
+        ...
+
+    def dataset_quantile(dataset: Handle, q: float) -> float:
+        """Quantile `q` in [0, 1] of the observations, by linear
+        interpolation over the sorted values (numpy's default method;
+        0 if empty). Sorts a copy of the data, so prefer calling it
+        once per trial, e.g. from the @model.collect callback."""
         ...
 
     def dataset_print_file(dataset: Handle, path: Handle,
@@ -1036,6 +1050,8 @@ else:
     dataset_min = _b.dataset_min
     dataset_max = _b.dataset_max
     dataset_std = _b.dataset_std
+    dataset_median = _b.dataset_median
+    dataset_quantile = _b.dataset_quantile
     dataset_print_file = _b.dataset_print_file
     dataset_fivenum_file = _b.dataset_fivenum_file
     dataset_histogram_file = _b.dataset_histogram_file

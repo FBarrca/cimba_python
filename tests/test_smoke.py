@@ -291,6 +291,98 @@ def test_bounded_queue_and_dataset_stats():
     assert exp["d_std"][0] >= 0
 
 
+def test_dataset_median_and_quantile():
+    class Quant(sim.Model):
+        med: sim.Output
+        q0: sim.Output
+        q25: sim.Output
+        q100: sim.Output
+        med_empty: sim.Output
+        d: sim.Dataset
+        d_empty: sim.Dataset
+
+    model = Quant()
+
+    @model.process
+    def feed(env: Quant):
+        sim.hold(2.0)           # tally inside the measurement window
+        for i in range(1, 7):
+            sim.tally(env.d, 1.0 * i)
+        sim.suspend()
+
+    @model.collect
+    def stats(env: Quant):
+        env.med = sim.dataset_median(env.d)
+        env.q0 = sim.dataset_quantile(env.d, 0.0)
+        env.q25 = sim.dataset_quantile(env.d, 0.25)
+        env.q100 = sim.dataset_quantile(env.d, 1.0)
+        env.med_empty = sim.dataset_median(env.d_empty)
+
+    exp = model.experiment(replications=1, duration=10.0, warmup=1.0,
+                           seed=1)
+    assert exp.run() == 0
+    assert exp["med"][0] == 3.5           # 1..6, even count interpolates
+    assert exp["q0"][0] == 1.0
+    assert exp["q25"][0] == 2.25          # h = 0.25 * 5 between 2 and 3
+    assert exp["q100"][0] == 6.0
+    assert exp["med_empty"][0] == 0.0
+
+
+def test_experiment_summary():
+    class Sweep(sim.Model):
+        x: sim.Param
+        y: sim.Output
+        z: sim.Output
+
+    model = Sweep()
+
+    @model.process
+    def p(env: Sweep):
+        env.y = env.x * 2.0
+        env.z = sim.uniform(0.0, 1.0)
+        sim.suspend()
+
+    exp = model.experiment(x=[1.0, 2.0, 3.0], replications=5,
+                           duration=10.0, warmup=0.0, seed=7)
+    with pytest.raises(RuntimeError, match="run"):
+        exp.summary()
+    assert exp.run() == 0
+
+    s = exp.summary()
+    assert s.shape == (3,)
+    assert exp.swept == ("x",)
+    assert list(s["x"]) == [1.0, 2.0, 3.0]
+    assert np.allclose(s["y"], [2.0, 4.0, 6.0])   # deterministic in x
+    assert np.allclose(s["y_hw"], 0.0)
+    assert ((0.0 <= s["z"]) & (s["z"] <= 1.0)).all()
+    assert (s["z_hw"] > 0.0).all()                # random, 5 reps
+
+    only_y = exp.summary("y", confidence=0.99)
+    assert only_y.dtype.names == ("x", "y", "y_hw")
+    with pytest.raises(ValueError, match="unknown"):
+        exp.summary("nope")
+
+
+def test_experiment_summary_single_point():
+    class Single(sim.Model):
+        y: sim.Output
+
+    model = Single()
+
+    @model.process
+    def p(env: Single):
+        env.y = sim.uniform(0.0, 1.0)
+        sim.suspend()
+
+    exp = model.experiment(replications=1, duration=10.0, warmup=0.0,
+                           seed=7)
+    assert exp.run() == 0
+    s = exp.summary()
+    assert s.shape == (1,)
+    assert 0.0 <= s["y"][0] <= 1.0
+    assert np.isnan(s["y_hw"][0])   # one replication: no CI
+
+
 def test_random_draws_and_suspend():
     class Draws(sim.Model):
         tri: sim.Output

@@ -252,12 +252,6 @@ def harbor_stats(env: Harbor):
     env.berth_large_util = sim.pool_mean_in_use(env.facilities.berths_large)
 
 
-def ci95(vals: np.ndarray) -> tuple[float, float]:
-    vals = vals[~np.isnan(vals)]
-    return float(vals.mean()), float(1.96 * vals.std(ddof=1)
-                                     / np.sqrt(vals.size))
-
-
 def main() -> None:
     print(f"cimba {cp.version()}, using {cp.use_threads(0)} worker threads")
 
@@ -283,23 +277,22 @@ def main() -> None:
     print(f"{len(exp)} trials of {HOURS_PER_YEAR:.0f} h in {wall:.2f} s, "
           f"{fails} failed\n")
 
-    n_sm, _ = ci95(exp["n_small"])
-    n_lg, _ = ci95(exp["n_large"])
-    t_sm, t_sm_w = ci95(exp["avg_time_small"])
-    t_lg, t_lg_w = ci95(exp["avg_time_large"])
+    s = exp.summary()[0]    # single design point: means and 95% CIs
     print("Time in system (hours):")
-    print(f"  small ships: {t_sm:6.2f} +/- {t_sm_w:.2f}"
-          f"   ({n_sm:,.0f} departures/trial)")
-    print(f"  large ships: {t_lg:6.2f} +/- {t_lg_w:.2f}"
-          f"   ({n_lg:,.0f} departures/trial)")
+    print(f"  small ships: {s['avg_time_small']:6.2f} "
+          f"+/- {s['avg_time_small_hw']:.2f}"
+          f"   ({s['n_small']:,.0f} departures/trial)")
+    print(f"  large ships: {s['avg_time_large']:6.2f} "
+          f"+/- {s['avg_time_large_hw']:.2f}"
+          f"   ({s['n_large']:,.0f} departures/trial)")
 
-    tu, tu_w = ci95(exp["tug_util"])
-    bs, bs_w = ci95(exp["berth_small_util"])
-    bl, bl_w = ci95(exp["berth_large_util"])
     print("\nMean units in use:")
-    print(f"  tugs:         {tu:5.2f} +/- {tu_w:.2f} of 10")
-    print(f"  small berths: {bs:5.2f} +/- {bs_w:.2f} of 6")
-    print(f"  large berths: {bl:5.2f} +/- {bl_w:.2f} of 3")
+    print(f"  tugs:         {s['tug_util']:5.2f} "
+          f"+/- {s['tug_util_hw']:.2f} of 10")
+    print(f"  small berths: {s['berth_small_util']:5.2f} "
+          f"+/- {s['berth_small_util_hw']:.2f} of 6")
+    print(f"  large berths: {s['berth_large_util']:5.2f} "
+          f"+/- {s['berth_large_util_hw']:.2f} of 3")
 
 
 if __name__ == "__main__":

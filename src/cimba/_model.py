@@ -1648,8 +1648,11 @@ class Model:
                         field[i, slot, 0] = row.ctypes.data
                         field[i, slot, 1] = row.size
 
+        swept = tuple(p for p, axis in zip(self.params, axes)
+                      if axis.shape[0] > 1)
         return Experiment(self, trials, compiled["trial"].address,
-                          keepalive=trace_rows)
+                          keepalive=trace_rows, replications=replications,
+                          swept=swept)
 
 
 class Experiment:
@@ -1658,15 +1661,23 @@ class Experiment:
     trials: np.ndarray
     #: Number of failed trials in the last run(), or None before it.
     failures: int | None
+    #: Replications per design point (trial order is design-point-major
+    #: with replications innermost).
+    replications: int
+    #: Names of the parameters swept over more than one value.
+    swept: tuple[str, ...]
 
     def __init__(self, model: Model, trials: np.ndarray, trial_addr: int,
-                 keepalive: Sequence[np.ndarray] = ()):
+                 keepalive: Sequence[np.ndarray] = (),
+                 replications: int = 1, swept: Sequence[str] = ()):
         self.model = model
         self.trials = trials
         self._trial_addr = trial_addr
         # Trace arrays whose data pointers live in the trial records
         self._keepalive = tuple(keepalive)
         self.failures = None
+        self.replications = replications
+        self.swept = tuple(swept)
 
     def run(self) -> int:
         """Run all trials in parallel, in place. Returns the number of
@@ -1691,6 +1702,50 @@ class Experiment:
                 failed = failed.reshape(failed.shape[0], -1).any(axis=1)
             self.failures = int(failed.sum())
         return self.failures
+
+    def summary(self, *outputs: str,
+                confidence: float = 0.95) -> np.ndarray:
+        """Summarize outputs across replications: a structured array with
+        one record per design point, holding the swept parameter values
+        and, for each output, its replication mean under its own name and
+        the Student-t confidence-interval half-width under
+        ``<name>_hw``. With no arguments every output is summarized.
+
+        Failed trials (NaN outputs) are excluded per output; the mean is
+        NaN when no trial survived and the half-width is NaN when fewer
+        than two did."""
+        if self.failures is None:
+            raise RuntimeError("run() the experiment before summary()")
+        names = list(outputs) if outputs else list(self.model.outputs)
+        unknown = set(names) - set(self.model.outputs)
+        if unknown:
+            raise ValueError(f"unknown outputs: {sorted(unknown)}")
+        if not 0.0 < confidence < 1.0:
+            raise ValueError("confidence must be in (0, 1)")
+
+        from scipy.stats import t as _student_t
+
+        reps = self.replications
+        n_points = self.trials.size // reps
+        cols = [(p, self.trials.dtype[p]) for p in self.swept]
+        for o in names:
+            cols += [(o, self.trials.dtype[o]),
+                     (f"{o}_hw", self.trials.dtype[o])]
+        table = np.zeros(n_points, dtype=cols)
+        for p in self.swept:
+            table[p] = self.trials[p][::reps]
+        for o in names:
+            vals = self.trials[o]
+            vals = vals.reshape((n_points, reps) + vals.shape[1:])
+            with np.errstate(invalid="ignore", divide="ignore"):
+                n = (~np.isnan(vals)).sum(axis=1).astype(np.float64)
+                mean = np.nansum(vals, axis=1) / n
+                dev = vals - np.expand_dims(mean, 1)
+                var = np.nansum(dev * dev, axis=1) / (n - 1.0)
+                tcrit = _student_t.ppf((1.0 + confidence) / 2.0, n - 1.0)
+                table[o] = mean
+                table[f"{o}_hw"] = tcrit * np.sqrt(var / n)
+        return table
 
     def __getitem__(self, field: str) -> np.ndarray:
         return self.trials[field]

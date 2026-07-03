@@ -681,6 +681,37 @@ double cpy_dataset_stddev(const void *dsp)
     return cmb_datasummary_stddev(&ds);
 }
 
+/* Quantile of the tallied observations by linear interpolation over a
+   sorted copy (numpy's default method). q outside [0, 1] is clamped;
+   an empty dataset returns 0.0, like cmb_dataset_median. */
+double cpy_dataset_quantile(const void *dsp, double q)
+{
+    const struct cmb_dataset *src = dsp;
+    if (src->xa == NULL || src->count == 0u) {
+        return 0.0;
+    }
+    if (q < 0.0) {
+        q = 0.0;
+    }
+    else if (q > 1.0) {
+        q = 1.0;
+    }
+    struct cmb_dataset dup = { 0 };
+    cmb_dataset_copy(&dup, src);
+    cmb_dataset_sort(&dup);
+    const double h = q * (double)(dup.count - 1u);
+    const uint64_t lo = (uint64_t)h;
+    const uint64_t hi = (lo + 1u < dup.count) ? lo + 1u : lo;
+    const double r = dup.xa[lo] + (h - (double)lo) * (dup.xa[hi] - dup.xa[lo]);
+    cmb_dataset_reset(&dup);
+    return r;
+}
+
+double cpy_dataset_median(const void *dsp)
+{
+    return cpy_dataset_quantile(dsp, 0.5);
+}
+
 /* Blocking take from an object queue, returning the object value
    directly. A take interrupted by a signal returns 0 (no object). */
 intptr_t cpy_objectqueue_take(void *oqp)

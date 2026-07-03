@@ -44,7 +44,10 @@ Use ``@model.collect`` to write outputs after the measured run:
        env.avg_waiting = sim.mean_level(env.waiting_room)
 
 The collector is still part of the compiled model. It should read trial-local
-state and write ``sim.Output`` fields. Do broader Python analysis after
+state and write ``sim.Output`` fields. Distribution statistics of tallied
+datasets are available here too -- ``sim.dataset_median(env.waits)`` and
+``sim.dataset_quantile(env.waits, 0.95)`` reduce a per-trial distribution to
+an output without leaving the trial. Do broader Python analysis after
 ``exp.run()`` returns.
 
 Running and reading results
@@ -65,6 +68,25 @@ trials:
 
 The arrays are aligned by trial row. That means ``average_waiting[i]`` belongs
 to the same trial as ``arrival_rates[i]`` and ``completions[i]``.
+
+Summarizing across replications
+-------------------------------
+
+``exp.summary()`` reduces the trial table to one record per design point,
+with the swept parameter values and, for each output, the mean over its
+replications plus a Student-t confidence-interval half-width:
+
+.. code-block:: python
+
+   for row in exp.summary("avg_waiting"):
+       print(f"arrival_rate={row['arrival_rate']:.2f}: "
+             f"{row['avg_waiting']:.2f} +- {row['avg_waiting_hw']:.2f}")
+
+Positional arguments select outputs (default: all of them) and
+``confidence=`` sets the interval (default 0.95). Failed trials are excluded
+output by output, and the half-width is NaN when fewer than two replications
+survive. For anything beyond means and intervals, fall back to the aligned
+per-trial arrays above.
 
 What belongs outside the model
 ------------------------------

@@ -150,6 +150,28 @@ window, so generate traces that cover ``warmup + duration + cooldown`` (or
 derive the experiment duration from the trace span), and consider recording
 ``sim.now()`` into an ``Output`` when the loop ends as an exhaustion check.
 
+Experiments:
+
+``model.experiment(...)`` returns an ``Experiment``; ``exp.run()`` executes
+the trial table in place and returns the number of failed trials, and
+``exp["field"]`` reads any trial column as an array. ``exp.summary()``
+condenses the outputs across replications: it returns a structured array with
+one record per design point holding the swept parameter values and, for each
+output, its replication mean (``name``) and Student-t confidence-interval
+half-width (``name_hw``, 95% by default)::
+
+   exp = model.experiment(utilization=[0.7, 0.8, 0.9], replications=20,
+                          duration=10_000.0, seed=42)
+   exp.run()
+   for row in exp.summary("avg_wait"):
+       print(f"rho={row['utilization']:.1f}  "
+             f"wait={row['avg_wait']:.2f} +- {row['avg_wait_hw']:.2f}")
+
+``exp.summary("a", "b", confidence=0.99)`` selects outputs and the confidence
+level; failed trials (NaN) are excluded per output. ``exp.replications`` and
+``exp.swept`` expose the layout (trial order is design-point-major with
+replications innermost).
+
 Process verbs:
 
 ``hold()``, ``now()``, ``current()``, ``interrupt()``, ``stop()``,
@@ -192,7 +214,8 @@ Stores, priority queues, datasets, and conditions:
 ``pq_put()``, ``pq_get()``, ``pq_take()``, ``pq_length()``, ``pq_space()``,
 ``pq_position()``, ``pq_reprioritize()``, ``pq_cancel()``,
 ``pq_mean_length()``, ``tally()``, ``dataset_mean()``, ``dataset_count()``,
-``dataset_min()``, ``dataset_max()``, ``dataset_std()``, ``store_history()``,
+``dataset_min()``, ``dataset_max()``, ``dataset_std()``,
+``dataset_median()``, ``dataset_quantile()``, ``store_history()``,
 ``pq_history()``, ``store_report()``, ``store_report_file()``,
 ``pq_report()``, ``pq_report_file()``, ``dataset_print()``,
 ``dataset_print_file()``, ``dataset_fivenum()``, ``dataset_fivenum_file()``,

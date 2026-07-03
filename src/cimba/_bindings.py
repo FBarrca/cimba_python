@@ -216,6 +216,8 @@ dataset_count = _extern("cpy_dataset_count", _u64(_intp))
 dataset_min = _extern("cpy_dataset_min", _f64(_intp))
 dataset_max = _extern("cpy_dataset_max", _f64(_intp))
 dataset_std = _extern("cpy_dataset_stddev", _f64(_intp))
+dataset_median = _extern("cpy_dataset_median", _f64(_intp))
+dataset_quantile = _extern("cpy_dataset_quantile", _f64(_intp, _f64))
 dataset_print_file = _extern("cpy_dataset_print_file",
                              _u64(_intp, _intp, _u64))
 dataset_fivenum_file = _extern("cpy_dataset_fivenum_file",

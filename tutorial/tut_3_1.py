@@ -346,12 +346,6 @@ def park_stats(env: Park):
     env.n_reneges = env.flow.reneges
 
 
-def ci95(vals: np.ndarray) -> tuple[float, float]:
-    vals = vals[~np.isnan(vals)]
-    return float(vals.mean()), float(1.96 * vals.std(ddof=1)
-                                     / np.sqrt(vals.size))
-
-
 def main() -> None:
     print(f"cimba {cp.version()}, using {cp.use_threads(0)} worker threads")
     print(f"{NUM_ATTRACTIONS} attractions, {TOTAL_QUEUES} queues, "
@@ -377,10 +371,11 @@ def main() -> None:
         ("jockey moves / day", "n_jockeys", "%6.0f"),
         ("reneges / day", "n_reneges", "%6.0f"),
     ]
+    stats = exp.summary()[0]    # single design point: means and 95% CIs
     print(f"{'per-visitor averages':<22} {'mean':>7} {'+/-95%':>7}")
     for label, field, fmt in rows:
-        m, w = ci95(exp[field])
-        print(f"{label:<22} {fmt % m:>7} {w:7.2f}")
+        print(f"{label:<22} {fmt % stats[field]:>7} "
+              f"{stats[field + '_hw']:7.2f}")
 
 
 if __name__ == "__main__":
