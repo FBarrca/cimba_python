@@ -9,14 +9,13 @@ Cimba Python documentation
 
     welcome
     concepts/index
+    advanced/index
     cimba_intro/index
     installation
-    tutorial
     tutorials/index
     examples/index
     background
     topical_guides/index
     api_reference/index
-    api/cimba
     about/index
     missing_features

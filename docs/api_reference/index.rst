@@ -8,6 +8,7 @@ package.
 .. toctree::
    :maxdepth: 2
 
+   ../api/cimba
    core
    processes
    queues_resources

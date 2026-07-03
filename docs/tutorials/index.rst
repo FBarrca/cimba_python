@@ -1,3 +1,5 @@
+.. _tutorial:
+
 Tutorial: Modeling with Cimba Python
 ====================================
 

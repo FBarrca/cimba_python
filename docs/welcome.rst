@@ -176,4 +176,4 @@ Read :ref:`the background section <background>` if you want to understand why
 Cimba Python is structured this way: process-oriented simulation, event queues,
 resources, random draws, datasets, and parallel trial execution.
 
-Use :doc:`api/cimba` as a map of the public Python surface while writing code.
+Use :doc:`the public surface map <api/cimba>` while writing model code.

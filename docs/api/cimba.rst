@@ -1,5 +1,5 @@
-Cimba Python API Reference
-==========================
+Public Surface Map
+==================
 
 Top-level package
 -----------------
