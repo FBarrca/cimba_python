@@ -92,6 +92,11 @@ Entities are destroyed when the trial function returns, so anything worth
 keeping must land in an output here (or be written to a file with the report
 verbs below).
 
+Components can own their statistics the same way they own processes: a
+method marked with top-level ``@sim.collect`` runs once per instance at the
+end of each trial, before ``@model.collect`` (which can then aggregate over
+the component outputs). See :doc:`../advanced/components`.
+
 Across trials
 -------------
 

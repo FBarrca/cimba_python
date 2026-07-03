@@ -86,7 +86,10 @@ create/start/stop/destroy plumbing are generated and compiled by Model.
 Related fields and process methods can be grouped with ``sim.Component``.
 Component methods marked with top-level ``@sim.process`` are authoring-time
 methods; Model lowers them into ordinary flat process functions before Numba
-compilation. Model callbacks can use ``env.retailer.orders``; trial-table
+compilation. A component method marked with top-level ``@sim.collect`` runs
+once per instance at the end of each trial (before the model-level
+``@model.collect``, which can then aggregate), typically assigning the
+component's own Output fields from ``self``. Model callbacks can use ``env.retailer.orders``; trial-table
 fields remain flattened with names such as ``retailer__orders``. Components
 may contain nested components; paths such as ``env.attraction.queues.line``
 flatten to names such as ``attraction__queues__line``. A component-owned
@@ -123,15 +126,15 @@ from ._model import (Component, Condition, Dataset, Env, Event, Experiment,
                      FloatState, Handle, Model, Output, Param, Pool, PQueues,
                      Predicate, ProcessDAG, ProcessDAGBlock, ProcessDAGEdge,
                      ProcessDAGNode, Processes, Queue, Resource, Spawnable,
-                     State, Store, Struct, Trace, capacity, count, process,
-                     trace_rng)
+                     State, Store, Struct, Trace, capacity, collect, count,
+                     process, trace_rng)
 
 __all__ = [
     "Model", "Component", "Experiment", "Env", "Handle",
     "Param", "Output", "State", "FloatState", "Queue", "Resource", "Pool",
     "Store", "Dataset", "Condition", "Predicate", "Event", "Processes",
-    "PQueues", "Spawnable", "Struct", "Trace", "capacity", "count",
-    "process", "trace_rng",
+    "PQueues", "Spawnable", "Struct", "Trace", "capacity", "collect",
+    "count", "process", "trace_rng",
     "ProcessDAG", "ProcessDAGBlock", "ProcessDAGNode", "ProcessDAGEdge",
     "SUCCESS", "PREEMPTED", "INTERRUPTED", "STOPPED", "CANCELLED", "TIMEOUT",
     "LOGGER_FATAL", "LOGGER_ERROR", "LOGGER_WARNING", "LOGGER_INFO",

@@ -36,9 +36,11 @@ from ._components import (
     _class_declarations,
     _ComponentCollectionDecl,
     _ComponentDecl,
+    _component_collect_methods,
     _component_instance_count,
     _component_process_methods,
     _component_spawnable_field_names,
+    _lower_component_collect,
     _lower_component_process,
     _lower_model_component_refs,
     _process_dag_component_field_members,
@@ -46,6 +48,7 @@ from ._components import (
     _resolve_component_process_copies,
     _spawnable_slot_label,
     _walk_component_declarations,
+    collect,
     process,
 )
 from ._declarations import (
@@ -197,7 +200,8 @@ class _Compiled(TypedDict):
     #: (Spawnable env field, optional shaped-field index, process name)
     #: assignments applied to the experiment table.
     spawn_assignments: tuple[tuple[str, int | None, str], ...]
-    collect: Any
+    #: njit collect dispatchers in execution order (components, then model)
+    collect: list[Any]
     dtype: np.dtype
 
 
@@ -578,6 +582,7 @@ class Model:
         # (name, fn, env field holding the compiled address, takes_data)
         self._events: list[tuple[str, Callable[..., Any], str, bool]] = []
         self._collect: Callable[..., Any] | None = None
+        self._component_collects: list[Callable[..., Any]] = []
         self._compiled: _Compiled | None = None
         self._bind_components()
         self._register_component_processes()
@@ -687,6 +692,10 @@ class Model:
                                  _spawn_index=spawn_index,
                                  _process_field=process_field,
                                  _process_offset=process_offset)
+                for method_name, method in _component_collect_methods(
+                        decl.cls):
+                    self._component_collects.append(_lower_component_collect(
+                        component_name, decl, index, method_name, method))
 
     @property
     def _component_field_maps(self) -> dict[str, dict[str, str]]:
@@ -1023,7 +1032,8 @@ class Model:
 
     def collect(self, fn: _F) -> _F:
         """Register the statistics-collection function, run once at the
-        end of each trial."""
+        end of each trial, after any component-owned @sim.collect methods
+        (so it can aggregate over component outputs)."""
         if self._collect is not None:
             raise ValueError("collect() already registered")
         if self._compiled is not None:
@@ -1031,6 +1041,15 @@ class Model:
         fn = self._lower_component_refs(fn)
         self._collect = fn
         return fn
+
+    @property
+    def _collects(self) -> list[Callable[..., Any]]:
+        """All end-of-trial collect functions in execution order:
+        component-owned collects first, the model-level one last."""
+        fns = list(self._component_collects)
+        if self._collect is not None:
+            fns.append(self._collect)
+        return fns
 
     def _register_name(self, name: str, kind: str) -> None:
         _check_name(name, kind)
@@ -1209,16 +1228,17 @@ class Model:
                        for _n, fn, field in self._predicates}
         event_cfuncs = {field: make_event(njit(fn), takes_data)
                         for _n, fn, field, takes_data in self._events}
-        collect_inner = njit(self._collect) if self._collect else None
-        return proc_cfuncs, pred_cfuncs, event_cfuncs, collect_inner
+        collect_inners = [njit(fn) for fn in self._collects]
+        return proc_cfuncs, pred_cfuncs, event_cfuncs, collect_inners
 
     def _codegen_namespace(self, proc_cfuncs: dict[str, Any],
-                           collect_inner: Any) -> dict[str, Any]:
+                           collect_inners: Sequence[Any]) -> dict[str, Any]:
         """Globals for the generated trial source: the extern bindings,
         interned entity/process name strings, and process cfunc addresses."""
         ns = dict(_EXTERN_FUNCS)
-        ns.update(carray=carray, addressof=addressof, np=np,
-                  COLLECT=collect_inner, CAP=_UNBOUNDED)
+        ns.update(carray=carray, addressof=addressof, np=np, CAP=_UNBOUNDED)
+        for i, inner in enumerate(collect_inners):
+            ns[f"COLLECT_{i}"] = inner
         for e in self._entities:
             for key, name in self._field_name_keys(e):
                 ns[key] = _b.cstring(name)
@@ -1372,8 +1392,7 @@ class Model:
                         "    process_start(p)",
                         f"    {self._handle_expr(p, i)} = p"]
         src += ["    event_queue_execute()"]
-        if self._collect is not None:
-            src += ["    COLLECT(env)"]
+        src += [f"    COLLECT_{i}(env)" for i in range(len(self._collects))]
         for h in handles:
             src += [f"    process_terminate({h})",
                     f"    process_destroy({h})"]
@@ -1484,7 +1503,7 @@ class Model:
         trial_ptr = types.CPointer(rec)
         evt_sig = types.void(trial_ptr, types.intp)
 
-        proc_cfuncs, pred_cfuncs, event_cfuncs, collect_inner = \
+        proc_cfuncs, pred_cfuncs, event_cfuncs, collect_inners = \
             self._compile_callbacks(rec)
         spawn_descs = {
             p.name: np.array([proc_cfuncs[p.name].address,
@@ -1497,7 +1516,7 @@ class Model:
             for p in self._processes
             if p.spawnable and p.spawn_field is not None
         )
-        ns = self._codegen_namespace(proc_cfuncs, collect_inner)
+        ns = self._codegen_namespace(proc_cfuncs, collect_inners)
         self._source = self._trial_source(dtype)
         exec(compile(self._source, f"<cimba model '{self.name}'>", "exec"),
              ns)
@@ -1519,7 +1538,7 @@ class Model:
             "user_events": event_cfuncs,
             "spawns": spawn_descs,
             "spawn_assignments": spawn_assignments,
-            "collect": collect_inner,
+            "collect": collect_inners,
             "dtype": dtype,
         }
         return self._compiled

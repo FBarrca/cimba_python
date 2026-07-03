@@ -168,6 +168,23 @@ class Facility(sim.Component):
                     self.on_hand -= shipment
                     self.inventory_position -= shipment
 
+    @sim.collect
+    def facility_stats(self, env):
+        if self.is_source == 1:
+            self.avg_on_hand = 0.0
+            self.service_level = 1.0
+        else:
+            if self.on_hand_samples > 0:
+                self.avg_on_hand = self.on_hand_total / self.on_hand_samples
+            else:
+                self.avg_on_hand = self.on_hand
+
+            demand = self.total_demand + EPSILON
+            if env.backorder >= 0.5:
+                self.service_level = 1.0 - self.total_late_sales / demand
+            else:
+                self.service_level = self.total_shipped / demand
+
 
 class MultiEchelonInventory(sim.Model):
     backorder: sim.Param
@@ -213,32 +230,6 @@ def reclaim_shipments(env: MultiEchelonInventory):
     while True:
         handle = sim.store_take(env.completed_shipments)
         sim.despawn(handle)
-
-
-@model.collect
-def collect_stats(env: MultiEchelonInventory):
-    for node in range(NUM_NODES):
-        if node == SOURCE_NODE:
-            env.facilities[node].avg_on_hand = 0.0
-            env.facilities[node].service_level = 1.0
-        else:
-            count = env.facilities[node].on_hand_samples
-            if count > 0:
-                env.facilities[node].avg_on_hand = (
-                    env.facilities[node].on_hand_total / count
-                )
-            else:
-                env.facilities[node].avg_on_hand = env.facilities[node].on_hand
-
-            demand = env.facilities[node].total_demand + EPSILON
-            if env.backorder >= 0.5:
-                env.facilities[node].service_level = (
-                    1.0 - env.facilities[node].total_late_sales / demand
-                )
-            else:
-                env.facilities[node].service_level = (
-                    env.facilities[node].total_shipped / demand
-                )
 
 
 def load_data(

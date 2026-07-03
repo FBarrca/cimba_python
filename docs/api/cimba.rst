@@ -18,13 +18,16 @@ Model declarations:
 ``Output``, ``State``, ``FloatState``, ``Queue``, ``Resource``, ``Pool``,
 ``Store``, ``Dataset``, ``Condition``, ``Predicate``, ``Event``,
 ``Processes``, ``PQueues``, ``Spawnable``, ``Struct``, ``Trace``,
-``capacity()``, ``count()``, ``process()``.
+``capacity()``, ``count()``, ``process()``, ``collect()``.
 
 Components group related declarations and process methods. Methods decorated
 with top-level ``@sim.process`` are lowered into ordinary model processes at
 model construction, and model callbacks can read component fields with
 ``env.retailer.orders``. Component fields are exposed in experiments with
-flattened names such as ``retailer__orders``.
+flattened names such as ``retailer__orders``. Methods decorated with
+top-level ``@sim.collect`` run once per instance at the end of each trial,
+before the model-level ``@model.collect`` callback, typically assigning the
+component's ``sim.Output`` fields.
 
 Components may contain other components, and flattened names follow the same
 recursive convention, for example ``env.attraction.queues.line`` becomes

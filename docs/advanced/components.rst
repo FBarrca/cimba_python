@@ -31,6 +31,44 @@ constructed, Cimba Python lowers those methods into ordinary model processes.
 Inside the method, ``self.waiting`` and ``self.completed`` refer to the
 component-owned fields for this trial.
 
+Component-owned statistics
+--------------------------
+
+Components can also own their statistics collection. A method marked with
+top-level ``@sim.collect`` takes ``(self, env)`` and runs once per instance
+at the end of each trial, typically assigning the component's declared
+``sim.Output`` fields:
+
+.. code-block:: python
+
+   class Desk(sim.Component):
+       waiting: sim.Queue
+       avg_queue: sim.Output
+
+       @sim.process
+       def clerk(self, env):
+           while True:
+               sim.get(self.waiting, 1)
+               sim.hold(sim.exponential(env.mean_service))
+
+       @sim.collect
+       def desk_stats(self, env):
+           self.avg_queue = sim.mean_level(self.waiting)
+
+Every instance of a component collection runs its own collect, so per-desk
+outputs land in per-instance output slots. Component collects run before the
+model-level ``@model.collect`` callback, which can therefore aggregate over
+the component outputs:
+
+.. code-block:: python
+
+   @model.collect
+   def clinic_stats(env: Clinic):
+       env.worst_queue = env.desks[0].avg_queue
+       for i in range(1, 3):
+           if env.desks[i].avg_queue > env.worst_queue:
+               env.worst_queue = env.desks[i].avg_queue
+
 Nested components
 -----------------
 

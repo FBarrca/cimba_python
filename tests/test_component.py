@@ -133,6 +133,139 @@ def test_model_collect_can_use_component_field_namespace():
     assert exp["avg"][0] == 2.0
 
 
+def test_component_collect_assigns_own_outputs():
+    class Station(sim.Component):
+        avg: sim.Output
+        queue: sim.Queue
+
+        @sim.process
+        def feeder(self, env):
+            sim.put(self.queue, 2)
+            sim.suspend()
+
+        @sim.collect
+        def station_stats(self, env):
+            self.avg = sim.mean_level(self.queue)
+
+    class Network(sim.Model):
+        station: Station = Station()
+
+    model = Network()
+    (lowered,) = model._component_collects
+    assert "env.station__queue" in lowered.__cimba_source__
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
+                           seed=21)
+    assert exp.run() == 0
+    assert exp["station__avg"][0] == 2.0
+
+
+def test_component_collection_collects_run_per_instance_before_model():
+    class Desk(sim.Component):
+        served: sim.Output
+        waiting: sim.Queue
+
+        def __init__(self, amount: int):
+            self.amount = amount
+
+        @sim.process
+        def feeder(self, env):
+            sim.put(self.waiting, self.amount)
+            sim.suspend()
+
+        @sim.collect
+        def desk_stats(self, env):
+            self.served = sim.mean_level(self.waiting)
+
+    class Clinic(sim.Model):
+        total: sim.Output
+        desks: list[Desk] = [Desk(2), Desk(5)]
+
+    model = Clinic()
+
+    @model.collect
+    def clinic_stats(env: Clinic):
+        env.total = env.desks[0].served + env.desks[1].served
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
+                           seed=22)
+    assert exp.run() == 0
+    assert exp["desks__served"][0].tolist() == [2.0, 5.0]
+    assert exp["total"][0] == 7.0
+
+
+def test_nested_component_collect_runs():
+    class Inner(sim.Component):
+        done: sim.Output
+        count: sim.State
+
+        @sim.collect
+        def inner_stats(self, env):
+            self.done = self.count + 1.0
+
+    class Outer(sim.Component):
+        inner: Inner = Inner()
+
+        @sim.process
+        def actor(self, env):
+            self.inner.count = 4
+            sim.suspend()
+
+    class Network(sim.Model):
+        outer: Outer = Outer()
+
+    model = Network()
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
+                           seed=23)
+    assert exp.run() == 0
+    assert exp["outer__inner__done"][0] == 5.0
+
+
+def test_component_collect_declaration_errors_are_rejected():
+    with pytest.raises(ValueError, match="cannot be both"):
+        class CollectOverProcess(sim.Component):
+            @sim.collect
+            @sim.process
+            def stats(self, env):
+                pass
+
+    with pytest.raises(ValueError, match="cannot be both"):
+        class ProcessOverCollect(sim.Component):
+            @sim.process
+            @sim.collect
+            def stats(self, env):
+                pass
+
+    class BadSignature(sim.Component):
+        total: sim.Output
+
+        @sim.collect
+        def stats(self, env, idx):
+            self.total = idx
+
+    class BadSignatureModel(sim.Model):
+        bad: BadSignature = BadSignature()
+
+    with pytest.raises(ValueError, match=r"must take \(self, env\)"):
+        BadSignatureModel()
+
+    class CallsHelper(sim.Component):
+        total: sim.Output
+
+        def helper(self):
+            return 1.0
+
+        @sim.collect
+        def stats(self, env):
+            self.total = self.helper()
+
+    class CallsHelperModel(sim.Model):
+        station: CallsHelper = CallsHelper()
+
+    with pytest.raises(ValueError,
+                       match="collect cannot call self.helper"):
+        CallsHelperModel()
+
+
 def test_model_process_can_read_and_write_component_state_namespace():
     class Counter(sim.Component):
         count: sim.State

@@ -16,6 +16,7 @@ from ._declarations import (_MISSING, _check_name, _declarations_contain,
 
 _F = TypeVar("_F", bound=Callable[..., Any])
 _COMPONENT_PROCESS_ATTR = "__cimba_component_process__"
+_COMPONENT_COLLECT_ATTR = "__cimba_component_collect__"
 
 
 class Component:
@@ -24,6 +25,8 @@ class Component:
     Component instances are declared as defaults on a ``Model`` subclass. Their
     declared fields are flattened into the model's trial record, and methods
     decorated with :func:`process` are lowered into ordinary model processes.
+    Methods decorated with :func:`collect` run once per instance at the end of
+    each trial, before the model-level ``@model.collect`` callback.
     """
 
 
@@ -58,6 +61,10 @@ def process(fn=None, *, copies: int | str = 1, priority: int = 0):
         raise TypeError("copies must be an int or the name of an int constant")
 
     def decorate(f):
+        if getattr(f, _COMPONENT_COLLECT_ATTR, False):
+            raise ValueError(
+                f"'{f.__qualname__}' cannot be both a component process "
+                "and a component collect method")
         setattr(f, _COMPONENT_PROCESS_ATTR,
                 _ComponentProcessSpec(copies, priority))
         return f
@@ -65,6 +72,20 @@ def process(fn=None, *, copies: int | str = 1, priority: int = 0):
     if fn is None:
         return decorate
     return decorate(fn)
+
+
+def collect(fn: _F) -> _F:
+    """Mark a ``Component`` method as a statistics-collection method.
+
+    The method takes ``(self, env)`` and runs once at the end of each
+    trial, before the model-level ``@model.collect`` callback, typically
+    assigning the component's declared Output fields."""
+    if getattr(fn, _COMPONENT_PROCESS_ATTR, None) is not None:
+        raise ValueError(
+            f"'{fn.__qualname__}' cannot be both a component process "
+            "and a component collect method")
+    setattr(fn, _COMPONENT_COLLECT_ATTR, True)
+    return fn
 
 
 @dataclass(frozen=True)
@@ -586,6 +607,25 @@ def _component_process_methods(
     return [(name, fn, spec) for name, (fn, spec) in methods.items()]
 
 
+def _component_collect_methods(
+    cls: type[Component],
+) -> list[tuple[str, Callable[..., Any]]]:
+    methods: dict[str, Callable[..., Any]] = {}
+    for base in reversed(cls.__mro__):
+        if base in (object, Component):
+            continue
+        for name, value in vars(base).items():
+            if not getattr(value, _COMPONENT_COLLECT_ATTR, False):
+                methods.pop(name, None)
+                continue
+            if not callable(value):
+                raise TypeError(
+                    f"component collect '{cls.__name__}.{name}' is not "
+                    "callable")
+            methods[name] = value
+    return list(methods.items())
+
+
 def _primitive_constant(value: Any) -> bool:
     return type(value) in (bool, int, float)
 
@@ -979,12 +1019,14 @@ class _ComponentMethodLowerer(_ComponentPathLowerer):
         env_name: str,
         component_decl: _AnyComponentDecl,
         instance_index: int,
+        kind: str = "process",
     ):
         super().__init__(env_name=env_name)
         self.component_name = component_name
         self.receiver_name = receiver_name
         self.component_decl = component_decl
         self.instance_index = ast.Constant(instance_index)
+        self.kind = kind
 
     def _root_namespace_ref(self, node: ast.AST) -> _ComponentAccess | None:
         if isinstance(node, ast.Name) and node.id == self.receiver_name:
@@ -996,7 +1038,7 @@ class _ComponentMethodLowerer(_ComponentPathLowerer):
         return None
 
     def _callback_label(self) -> str:
-        return f"component '{self.component_name}' process"
+        return f"component '{self.component_name}' {self.kind}"
 
     def _raise_unknown_field(
         self,
@@ -1004,13 +1046,13 @@ class _ComponentMethodLowerer(_ComponentPathLowerer):
         field_name: str,
     ) -> None:
         raise ValueError(
-            f"component '{self.component_name}' process references "
+            f"component '{self.component_name}' {self.kind} references "
             f"unsupported {namespace.text}.{field_name}")
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
         if node.id == self.receiver_name:
             raise ValueError(
-                f"component '{self.component_name}' process cannot use "
+                f"component '{self.component_name}' {self.kind} cannot use "
                 "self directly inside compiled code")
         return node
 
@@ -1023,18 +1065,19 @@ def _closure_namespace(fn: Callable[..., Any]) -> dict[str, Any]:
     return namespace
 
 
-def _component_method_source(fn: Callable[..., Any]) -> ast.FunctionDef:
+def _component_method_source(fn: Callable[..., Any],
+                             kind: str = "process") -> ast.FunctionDef:
     try:
         source = inspect.getsource(fn)
     except (OSError, TypeError) as exc:
         raise ValueError(
-            f"component process '{fn.__qualname__}' needs inspectable source"
+            f"component {kind} '{fn.__qualname__}' needs inspectable source"
         ) from exc
     tree = ast.parse(textwrap.dedent(source))
     for node in tree.body:
         if isinstance(node, ast.FunctionDef):
             return node
-    raise ValueError(f"component process '{fn.__qualname__}' source does not "
+    raise ValueError(f"component {kind} '{fn.__qualname__}' source does not "
                      "contain a function definition")
 
 
@@ -1099,8 +1142,27 @@ def _lower_component_process(
         instance_index=instance_index,
     )
     lowered = lowerer.visit(node)
+    extra = ({"_CIMBA_STRUCT_VIEW": injected_struct}
+             if injected_struct is not None else None)
+    return _exec_lowered_method(
+        lowered, kind="process", component_name=component_name,
+        method_name=method_name, fn_name=process_name, method=method,
+        component_decl=component_decl, extra_namespace=extra)
+
+
+def _exec_lowered_method(
+    lowered: ast.AST,
+    *,
+    kind: str,
+    component_name: str,
+    method_name: str,
+    fn_name: str,
+    method: Callable[..., Any],
+    component_decl: _AnyComponentDecl,
+    extra_namespace: Mapping[str, Any] | None = None,
+) -> Callable[..., Any]:
     if not isinstance(lowered, ast.FunctionDef):
-        raise TypeError("component process lowering produced a non-function")
+        raise TypeError(f"component {kind} lowering produced a non-function")
     module = ast.Module(body=[lowered], type_ignores=[])
     ast.fix_missing_locations(module)
     source = ast.unparse(module) + "\n"
@@ -1113,15 +1175,55 @@ def _lower_component_process(
         filename,
     )
     namespace = _closure_namespace(method)
-    if injected_struct is not None:
-        namespace["_CIMBA_STRUCT_VIEW"] = injected_struct
+    if extra_namespace:
+        namespace.update(extra_namespace)
     namespace.update(_component_collection_namespace((component_decl,)))
     exec(compile(source, filename, "exec"), namespace)
-    generated = namespace[process_name]
+    generated = namespace[fn_name]
     generated.__module__ = method.__module__
-    generated.__qualname__ = process_name
+    generated.__qualname__ = fn_name
     generated.__cimba_source__ = source
     return generated
+
+
+def _lower_component_collect(
+    component_name: str,
+    component_decl: _AnyComponentDecl,
+    instance_index: int,
+    method_name: str,
+    method: Callable[..., Any],
+) -> Callable[..., Any]:
+    node = copy.deepcopy(_component_method_source(method, "collect"))
+    args = node.args
+    if (args.posonlyargs or args.vararg or args.kwonlyargs or args.kwarg
+            or args.defaults or args.kw_defaults or len(args.args) != 2):
+        raise ValueError(
+            f"component collect '{component_name}.{method_name}' must take "
+            "(self, env) without defaults")
+    receiver_name = args.args[0].arg
+    env_name = args.args[1].arg
+    fn_name = f"{component_name}__{method_name}"
+    node.name = fn_name
+    node.decorator_list = []
+    node.returns = None
+    node.type_comment = None
+    args.args = args.args[1:]
+    for arg in args.args:
+        arg.annotation = None
+        arg.type_comment = None
+
+    lowerer = _ComponentMethodLowerer(
+        component_name=component_name,
+        receiver_name=receiver_name,
+        env_name=env_name,
+        component_decl=component_decl,
+        instance_index=instance_index,
+        kind="collect",
+    )
+    return _exec_lowered_method(
+        lowerer.visit(node), kind="collect", component_name=component_name,
+        method_name=method_name, fn_name=fn_name, method=method,
+        component_decl=component_decl)
 
 
 class _ModelComponentRefLowerer(_ComponentPathLowerer):
