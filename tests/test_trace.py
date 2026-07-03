@@ -209,6 +209,58 @@ def test_bootstrap_factories_plug_into_experiment(replay_model):
     assert len(np.unique(a["total"])) == 3  # per-trial resamples differ
 
 
+def test_trace_rng_name_attribute_overrides_the_stream_tag(replay_model):
+    def gen(rng):
+        return rng.normal(10.0, 2.0, size=6)
+
+    gen.trace_rng_name = "shared-demand"
+    exp = run(replay_model, scale=1.0, demand=gen, replications=3, seed=71)
+    for i in range(3):
+        expected = gen(sim.trace_rng(exp["seed"][i], "shared-demand"))
+        assert np.isclose(exp["total"][i], expected.sum())
+
+
+def test_joint_traces_stay_correlated_through_experiment():
+    from cimba import bootstrap
+
+    class Pair(sim.Model):
+        demand_a: sim.Trace
+        demand_b: sim.Trace
+        total_a: sim.Output
+        total_b: sim.Output
+
+    model = Pair()
+
+    @model.process
+    def consume_a(env: Pair):
+        values = sim.Trace(env.demand_a)
+        total = 0.0
+        for x in values:
+            sim.hold(1.0)
+            total += x
+        env.total_a = total
+
+    @model.process
+    def consume_b(env: Pair):
+        values = sim.Trace(env.demand_b)
+        total = 0.0
+        for x in values:
+            sim.hold(1.0)
+            total += x
+        env.total_b = total
+
+    t = np.arange(60.0)
+    hist_a = np.sin(t / 3.0)
+    gens = bootstrap.joint({"demand_a": hist_a, "demand_b": -hist_a},
+                           length=30, name="pair", mean_block=6)
+    exp = model.experiment(**gens, replications=4, duration=100.0,
+                           warmup=0.0, seed=81)
+    assert exp.run() == 0
+    # Identical per-trial block draws: the mirrored series stays mirrored
+    assert np.allclose(exp["total_a"], -exp["total_b"])
+    assert len(np.unique(exp["total_a"])) == 4  # trials still differ
+
+
 def test_callable_trace_must_return_1d(replay_model):
     with pytest.raises(ValueError, match="must return a 1-D array"):
         replay_model.experiment(scale=1.0, replications=2,

@@ -24,6 +24,7 @@ dependencies = [
     "cffi>=1.15",
     "numpy>=1.20",
     "numba>=0.57",
+    "statsmodels>=0.14",
 ]
 
 [project.optional-dependencies]

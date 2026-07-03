@@ -118,9 +118,29 @@ closure to pass directly as a trace field value::
    demand = bootstrap.stationary(history, length=horizon, mean_block=7)
    exp = model.experiment(demand=demand, replications=200, seed=42)
 
-Block methods assume stationarity; decompose trend/seasonality first and
-bootstrap the residuals. Size ``length`` to cover warmup + duration +
-cooldown.
+For trending, seasonal, or autoregressive data there are three model-based
+factories that fit the structure internally from the raw series:
+``residual(data, length, trend=1, period=None, mean_block=None)`` (polynomial
+trend or, with a ``period``, STL decomposition; residuals resampled i.i.d. or
+stationary-block), ``wild(data, length=None, trend=1, period=None,
+weights="rademacher")`` (heteroskedastic residuals, weighted in place), and
+``sieve(data, length, order=None)`` (AR(p) with AIC order selection and
+Yule--Walker coefficients, simulated forward with resampled innovations).
+``trend`` and ``period`` also accept ``"auto"``; all three take
+``nonnegative=True`` (clip at zero, for demand data) and ``start`` (evaluate
+the structure on ``start..start+length-1``, e.g. ``start=len(data)`` for the
+horizon after the history).
+
+For supply-chain demand there are two more:
+``intermittent(data, length, jitter=False)`` (zero-inflated series:
+Markov-chain occurrence plus resampled nonzero sizes) and
+``joint(panel, length, name=..., mean_block=...)`` (a mapping of field name to
+series, resampled with shared block draws so cross-correlation survives;
+the returned generators carry a ``trace_rng_name`` attribute, which
+``experiment()`` uses instead of the field name when deriving each trial's
+generator -- callables sharing the tag receive identical rngs).
+
+Size ``length`` to cover warmup + duration + cooldown.
 
 Inside a process body, ``values = sim.Trace(env.demand)`` returns the
 trial's trace as a ``float64`` NumPy view supporting ``len()``, indexing,

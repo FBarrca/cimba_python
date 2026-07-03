@@ -262,7 +262,12 @@ def trace_rng(trial_seed: int, field_name: str) -> np.random.Generator:
     experiment seed reproduces both the simulation streams and the
     generated traces, each trace field draws an independent stream, and
     any trial's trace can be regenerated post-hoc from its recorded
-    ``exp["seed"]``."""
+    ``exp["seed"]``.
+
+    A callable with a ``trace_rng_name`` attribute uses that string
+    instead of its field name -- callables sharing the tag receive
+    identical per-trial generators, which lets one joint resample drive
+    several trace fields with preserved cross-correlation."""
     tag = int.from_bytes(
         hashlib.sha256(field_name.encode()).digest()[:8], "little")
     return np.random.default_rng([int(trial_seed), tag])
@@ -280,8 +285,9 @@ def _generate_trace_rows(fn: Callable[..., ArrayLike], seeds: np.ndarray,
     except (TypeError, ValueError):
         wants_index = False
     rows: list[np.ndarray] = []
+    tag = getattr(fn, "trace_rng_name", None) or name
     for i, s in enumerate(seeds):
-        rng = trace_rng(int(s), name)
+        rng = trace_rng(int(s), tag)
         out = fn(rng, i) if wants_index else fn(rng)
         row = np.ascontiguousarray(out, dtype=np.float64)
         if row.ndim != 1:
@@ -1371,7 +1377,9 @@ class Model:
         ``f(rng, trial_index)`` returning a 1-D array; it is invoked once
         per trial with ``trace_rng(trial_seed, field_name)``, a numpy
         Generator derived from that trial's own seed, so the experiment
-        ``seed`` reproduces the generated traces too."""
+        ``seed`` reproduces the generated traces too. A callable's
+        ``trace_rng_name`` attribute overrides the field name in that
+        derivation (see ``trace_rng``)."""
         compiled = self._compile()
 
         missing = set(self.params) - set(param_values)

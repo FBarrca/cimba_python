@@ -97,6 +97,16 @@ callable generators that resample it instead of assuming a distribution:
 * ``stationary(data, length, mean_block)`` -- blocks with random geometric
   lengths, so the resampled series has no fixed seams. A good default for
   autocorrelated series such as demand histories.
+* ``residual(data, length, trend=..., period=...)``, ``wild(data, ...)``, and
+  ``sieve(data, length, order=...)`` -- for trending, seasonal, or
+  autoregressive data: fit the structure internally, bootstrap what remains,
+  and add the structure back. ``nonnegative=True`` clips at zero;
+  ``start=len(data)`` simulates the horizon after the history.
+* ``intermittent(data, length)`` -- zero-inflated series (spare parts):
+  Markov-chain demand occurrence plus resampled nonzero sizes.
+* ``joint(panel, length, name=..., mean_block=...)`` -- several correlated
+  series resampled with one set of block draws, preserving their
+  cross-correlation across separate trace fields.
 
 Each factory validates its arguments up front and returns an ordinary
 ``f(rng)`` closure, so it plugs directly into a trace field -- or composes

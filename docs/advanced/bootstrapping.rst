@@ -65,27 +65,37 @@ Trend and seasonality: residual and model-based bootstraps
 ----------------------------------------------------------
 
 For non-stationary data, fit the structure and bootstrap the residuals: model
-the trend and seasonality (a seasonal decomposition, a regression, an AR
-model), resample the residuals -- i.i.d. or block, depending on what
-dependence remains in them -- and add them back onto the fitted structure.
-Because the fit happens in ordinary Python, this composes directly with the
-``cimba.bootstrap`` factories:
+the trend and seasonality, resample the residuals -- i.i.d. or block,
+depending on what dependence remains in them -- and add them back onto the
+fitted structure. ``cimba.bootstrap`` provides this family directly; the
+factories take the raw series and fit the structure internally:
+
+* ``residual(data, length, trend=1, period=None, mean_block=None)`` -- the
+  general residual bootstrap. ``trend`` is a polynomial degree; giving a
+  ``period`` switches to a robust STL decomposition whose seasonal component
+  tiles beyond the data and whose trend extrapolates linearly. Residuals are
+  resampled i.i.d., or with the stationary bootstrap when ``mean_block`` is
+  given.
+* ``wild(data, trend=1, period=None, weights="rademacher")`` -- the **wild
+  bootstrap** for heteroskedastic residuals (variance that changes over
+  time): each residual stays at its own time position and is multiplied by a
+  random weight (``"rademacher"``, ``"mammen"``, or ``"normal"``) instead of
+  being permuted.
+* ``sieve(data, length, order=None)`` -- the **sieve bootstrap**: fits an
+  AR(p) (order selected by AIC, coefficients by Yule--Walker so the simulated
+  process is always stationary), resamples its innovations, and simulates the
+  series forward.
 
 .. code-block:: python
 
-   # Outside cimba: e.g. statsmodels seasonal decomposition
-   structure = trend[:horizon] + seasonal[:horizon]
-   resampler = bootstrap.stationary(residuals, length=horizon, mean_block=7)
+   demand = bootstrap.residual(history, length=horizon, period=7,
+                               mean_block=14)
+   exp = model.experiment(demand=demand, replications=200, seed=42)
 
-
-   def demand_generator(rng):
-       return structure + resampler(rng)
-
-Two named members of this family are worth knowing. The **sieve bootstrap**
-fits an AR(p) model with order growing with the sample size, resamples its
-innovations, and simulates the series forward. The **wild bootstrap** handles
-heteroskedastic residuals (variance that changes over time) by multiplying
-each residual in place by a random weight instead of permuting them.
+``trend`` and ``period`` also accept ``"auto"`` (AICc degree selection and
+periodogram-based period detection). Detection is deterministic in the data,
+so seed reproducibility is unaffected -- but it is data-dependent, so pin the
+values when you know them.
 
 State-dependent dynamics: Markov bootstraps
 -------------------------------------------
@@ -117,6 +127,55 @@ as extremes and maxima), the **maximum entropy bootstrap** (non-stationary
 series without differencing), and **phase scrambling** (preserves the power
 spectrum exactly; more common in physics than in operations research). All of
 them fit the same ``f(rng)`` shape if implemented by hand.
+
+Demand data in supply chains
+----------------------------
+
+Four hazards come up so often with demand data that they have dedicated
+support; the fifth is a data problem no resampler can fix.
+
+**Intermittent demand.** Spare parts and slow movers -- long runs of zeros
+with occasional spikes -- break STL and AR fitting, and residual resampling
+destroys the zero structure. ``intermittent(data, length)`` follows Willemain
+et al.: demand *occurrence* is a two-state Markov chain fitted to the
+zero/nonzero pattern (preserving the clustering of demand periods), and each
+occurrence draws a *size* from the observed nonzero values. ``jitter=True``
+perturbs drawn sizes so values absent from the history can occur.
+
+**Correlated SKUs.** Trace fields deliberately draw independent streams, so
+bootstrapping two demand fields separately destroys their cross-correlation --
+exactly what stresses shared capacity in a multi-echelon model.
+``joint`` resamples a panel of series with *one* set of block choices:
+
+.. code-block:: python
+
+   gens = bootstrap.joint({"demand_a": hist_a, "demand_b": hist_b},
+                          length=400, name="demand", mean_block=7)
+   exp = model.experiment(**gens, replications=200, seed=42)
+
+Every generator carries ``trace_rng_name = "joint:demand"``, which overrides
+the field name in the per-trial rng derivation -- all members receive
+identical generators, hence identical block draws, and the historical
+cross-correlation survives. Rebuild any trial's draw with
+``sim.trace_rng(trial_seed, "joint:demand")``.
+
+**Negative values.** The model-based factories add continuous residuals onto
+a fitted structure, so low-volume demand (or an extrapolated downward trend)
+can go negative -- and a simulation consuming the trace will not complain.
+``nonnegative=True`` on ``residual``, ``wild``, and ``sieve`` clips at zero;
+the block methods never need it, since they only replay observed values.
+
+**Future horizons.** By default the fitted structure replays the historical
+window (right for input-uncertainty studies). ``start=len(history)`` shifts
+the structure window to the horizon *after* the data -- trend extrapolated,
+seasonal phase aligned -- for "simulate next year under this trend" studies.
+
+**Stockout censoring.** Sales history records demand *censored by
+availability*: every stockout hides the demand that went unserved.
+Bootstrapping sales reproduces that censoring, so the simulation
+systematically under-stresses the policy being evaluated. No resampler fixes
+this -- uncensor upstream (e.g. estimate lost sales from stockout periods) or
+read the results as lower bounds on required inventory.
 
 Input uncertainty versus stochastic uncertainty
 -----------------------------------------------
