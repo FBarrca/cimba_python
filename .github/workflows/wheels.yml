@@ -43,14 +43,14 @@ jobs:
             --config-setting=setup-args=-Dcimba_debug_logs=true
 
       - name: Upload release wheel
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cimba-release-wheel
           path: wheelhouse/release/*.whl
           if-no-files-found: error
 
       - name: Upload debug-log wheel
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cimba-debug-log-wheel
           path: wheelhouse/debug/*.whl
