@@ -68,7 +68,8 @@ shared by all trials, a 2-D array with one row per trial, a list of
 once per trial with a numpy Generator derived from that trial's own
 seed (``sim.trace_rng(trial_seed, field_name)``), so the experiment
 ``seed`` also reproduces generated traces (bootstrap resamples, fitted
-models). Callables run serially before the parallel trial run; for
+models); ``cimba.bootstrap`` provides ready-made iid/block/stationary
+resamplers. Callables run serially before the parallel trial run; for
 expensive generators, ``model.trial_seeds()`` exposes the same per-trial
 seeds so rows can be generated in parallel outside cimba and passed in
 precomputed. Inside a process body, ``values = sim.Trace(env.<field>)``

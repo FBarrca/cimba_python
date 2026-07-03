@@ -197,6 +197,18 @@ def test_callable_default_args_do_not_receive_the_trial_index(replay_model):
     assert np.allclose(exp["length"], 4.0)
 
 
+def test_bootstrap_factories_plug_into_experiment(replay_model):
+    from cimba import bootstrap
+
+    history = np.sin(np.arange(30.0))
+    gen = bootstrap.stationary(history, length=8, mean_block=5)
+    a = run(replay_model, scale=1.0, demand=gen, replications=3, seed=61)
+    b = run(replay_model, scale=1.0, demand=gen, replications=3, seed=61)
+    assert np.array_equal(a["total"], b["total"])
+    assert np.allclose(a["length"], 8.0)
+    assert len(np.unique(a["total"])) == 3  # per-trial resamples differ
+
+
 def test_callable_trace_must_return_1d(replay_model):
     with pytest.raises(ValueError, match="must return a 1-D array"):
         replay_model.experiment(scale=1.0, replications=2,

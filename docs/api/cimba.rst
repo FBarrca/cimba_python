@@ -105,6 +105,23 @@ bit-identical results::
    exp = model.experiment(scale=[1.0, 2.0], demand=rows,
                           replications=100, seed=42)
 
+``cimba.bootstrap`` provides ready-made trace generators that resample an
+observed series: ``iid(data, length)`` for serially independent data,
+``moving_block(data, length, block)`` and ``circular_block(data, length,
+block)`` for stationary dependent series, and ``stationary(data, length,
+mean_block)`` (random geometric block lengths -- a good default for
+autocorrelated data such as demand histories). Each returns an ``f(rng)``
+closure to pass directly as a trace field value::
+
+   from cimba import bootstrap
+
+   demand = bootstrap.stationary(history, length=horizon, mean_block=7)
+   exp = model.experiment(demand=demand, replications=200, seed=42)
+
+Block methods assume stationarity; decompose trend/seasonality first and
+bootstrap the residuals. Size ``length`` to cover warmup + duration +
+cooldown.
+
 Inside a process body, ``values = sim.Trace(env.demand)`` returns the
 trial's trace as a ``float64`` NumPy view supporting ``len()``, indexing,
 slicing, and iteration; treat it as read-only. A generator that exhausts its

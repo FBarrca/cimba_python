@@ -49,6 +49,7 @@ py.install_sources(
     'src/cimba/_graph.py',
     'src/cimba/_intrinsics.py',
     'src/cimba/_model.py',
+    'src/cimba/bootstrap.py',
     'src/cimba/cimba.py',
     'src/cimba/cmb_buffer.py',
     'src/cimba/cmb_condition.py',

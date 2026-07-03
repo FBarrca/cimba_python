@@ -77,6 +77,58 @@ The callable receives a NumPy generator derived from the trial seed and the
 trace field name. Passing the same experiment seed reproduces both simulation
 streams and generated traces.
 
+A callable with two required positional parameters also receives the trial
+index -- ``def generator(rng, trial)`` -- for traces that depend on the
+trial's position in the design (trial order is design-point-major with
+replications innermost). Parameters with defaults do not opt in.
+
+Bootstrap resampling
+--------------------
+
+When observed data is available, ``cimba.bootstrap`` provides ready-made
+callable generators that resample it instead of assuming a distribution:
+
+* ``iid(data, length)`` -- resamples single observations; only for serially
+  independent data, since it destroys autocorrelation.
+* ``moving_block(data, length, block)`` and
+  ``circular_block(data, length, block)`` -- resample fixed-length contiguous
+  blocks, preserving within-block dependence; the circular variant wraps past
+  the end of the series so edge observations are not underweighted.
+* ``stationary(data, length, mean_block)`` -- blocks with random geometric
+  lengths, so the resampled series has no fixed seams. A good default for
+  autocorrelated series such as demand histories.
+
+Each factory validates its arguments up front and returns an ordinary
+``f(rng)`` closure, so it plugs directly into a trace field -- or composes
+with your own code. Here the clinic resamples observed appointment gaps and
+accumulates them into arrival times:
+
+.. code-block:: python
+
+   from cimba import bootstrap
+
+   gap_resampler = bootstrap.stationary(observed_gaps, length=64, mean_block=8)
+
+
+   def appointment_generator(rng):
+       return gap_resampler(rng).cumsum()
+
+
+   exp = model.experiment(
+       appointments=appointment_generator,
+       replications=200,
+       duration=12.0,
+       warmup=0.0,
+       seed=42,
+   )
+
+Because these are plain callables, everything on this page applies: one
+experiment seed reproduces every resample, ``sim.trace_rng`` rebuilds any
+trial's trajectory, and ``model.trial_seeds`` supports precomputing rows in
+parallel. For the full landscape of methods -- when block bootstraps apply,
+handling trend and seasonality, block-length selection, and methods worth
+writing by hand -- see :doc:`bootstrapping`.
+
 Rebuilding or precomputing traces
 ---------------------------------
 
