@@ -121,6 +121,49 @@ The collection length is fixed by the model class. This is a good fit for
 known departments, stations, gates, or desks. If the number of active entities
 changes during a trial, use dynamic processes instead.
 
+Wiring components together
+--------------------------
+
+Routing between components can be declared where the components are declared.
+Accessing a declared ``Queue``/``Resource``/``Pool``/``Store``/``Condition``
+field on a component instance yields a wiring reference; passing it as another
+instance's same-kind field value makes both fields name the same entity:
+
+.. code-block:: python
+
+   class Station(sim.Component):
+       inbox: sim.Store
+       outbox: sim.Store
+
+       def __init__(self, mean_time: float, *, inbox=None):
+           self.mean_time = mean_time
+           if inbox is not None:
+               self.inbox = inbox
+
+       @sim.process
+       def server(self, env):
+           while True:
+               item = sim.store_take(self.inbox)
+               sim.hold(sim.exponential(self.mean_time))
+               sim.store_put(self.outbox, item)
+
+
+   class AssemblyLine(sim.Model):
+       station_1: Station = Station(5.0)
+       station_2: Station = Station(7.0, inbox=station_1.outbox)
+       station_3: Station = Station(4.0, inbox=station_2.outbox)
+
+Here ``station_2.inbox`` is an alias for ``station_1.outbox``: only one store
+is created, ``station_1``'s server feeds it, and ``station_2``'s server takes
+from it, so parts flow down the line without hand-written routing processes.
+Unwired fields (the first inbox, the last outbox) stay ordinary stores that
+model-level processes can feed and drain.
+
+Wiring targets must be declared on the model before the component that
+references them, both fields must have the same kind, and wired fields do not
+appear in the trial table (use the target's flattened name, e.g.
+``station_1__outbox``). Component collections cannot be wired yet.
+
 Flattened outputs and trial data
 --------------------------------
 

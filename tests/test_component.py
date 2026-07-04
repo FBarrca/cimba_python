@@ -1578,3 +1578,152 @@ def test_component_collection_namespace_errors_are_rejected():
         def unsupported_actor(env: Network):
             env.items[0].count = env.items[0].values[0]
             sim.suspend()
+
+class Stage(sim.Component):
+    seen: sim.State
+    inbox: sim.Store
+    outbox: sim.Store
+
+    def __init__(self, inbox=None):
+        if inbox is not None:
+            self.inbox = inbox
+
+    @sim.process
+    def worker(self, env):
+        while True:
+            item = sim.store_take(self.inbox)
+            self.seen += 1
+            sim.store_put(self.outbox, item)
+
+
+def test_component_store_wiring_shares_entity_and_runs():
+    class Line(sim.Model):
+        done: sim.Output
+        first: Stage = Stage()
+        second: Stage = Stage(inbox=first.outbox)
+
+    model = Line()
+    assert model.stores == {"first__inbox": None, "first__outbox": None,
+                            "second__outbox": None}
+    assert "second__inbox" not in model.dtype.fields
+    second_decl = next(decl for decl in model._component_decls
+                       if decl.name == "second")
+    assert second_decl.direct_field_map["inbox"] == "first__outbox"
+    assert second_decl.aliased_fields == ("inbox",)
+
+    @model.process
+    def feed(env: Line):
+        sim.store_put(env.first.inbox, 7)
+
+    @model.process
+    def drain(env: Line):
+        env.done = float(sim.store_take(env.second.outbox))
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=3)
+    assert exp.run() == 0
+    assert exp["done"][0] == 7.0
+    assert exp.trials["first__seen"][0] == 1
+    assert exp.trials["second__seen"][0] == 1
+
+
+def test_component_store_wiring_dag_keeps_entity_in_owner_block():
+    class Line(sim.Model):
+        first: Stage = Stage()
+        second: Stage = Stage(inbox=first.outbox)
+
+    graph = Line().process_dag()
+    blocks = {block.name: block.members for block in graph.blocks}
+    assert "store:first__outbox" in blocks["first"]
+    assert "store:first__outbox" not in blocks["second"]
+    assert "store:second__inbox" not in blocks["second"]
+    edges = {(edge.source, edge.target, edge.label) for edge in graph.edges}
+    assert ("store:first__outbox", "process:second__worker",
+            "store_take") in edges
+
+
+def test_component_resource_wiring_shares_resource():
+    class Machinist(sim.Component):
+        done: sim.Output
+        machine: sim.Resource
+
+        def __init__(self, machine=None):
+            if machine is not None:
+                self.machine = machine
+
+        @sim.process
+        def run(self, env):
+            sim.acquire(self.machine)
+            sim.hold(1.0)
+            sim.release(self.machine)
+            self.done = sim.now()
+
+    class Shop(sim.Model):
+        a: Machinist = Machinist()
+        b: Machinist = Machinist(machine=a.machine)
+
+    model = Shop()
+    assert model.resources == ["a__machine"]
+    exp = model.experiment(replications=1, duration=5.0, warmup=0.0, seed=3)
+    assert exp.run() == 0
+    assert {exp["a__done"][0], exp["b__done"][0]} == {1.0, 2.0}
+
+
+def test_component_wiring_declaration_errors_are_rejected():
+    class Mixed(sim.Component):
+        inbox: sim.Store
+        gate: sim.Resource
+
+        def __init__(self, inbox=None):
+            if inbox is not None:
+                self.inbox = inbox
+
+    with pytest.raises(ValueError, match="field kinds must match"):
+        class KindMismatch(sim.Model):
+            a: Mixed = Mixed()
+            b: Mixed = Mixed(inbox=a.gate)
+
+        KindMismatch()
+
+    stray = Stage()
+    with pytest.raises(ValueError, match="not declared on the model"):
+        class ForwardRef(sim.Model):
+            a: Stage = Stage(inbox=stray.outbox)
+            b: Stage = stray
+
+        ForwardRef()
+
+    with pytest.raises(ValueError,
+                       match="not supported for collections"):
+        class WiredCollection(sim.Model):
+            first: Stage = Stage()
+            items: list[Stage] = [Stage(inbox=first.outbox), Stage()]
+
+        WiredCollection()
+
+    with pytest.raises(ValueError, match="collection item"):
+        class WiredToCollection(sim.Model):
+            items: list[Stage] = [Stage(), Stage()]
+            a: Stage = Stage(inbox=items[0].outbox)
+
+        WiredToCollection()
+
+    shared = Stage()
+    with pytest.raises(ValueError, match="ambiguous"):
+        class Ambiguous(sim.Model):
+            a: Stage = shared
+            b: Stage = shared
+            c: Stage = Stage(inbox=shared.outbox)
+
+        Ambiguous()
+
+
+def test_component_field_access_outside_model_returns_wiring_ref():
+    stage = Stage()
+    ref = stage.outbox
+    assert ref.instance is stage
+    assert ref.field == "outbox"
+    assert ref.kind == "store"
+    with pytest.raises(AttributeError):
+        stage.seen  # Output fields are not wirable
+    with pytest.raises(AttributeError):
+        stage.missing

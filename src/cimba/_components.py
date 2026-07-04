@@ -11,12 +11,33 @@ from typing import Any, TypeVar, get_args, get_origin, get_type_hints, overload
 
 import numpy as np
 
-from ._declarations import (_MISSING, _check_name, _declarations_contain,
-                            _field_declarations)
+from ._declarations import (_DECL_KINDS, _MISSING, _check_name,
+                            _declarations_contain, _field_declarations)
 
 _F = TypeVar("_F", bound=Callable[..., Any])
 _COMPONENT_PROCESS_ATTR = "__cimba_component_process__"
 _COMPONENT_COLLECT_ATTR = "__cimba_component_collect__"
+
+#: Entity-field kinds whose declaration may be wired to another component
+#: instance's same-kind field instead of creating a new entity.
+_WIRABLE_FIELD_KINDS = ("queue", "resource", "pool", "store", "condition")
+
+_entity_field_kinds_cache: dict[type, dict[str, str]] = {}
+
+
+def _entity_field_kinds(cls: type) -> dict[str, str]:
+    kinds = _entity_field_kinds_cache.get(cls)
+    if kinds is None:
+        kinds = {}
+        for fname, hint in get_type_hints(cls).items():
+            try:
+                kind = _DECL_KINDS.get(hint)
+            except TypeError:
+                kind = None
+            if kind in _WIRABLE_FIELD_KINDS:
+                kinds[fname] = kind
+        _entity_field_kinds_cache[cls] = kinds
+    return kinds
 
 
 class Component:
@@ -27,7 +48,102 @@ class Component:
     decorated with :func:`process` are lowered into ordinary model processes.
     Methods decorated with :func:`collect` run once per instance at the end of
     each trial, before the model-level ``@model.collect`` callback.
+
+    Accessing a declared Queue/Resource/Pool/Store/Condition field on an
+    instance yields a wiring reference: passing it as another instance's
+    same-kind field value makes both fields name the same entity, e.g.
+    ``Station(..., inbox=station_1.outbox)``.
     """
+
+    def __getattr__(self, name: str) -> "_FieldRef":
+        if name.startswith("_"):
+            raise AttributeError(name)
+        kind = _entity_field_kinds(type(self)).get(name)
+        if kind is None:
+            raise AttributeError(
+                f"'{type(self).__name__}' object has no attribute '{name}'")
+        return _FieldRef(self, name, kind)
+
+
+@dataclass(frozen=True)
+class _FieldRef:
+    """Authoring-time reference to a component instance's entity field,
+    produced by accessing a declared wirable field on the instance."""
+
+    instance: Component
+    field: str
+    kind: str
+
+
+_AMBIGUOUS_WIRING_TARGET: Any = object()
+_COLLECTION_WIRING_TARGET: Any = object()
+
+
+def _component_field_wiring(
+    component_name: str,
+    templates: Sequence[Component],
+    decls: Mapping[str, Any],
+) -> dict[str, "_FieldRef"]:
+    """Collect declared entity fields overridden with a wiring reference."""
+    wiring: dict[str, _FieldRef] = {}
+    for kind in _WIRABLE_FIELD_KINDS:
+        for fname in decls[kind]:
+            refs = [vars(template).get(fname) for template in templates]
+            if not any(isinstance(ref, _FieldRef) for ref in refs):
+                continue
+            if len(templates) > 1:
+                raise ValueError(
+                    f"component collection '{component_name}' field "
+                    f"'{fname}' cannot be wired to another component's "
+                    "field; wiring is not supported for collections yet")
+            ref = refs[0]
+            if ref.kind != kind:
+                raise ValueError(
+                    f"component '{component_name}' {kind} field '{fname}' "
+                    f"cannot be wired to {ref.kind} field '{ref.field}'; "
+                    "the field kinds must match")
+            wiring[fname] = ref
+    return wiring
+
+
+def _register_wiring_targets(
+    registry: dict[int, Any],
+    templates: Sequence[Component],
+    direct_field_map: dict[str, str],
+) -> None:
+    single = len(templates) == 1
+    for template in templates:
+        template_id = id(template)
+        if template_id in registry:
+            registry[template_id] = _AMBIGUOUS_WIRING_TARGET
+        elif single:
+            registry[template_id] = direct_field_map
+        else:
+            registry[template_id] = _COLLECTION_WIRING_TARGET
+
+
+def _resolve_wiring_target(
+    component_name: str,
+    fname: str,
+    ref: "_FieldRef",
+    registry: Mapping[int, Any],
+) -> str:
+    target = registry.get(id(ref.instance))
+    if target is None:
+        raise ValueError(
+            f"component '{component_name}' field '{fname}' is wired to a "
+            f"{type(ref.instance).__name__} instance that is not declared "
+            "on the model before it; declare the wiring target first")
+    if target is _COLLECTION_WIRING_TARGET:
+        raise ValueError(
+            f"component '{component_name}' field '{fname}' is wired to a "
+            "component collection item, which is not supported yet")
+    if target is _AMBIGUOUS_WIRING_TARGET:
+        raise ValueError(
+            f"component '{component_name}' field '{fname}' is wired to a "
+            "component instance that is the default of more than one "
+            "model field; the wiring target is ambiguous")
+    return target[ref.field]
 
 
 def _is_component_class(obj: Any) -> bool:
@@ -106,6 +222,7 @@ class _ComponentDecl:
     pqueue_offsets: dict[str, tuple[int, ...]] = field(default_factory=dict)
     process_counts: dict[str, tuple[int, ...]] = field(default_factory=dict)
     process_offsets: dict[str, tuple[int, ...]] = field(default_factory=dict)
+    aliased_fields: tuple[str, ...] = ()
     children: tuple["_AnyComponentDecl", ...] = ()
 
 
@@ -127,6 +244,7 @@ class _ComponentCollectionDecl:
     display_name: str = ""
     item_display_name: str = ""
     direct_field_map: dict[str, str] = field(default_factory=dict)
+    aliased_fields: tuple[str, ...] = ()
     parent_offsets: tuple[int, ...] = ()
     parent_lengths: tuple[int, ...] = ()
     children: tuple["_AnyComponentDecl", ...] = ()
@@ -299,8 +417,11 @@ def _flatten_component_declarations(
     instance_count: int,
     pqueue_counts: Mapping[str, tuple[int, ...]],
     process_counts: Mapping[str, tuple[int, ...]],
+    aliased: frozenset[str] = frozenset(),
 ) -> None:
-    for flat_name in field_map.values():
+    for name, flat_name in field_map.items():
+        if name in aliased:
+            continue
         if _declarations_contain(target, flat_name):
             raise ValueError(f"duplicate field name '{flat_name}'")
     target["param"].extend(field_map[name] for name in decls["param"])
@@ -312,12 +433,15 @@ def _flatten_component_declarations(
             target["field_shapes"][field_map[name]] = (instance_count,)
     for kind in ("output", "state", "fstate", "resource", "dataset",
                  "condition", "spawnable"):
-        target[kind].extend(field_map[name] for name in decls[kind])
+        target[kind].extend(field_map[name] for name in decls[kind]
+                            if name not in aliased)
         if instance_count > 1:
             for name in decls[kind]:
                 target["field_shapes"][field_map[name]] = (instance_count,)
     for kind in ("queue", "pool", "store"):
         for name, cap in decls[kind].items():
+            if name in aliased:
+                continue
             target[kind][field_map[name]] = _rewrite_component_capacity(
                 component_name, name, cap, decls, field_map)
             if instance_count > 1:
@@ -397,6 +521,7 @@ def _build_component_declaration(
     item_display_name: str,
     target: dict[str, Any],
     collection: bool,
+    wiring_registry: dict[int, Any],
     parent_offsets: tuple[int, ...] = (),
     parent_lengths: tuple[int, ...] = (),
 ) -> _AnyComponentDecl:
@@ -405,6 +530,11 @@ def _build_component_declaration(
     instance_count = len(templates)
     _validate_component_instance_declarations(
         name, decls, instance_count=instance_count, collection=collection)
+    wiring = _component_field_wiring(name, templates, decls)
+    _register_wiring_targets(wiring_registry, templates, direct_field_map)
+    for fname, ref in wiring.items():
+        direct_field_map[fname] = _resolve_wiring_target(
+            name, fname, ref, wiring_registry)
     constants = _component_constants(templates, direct_field_map)
     pqueue_counts, pqueue_offsets = _resolve_component_pqueues(
         name, instance_count, decls, constants)
@@ -412,7 +542,7 @@ def _build_component_declaration(
         name, cls, templates, decls)
     _flatten_component_declarations(
         target, name, decls, direct_field_map, instance_count, pqueue_counts,
-        process_counts)
+        process_counts, aliased=frozenset(wiring))
 
     children: list[_AnyComponentDecl] = []
     for fname, hint in get_type_hints(cls).items():
@@ -435,6 +565,7 @@ def _build_component_declaration(
                     item_display_name=f"{item_display_name}.{fname}",
                     target=target,
                     collection=False,
+                    wiring_registry=wiring_registry,
                 )
             )
             continue
@@ -469,6 +600,7 @@ def _build_component_declaration(
                 item_display_name=f"{child_display}[]",
                 target=target,
                 collection=True,
+                wiring_registry=wiring_registry,
                 parent_offsets=tuple(offsets),
                 parent_lengths=tuple(lengths),
             )
@@ -497,6 +629,7 @@ def _build_component_declaration(
             display_name=display_name,
             item_display_name=item_display_name,
             direct_field_map=direct_field_map,
+            aliased_fields=tuple(wiring),
             parent_offsets=parent_offsets,
             parent_lengths=parent_lengths,
             children=tuple(children),
@@ -513,6 +646,7 @@ def _build_component_declaration(
         display_name=display_name,
         item_display_name=item_display_name,
         direct_field_map=direct_field_map,
+        aliased_fields=tuple(wiring),
         constants=constants,
         pqueue_counts=pqueue_counts,
         pqueue_offsets=pqueue_offsets,
@@ -526,6 +660,7 @@ def _class_declarations(cls: type) -> dict[str, Any]:
     """Collect env field declarations from a Model subclass's annotations,
     in declaration order (base classes first)."""
     decls = _field_declarations(cls)
+    wiring_registry: dict[int, Any] = {}
     for fname, hint in get_type_hints(cls).items():
         if _is_component_class(hint):
             template = getattr(cls, fname, _MISSING)
@@ -547,6 +682,7 @@ def _class_declarations(cls: type) -> dict[str, Any]:
                 item_display_name=fname,
                 target=decls,
                 collection=False,
+                wiring_registry=wiring_registry,
             )
             decls["components"].append(component_decl)
             continue
@@ -580,6 +716,7 @@ def _class_declarations(cls: type) -> dict[str, Any]:
             item_display_name=f"{fname}[]",
             target=decls,
             collection=True,
+            wiring_registry=wiring_registry,
             parent_offsets=(0,),
             parent_lengths=(len(templates),),
         )
@@ -1406,11 +1543,16 @@ def _process_dag_component_field_members(
     decls: Mapping[str, Any],
     field_map: Mapping[str, str],
     entity_kinds: Mapping[str, str],
+    aliased: tuple[str, ...] = (),
 ) -> list[str]:
     members: list[str] = []
     for kind in _PROCESS_DAG_FIELD_KINDS:
         fields = decls[kind]
         for field in fields:
+            if field in aliased:
+                # Wired fields name an entity that belongs to (and is
+                # displayed in) the target component's block.
+                continue
             flat_name = field_map[field]
             graph_kind = entity_kinds.get(flat_name)
             if graph_kind is not None:

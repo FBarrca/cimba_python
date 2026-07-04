@@ -732,7 +732,8 @@ class Model:
             members = _process_dag_component_process_members(
                 decl, process_names)
             members.extend(_process_dag_component_field_members(
-                decl.decls, decl.direct_field_map, entity_kinds))
+                decl.decls, decl.direct_field_map, entity_kinds,
+                decl.aliased_fields))
             blocks.append(
                 ProcessDAGBlock(
                     decl.display_name or decl.name,
@@ -743,7 +744,8 @@ class Model:
                 members = _process_dag_component_process_members(
                     child, process_names)
                 members.extend(_process_dag_component_field_members(
-                    child.decls, child.direct_field_map, entity_kinds))
+                    child.decls, child.direct_field_map, entity_kinds,
+                    child.aliased_fields))
                 blocks.append(
                     ProcessDAGBlock(
                         child.display_name or child.name,
@@ -758,7 +760,8 @@ class Model:
             members = _process_dag_component_process_members(
                 decl, process_names)
             members.extend(_process_dag_component_field_members(
-                decl.decls, decl.direct_field_map, entity_kinds))
+                decl.decls, decl.direct_field_map, entity_kinds,
+                decl.aliased_fields))
             blocks.append(
                 ProcessDAGBlock(
                     decl.display_name or decl.name,
@@ -770,7 +773,8 @@ class Model:
                 members = _process_dag_component_process_members(
                     child, process_names)
                 members.extend(_process_dag_component_field_members(
-                    child.decls, child.direct_field_map, entity_kinds))
+                    child.decls, child.direct_field_map, entity_kinds,
+                    child.aliased_fields))
                 blocks.append(
                     ProcessDAGBlock(
                         child.display_name or child.name,
