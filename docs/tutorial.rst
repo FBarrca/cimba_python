@@ -1,6 +1,4 @@
-:orphan:
-
-.. _legacy_tutorial:
+.. _tutorial:
 
 Tutorial: Modeling with Cimba Python
 ====================================

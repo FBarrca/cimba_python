@@ -1,41 +1,52 @@
 Single Server Resource
 ======================
 
-Use :class:`cimba.Resource` when a process must acquire exclusive access before
-continuing.
+Use :class:`~cimba.sim.Resource` when a process must acquire exclusive access
+to a shared server before it can continue. A process calls
+:func:`~cimba.sim.acquire` to take the resource — blocking until it is free —
+and :func:`~cimba.sim.release` to hand it back to the next waiter.
+
+Here three patients repeatedly return to a clinic that has a single doctor.
 
 .. code-block:: python
 
-   import cimba
+   import cimba.sim as sim
 
 
-   def job(model):
-       arrived = cimba.time()
-       model["server"].acquire()
-       try:
-           model["waits"].add(cimba.time() - arrived)
-           cimba.hold(model["service_time"])
-       finally:
-           model["server"].release()
+   class Clinic(sim.Model):
+       served: sim.Output       # patients seen over the run
+       n_served: sim.State
+       doctor: sim.Resource     # a single shared server
 
 
-   def source(model):
-       for i in range(model["jobs"]):
-           cimba.Process(f"Job {i}", job, model).start()
-           cimba.hold(model["interarrival_time"])
+   model = Clinic("Clinic")
 
 
-   with cimba.Simulation(seed=123) as sim:
-       model = {
-           "server": cimba.Resource("Server"),
-           "waits": cimba.DataSummary(),
-           "jobs": 5,
-           "interarrival_time": 1.0,
-           "service_time": 2.0,
-       }
-       cimba.Process("Source", source, model).start()
-       sim.execute()
-       print(model["waits"].mean)
+   @model.process(copies=3)
+   def patient(env: Clinic):
+       while True:
+           sim.hold(sim.exponential(2.0))   # time until this patient returns
+           sim.acquire(env.doctor)          # wait for the one free doctor
+           sim.hold(sim.exponential(1.0))   # consultation
+           sim.release(env.doctor)
+           env.n_served = env.n_served + 1
 
-The server resource wakes the next waiting process when the current holder
-releases it.
+
+   @model.collect
+   def collect(env: Clinic):
+       env.served = env.n_served
+
+
+   def main() -> None:
+       exp = model.experiment(
+           replications=1, duration=100.0, warmup=0.0, seed=123
+       )
+       exp.run()
+       print(int(exp["served"][0]))
+
+
+   if __name__ == "__main__":
+       main()
+
+While one patient holds the doctor, the others block in :func:`~cimba.sim.acquire`;
+when it is released the next waiting patient is admitted.

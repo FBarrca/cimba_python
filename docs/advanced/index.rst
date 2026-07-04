@@ -29,7 +29,5 @@ Where this fits
 Read Advanced Topics when the basic model shape is already clear and the
 question has become "how do I keep this model maintainable as it grows?"
 
-For full worked examples of agent-heavy and resource-heavy models, see
-:doc:`../tutorials/agents_queues` and :doc:`../tutorials/harbor_conditions`.
-For low-level or native integration details, use
-:doc:`../topical_guides/native_cimba`.
+For a full worked example of an agent-heavy, resource-heavy model, see
+:doc:`../tutorial`.

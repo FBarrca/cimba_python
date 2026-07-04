@@ -68,5 +68,4 @@ cannot prove every dynamic handle flow through arbitrary Python structures.
 
 Treat the graph as a map for human review, not as a proof of correctness.
 
-For the full list of inferred edge kinds and limitations, see
-:doc:`../topical_guides/process_graphs`.
+For the ``ProcessDAG`` API, see :doc:`../api_reference/models`.

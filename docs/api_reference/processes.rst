@@ -1,106 +1,42 @@
-Processes
-=========
+Processes and Events
+====================
 
-.. py:function:: cimba.hold(duration)
+A process is a Python function registered with ``@model.process`` (or a
+component ``@sim.process`` method). Only one process in a trial runs at a time;
+when it calls a blocking ``sim`` operation, control returns to the dispatcher
+until the process is ready to resume.
 
-   Suspend the current process for ``duration`` simulated time units.
+Process verbs
+-------------
 
-.. py:function:: cimba.yield_process()
+``hold()``, ``now()``, ``current()``, ``interrupt()``, ``stop()``,
+``wait_process()``, ``wait_event()``, ``resume()``, ``suspend()``,
+``status()``, ``set_priority()``, ``timer_set()``, ``timer_add()``,
+``timer_cancel()``, ``timers_clear()``, ``spawn()``, ``despawn()``.
 
-   Yield the current process until another process, timer, or event resumes it.
+Blocking calls return a signal. ``sim.SUCCESS`` means the operation completed;
+signals such as ``sim.PREEMPTED``, ``sim.INTERRUPTED``, ``sim.STOPPED``,
+``sim.CANCELLED``, and ``sim.TIMEOUT`` let a process decide how to clean up and
+what to do next.
 
-.. py:function:: cimba.wait_event(handle)
+Dynamic processes
+-----------------
 
-   Yield the current process until the scheduled event fires or is canceled.
-   Returns ``SUCCESS`` when the event fires and ``CANCELLED`` when it is
-   canceled.
+A process named in a ``sim.Spawnable`` field is created at runtime with
+``sim.spawn(env.<name>, env, priority=0)``. The returned handle can be used to
+initialize its ``sim.Struct`` fields before it first runs. Finished spawned
+processes can be reclaimed with ``sim.despawn(handle)``. Component-owned
+spawnables use the same call through the component namespace, for example
+``sim.spawn(env.flow.visitor, env)``.
 
-.. py:function:: cimba.process_exit(value=None)
-
-   Exit the current process with an optional Python exit value while unwinding
-   Python ``finally`` blocks normally.
-
-.. py:function:: cimba.current_process()
-
-   Return the currently running :class:`cimba.Process`, or ``None`` outside
-   process execution.
-
-.. py:class:: cimba.Process(name, target, /, *args, priority=0, pass_process=False, **kwargs)
-
-   Named stackful Cimba process executing a Python callable. The callable is
-   called as ``target(*args, **kwargs)``. When ``pass_process`` is true, it is
-   called as ``target(process, *args, **kwargs)``.
-
-   .. py:attribute:: name
-
-      Process name used by Cimba logging and diagnostics.
-
-   .. py:attribute:: priority
-
-      Current process priority used in waiting and resource queues.
-
-   .. py:attribute:: status
-
-      Current process lifecycle state.
-
-   .. py:method:: start()
-
-      Schedule the process to start at the current simulation time and return
-      the process object.
-
-   .. py:method:: stop()
-
-      Request cooperative cancellation of a running Python-backed process.
-
-   .. py:method:: interrupt(signal=INTERRUPTED, priority=0)
-
-      Interrupt a waiting process with a non-success signal.
-
-   .. py:method:: resume(signal=SUCCESS)
-
-      Schedule a yielded process to resume with the given signal.
-
-   .. py:method:: wait()
-
-      Wait until this process finishes, returning the wakeup signal.
-
-   .. py:method:: timer_add(duration, signal=TIMEOUT)
-
-      Add an independent timer that resumes this process after ``duration``.
-
-   .. py:method:: timer_set(duration, signal=TIMEOUT)
-
-      Clear existing timers and set one timer for this process.
-
-   .. py:method:: timer_cancel(handle)
-
-      Cancel a timer by handle.
-
-   .. py:method:: timers_clear()
-
-      Cancel all timers currently scheduled for this process.
-
-   .. py:method:: exit_value()
-
-      Return the Python value produced by a finished process, if any.
-
-   .. py:method:: close()
-
-      Release the native process and any owned Python exit value.
-
-Signals
--------
-
-.. py:data:: cimba.SUCCESS
-.. py:data:: cimba.PREEMPTED
-.. py:data:: cimba.INTERRUPTED
-.. py:data:: cimba.STOPPED
-.. py:data:: cimba.CANCELLED
-.. py:data:: cimba.TIMEOUT
-
-Lifecycle states
+Low-level events
 ----------------
 
-.. py:data:: cimba.PROCESS_CREATED
-.. py:data:: cimba.PROCESS_RUNNING
-.. py:data:: cimba.PROCESS_FINISHED
+Callbacks registered with ``@model.event`` are exposed in ``sim.Event`` fields.
+Use ``schedule()``, ``schedule_at()``, ``event_cancel()``,
+``event_reschedule()``, ``event_reprioritize()``, ``event_scheduled()``,
+``event_time()``, ``event_priority()``, ``current_event()``,
+``event_count()``, and ``clear_events()``.
+
+When several events share the same time, the higher-priority event runs first;
+ties at the same priority run in arrival order.

@@ -101,5 +101,5 @@ after a run.
 Use ``sim.Output`` fields when a metric belongs in every trial row of an
 experiment.
 
-For the structured reporting API, see :doc:`../api_reference/reporting`.
-For logging constants and helpers, see :doc:`../api_reference/logging`.
+For reporting helpers see :doc:`../api_reference/data`, and for logging helpers
+and constants see :doc:`../api_reference/logging`.

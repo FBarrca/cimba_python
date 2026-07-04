@@ -109,4 +109,4 @@ Use explicit events and timers when they make the model rule clearer. If a
 normal ``sim.hold()``, queue operation, resource acquire, or condition wait
 expresses the rule directly, prefer the simpler blocking operation.
 
-For lower-level process details, see :doc:`../topical_guides/processes`.
+For process fundamentals, see :doc:`../concepts/processes_time`.

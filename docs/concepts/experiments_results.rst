@@ -104,4 +104,4 @@ Keep the model focused on the simulated world. Keep the analysis code focused
 on the experiment table that comes back from that world.
 
 For a complete worked build, continue with :ref:`the tutorial <tutorial>`.
-For the full public surface map, see :doc:`../api/cimba`.
+For the full API reference, see :doc:`../api_reference/index`.

@@ -1,79 +1,42 @@
-Data Collection
-===============
+Datasets, Summaries and Reporting
+=================================
 
-.. py:class:: cimba.DataSummary()
+``sim.Dataset`` collects untimed samples with ``sim.tally()``. Time-weighted
+histories are attached to simulation entities and read back through the
+``*_history()`` accessors as time-series handles.
 
-   Single-pass unweighted summary of sample moments.
+Datasets
+--------
 
-   .. py:method:: add(value)
-   .. py:method:: reset()
-   .. py:method:: merge(other)
-   .. py:attribute:: count
-   .. py:attribute:: min
-   .. py:attribute:: max
-   .. py:attribute:: mean
-   .. py:attribute:: variance
-   .. py:attribute:: stddev
-   .. py:attribute:: skewness
-   .. py:attribute:: kurtosis
-   .. py:method:: close()
+``tally()``, ``dataset_count()``, ``dataset_mean()``, ``dataset_min()``,
+``dataset_max()``, ``dataset_std()``, ``dataset_median()``,
+``dataset_quantile()``, ``dataset_print()``, ``dataset_print_file()``,
+``dataset_fivenum()``, ``dataset_fivenum_file()``, ``dataset_histogram()``,
+``dataset_histogram_file()``, ``dataset_correlogram()``,
+``dataset_correlogram_file()``, ``dataset_pacf_correlogram()``,
+``dataset_pacf_correlogram_file()``.
 
-.. py:class:: cimba.WeightedSummary()
+Time series
+-----------
 
-   Single-pass weighted summary of sample moments.
+Entity histories come from ``queue_history()``, ``resource_history()``,
+``pool_history()``, ``store_history()``, and ``pq_history()``. The returned
+handles are summarized and reported with:
 
-   .. py:method:: add(value, weight=1.0)
-   .. py:method:: reset()
-   .. py:method:: merge(other)
-   .. py:attribute:: count
-   .. py:attribute:: weight_sum
-   .. py:attribute:: min
-   .. py:attribute:: max
-   .. py:attribute:: mean
-   .. py:attribute:: variance
-   .. py:attribute:: stddev
-   .. py:attribute:: skewness
-   .. py:attribute:: kurtosis
-   .. py:method:: close()
+``timeseries_count()``, ``timeseries_min()``, ``timeseries_max()``,
+``timeseries_mean()``, ``timeseries_std()``, ``timeseries_median()``,
+``timeseries_print()``, ``timeseries_print_file()``, ``timeseries_fivenum()``,
+``timeseries_fivenum_file()``, ``timeseries_histogram()``,
+``timeseries_histogram_file()``, ``timeseries_correlogram()``,
+``timeseries_correlogram_file()``, ``timeseries_pacf_correlogram()``,
+``timeseries_pacf_correlogram_file()``.
 
-.. py:class:: cimba.Dataset()
+For text reports and text-mode plots, the no-suffix helpers print to stdout for
+console and notebook use; the ``*_file()`` variants write to a path handle
+created with ``sim.log_text()``. These are most useful in single-trial
+debugging; scalar ``sim.Output`` fields are usually better for large parallel
+experiments.
 
-   Resizable collection of unweighted float samples.
-
-   .. py:method:: add(value)
-   .. py:method:: values()
-   .. py:method:: summary()
-   .. py:method:: reset()
-   .. py:method:: copy()
-   .. py:method:: merge(other)
-   .. py:method:: sort()
-   .. py:method:: acf(lags)
-   .. py:method:: pacf(lags)
-   .. py:attribute:: count
-   .. py:attribute:: min
-   .. py:attribute:: max
-   .. py:attribute:: median
-   .. py:method:: close()
-
-.. py:class:: cimba.TimeSeries()
-
-   Sequence of ``(time, value, weight)`` rows.
-
-   .. py:method:: add(value, time)
-   .. py:method:: finalize(time)
-   .. py:method:: values()
-   .. py:method:: summary()
-   .. py:method:: reset()
-   .. py:method:: copy()
-   .. py:method:: sort_by_value()
-   .. py:method:: sort_by_time()
-   .. py:method:: acf(lags)
-   .. py:method:: pacf(lags)
-   .. py:attribute:: count
-   .. py:attribute:: min
-   .. py:attribute:: max
-   .. py:attribute:: median
-   .. py:method:: close()
-
-See :mod:`cimba.reporting` for structured summaries, histograms,
-correlograms, and optional Matplotlib plots built from these data objects.
+``Model.experiment(..., warmup=..., duration=...)`` controls the measurement
+window: warmup lets the model reach a representative state before summaries are
+collected.

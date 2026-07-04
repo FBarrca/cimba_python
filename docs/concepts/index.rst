@@ -26,6 +26,5 @@ Read these pages before the tutorial if you want the vocabulary first. Read
 the tutorial first if you prefer to learn by building a complete model and then
 come back here when a concept needs a firmer shape.
 
-Use :doc:`the public surface map <../api/cimba>` for the full API overview.
-The :doc:`../topical_guides/index` go deeper into specific APIs once the core
-modeling picture is clear.
+Use the :doc:`API reference <../api_reference/index>` for the full API
+overview once the core modeling picture is clear.

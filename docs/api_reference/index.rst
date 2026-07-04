@@ -1,18 +1,30 @@
+.. _api_reference:
+
 API Reference
 =============
 
-The public API is exported from :mod:`cimba`. Submodules mirror Cimba's native
-module names, but most model code can import directly from the top-level
-package.
+Model code imports the modeling API from :mod:`cimba.sim` and a few top-level
+helpers from :mod:`cimba`. The pages below group the public surface by area.
+
+A model is declared as a :class:`~cimba.sim.Model` subclass whose annotated
+fields describe the shape of one trial. Process behaviour is written as ordinary
+Python functions registered with ``@model.process`` and ``@model.collect``, and
+experiments are built with ``model.experiment(...)`` and run with
+``Experiment.run()``.
 
 .. toctree::
    :maxdepth: 2
 
-   ../api/cimba
-   core
+   models
    processes
-   queues_resources
+   entities
    data
-   reporting
    random
    logging
+   traces
+
+Top-level package
+-----------------
+
+.. automodule:: cimba
+   :members:

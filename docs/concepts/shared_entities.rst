@@ -116,5 +116,4 @@ Use entity summaries, such as ``sim.mean_level(env.waiting_room)``, for
 time-weighted measurements. Use datasets for samples that happen at individual
 moments.
 
-For deeper API details, see :doc:`../topical_guides/queues_resources` and
-:doc:`../api/cimba`.
+For deeper API details, see :doc:`../api_reference/entities`.

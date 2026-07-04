@@ -134,4 +134,4 @@ Use components to express model structure, not to hide model behavior. If a
 component method needs many details from unrelated components, move that
 coordination to a model-level process or split the model into clearer domains.
 
-For the complete API surface, see :doc:`../api/cimba`.
+For the complete API surface, see :doc:`../api_reference/models`.

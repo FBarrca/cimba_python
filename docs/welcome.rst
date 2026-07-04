@@ -1,7 +1,7 @@
 .. _welcome:
 
-Cimba Python - Multithreaded Discrete Event Simulation
-======================================================
+Cimba Python - Process-Oriented Discrete Event Simulation
+=========================================================
 
 Cimba Python is a fast process-oriented discrete event simulation package for
 Python. It gives Python models access to the native
@@ -9,43 +9,16 @@ Python. It gives Python models access to the native
 the model itself in ordinary Python functions and ``sim.Model`` declarations.
 
 The goal is simple: make simulation experiments feel like Python, but run the
-hot simulation loop with compiled machinery underneath. You describe active
-entities as processes, declare trial-local parameters and state on a model
-class, and run independent replications or parameter combinations as an
-experiment table.
-
-Why simulation experiments parallelize well
--------------------------------------------
-
-Parallelizing one simulated world is hard. All processes in that world share
-one simulated clock, and the next event may change what every later event means.
-Letting different parts of that same world race ahead is usually a correctness
-problem waiting to happen.
-
-Parallelizing an experiment is much cleaner. Replications and parameter
-combinations are intended to be independent: one trial with one random seed and
-one parameter row should not depend on another. Cimba Python uses that natural
-independence. A single trial stays deterministic and sequential in simulated
-time, while many trials can execute at the same time across CPU cores.
-
-That makes Cimba Python a good fit for the work simulation modelers often
-actually need to do:
-
-* run enough replications to get useful confidence intervals,
-* sweep parameter values without waiting all afternoon,
-* compare scenarios with a consistent model definition,
-* keep process logic readable instead of spreading it across callbacks,
-* and collect scalar outputs that can be summarized, plotted, or exported.
+hot simulation loop with compiled machinery underneath.
 
 Why should I use Cimba Python?
 ------------------------------
 
 It is fast, expressive, explicit, and open source.
 
-* *Fast*: Process bodies use Cimba Python's compiled simulation layer, and
-  independent trials can run in parallel. This makes high replication counts,
-  dense parameter sweeps, and hot process loops much more practical than with
-  pure Python event scheduling alone.
+* *Fast*: Process bodies use Cimba Python's compiled simulation layer. This
+  makes high replication counts, dense parameter sweeps, and hot process loops
+  much more practical than with pure Python event scheduling alone.
 
 * *Expressive*: Processes are ordinary Python functions that call blocking
   simulation operations such as ``sim.hold()``, ``sim.get()``,
@@ -117,18 +90,10 @@ For example, you can model:
 * urban systems like emergency services, waste collection, or maintenance,
 * and other systems with active entities competing for limited resources.
 
-The common pattern is the same across these domains: active entities become
-processes, passive constraints become model fields, randomness comes from
-``cimba.sim``, and the experiment table turns model runs into data.
-
-When is it not the right tool?
-------------------------------
-
-Cimba Python is aimed at process-oriented discrete event simulation. It may be
-more machinery than you need for a one-off deterministic calculation, a small
-spreadsheet-style Monte Carlo, or a model where pure vectorized NumPy already
-does all the work. It is most useful when behavior unfolds through events,
-waiting, resources, queues, and many independent trials.
+These domains share one modeling pattern. Active entities are written as
+processes, the constraints they compete over are declared as model fields, and
+randomness is drawn from ``cimba.sim``. Running the model then produces the data
+you analyze.
 
 How can I get it?
 -----------------
@@ -172,8 +137,4 @@ Then read :ref:`the tutorial <tutorial>` when you want to build complete
 models. It moves from a simple queue to parallel experiments, resources,
 process interruptions, dynamic agents, conditions, and a larger harbor example.
 
-Read :ref:`the background section <background>` if you want to understand why
-Cimba Python is structured this way: process-oriented simulation, event queues,
-resources, random draws, datasets, and parallel trial execution.
-
-Use :doc:`the public surface map <api/cimba>` while writing model code.
+Use the :doc:`API reference <api_reference/index>` while writing model code.

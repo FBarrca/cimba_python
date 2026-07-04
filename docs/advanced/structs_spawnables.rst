@@ -122,5 +122,5 @@ subsystem that creates them:
 Use this when the dynamic process is naturally part of a component. Use a
 model-level ``sim.Spawnable`` when the dynamic process crosses many domains.
 
-For larger agent examples, see :doc:`../tutorials/agents_queues` and
-:doc:`../tutorials/harbor_conditions`.
+For a larger worked example with dynamic agents and resources, see
+:doc:`../tutorial`.

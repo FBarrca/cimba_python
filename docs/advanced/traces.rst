@@ -186,4 +186,4 @@ it in an output or state field:
 Generate traces that cover the simulated window, or make exhaustion an explicit
 part of the model logic.
 
-For exact validation rules and accepted shapes, see :doc:`../api/cimba`.
+For exact validation rules and accepted shapes, see :doc:`../api_reference/traces`.
