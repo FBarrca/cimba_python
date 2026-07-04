@@ -1,7 +1,22 @@
-"""Shared declaration marker types for the sim modeling API."""
+"""Declaration markers and the typed field model behind them.
+
+Model and Component classes declare env fields with marker annotations
+(``queue: sim.Queue``). This module defines those markers and the typed
+model they collect into:
+
+* ``_FieldKind`` -- one static descriptor per declaration kind, holding
+  everything the later stages need to know about fields of that kind
+  (trial-record format, native entity binding, wirability, ...), so the
+  flattening and codegen stages never hardcode per-kind special cases;
+* ``_FieldDecl`` -- one declared field: a name, its kind, and the
+  kind-specific extras (capacity, count, flattened shape);
+* ``_Declarations`` -- the ordered collection of a class's declared
+  fields plus the component metadata gathered alongside them.
+"""
 
 import keyword
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, get_type_hints
 
 import numpy as np
@@ -37,6 +52,110 @@ _STANDARD_FIELDS = [
 ]
 _RESERVED = {name for name, _ in _STANDARD_FIELDS}
 
+
+# --- Field kinds --------------------------------------------------------------
+
+@dataclass(frozen=True)
+class _FieldKind:
+    """Static description of one declaration kind."""
+
+    name: str
+    #: numpy field format in the trial record
+    fmt: str
+    #: native entity prefix: "buffer" -> buffer_create()/_initialize()/
+    #: _destroy() in the generated trial source (None: not an entity)
+    binding: str | None = None
+    #: recording_start/stop over the measurement window
+    recordable: bool = False
+    #: <binding>_initialize takes an interned entity-name cstring
+    named: bool = True
+    #: may be wired to another component instance's same-kind field
+    wirable: bool = False
+    #: the declaration default is a Queue/Pool/Store capacity
+    capacitated: bool = False
+    #: appears as an entity node in the inferred process DAG
+    dag_entity: bool = False
+    #: may be declared on Component classes
+    on_component: bool = True
+
+
+_KIND_LIST = [
+    _FieldKind("param", "<f8"),
+    _FieldKind("output", "<f8"),
+    _FieldKind("state", "<i8", dag_entity=True),
+    _FieldKind("fstate", "<f8", dag_entity=True),
+    _FieldKind("queue", "<i8", binding="buffer", recordable=True,
+               wirable=True, capacitated=True, dag_entity=True),
+    _FieldKind("resource", "<i8", binding="resource", recordable=True,
+               wirable=True, dag_entity=True),
+    _FieldKind("pool", "<i8", binding="resourcepool", recordable=True,
+               wirable=True, capacitated=True, dag_entity=True),
+    _FieldKind("store", "<i8", binding="objectqueue", recordable=True,
+               wirable=True, capacitated=True, dag_entity=True),
+    _FieldKind("dataset", "<i8", binding="dataset", named=False),
+    _FieldKind("condition", "<i8", binding="condition", wirable=True,
+               dag_entity=True),
+    _FieldKind("predicate", "<i8", on_component=False),
+    _FieldKind("event", "<i8", dag_entity=True, on_component=False),
+    _FieldKind("processes", "<i8"),
+    # PQueues elements are created/recorded/destroyed per element, so the
+    # trial codegen handles them apart from the scalar entity kinds.
+    _FieldKind("pqueues", "<i8", binding="priorityqueue", dag_entity=True),
+    _FieldKind("spawnable", "<i8"),
+    _FieldKind("trace", "<i8"),
+]
+
+_FIELD_KINDS: dict[str, _FieldKind] = {kind.name: kind for kind in _KIND_LIST}
+
+
+@dataclass(frozen=True)
+class _FieldDecl:
+    """One declared env field."""
+
+    name: str
+    kind: _FieldKind
+    #: Queue/Pool/Store capacity: an int, a param name, or None (unbounded)
+    capacity: int | str | None = None
+    #: PQueues element count: an int or (components) a constant name;
+    #: after flattening, the total element count
+    count: int | str | None = None
+    #: element count of flattened multi-instance fields, None for scalars
+    shape: tuple[int, ...] | None = None
+
+
+class _Declarations:
+    """Ordered env-field declarations of one Model or Component class,
+    plus the component metadata collected alongside them."""
+
+    def __init__(self) -> None:
+        self.fields: dict[str, _FieldDecl] = {}
+        #: Ref / Refs annotations (Component classes only): name -> target
+        self.refs: dict[str, Any] = {}
+        self.ref_tables: dict[str, Any] = {}
+        #: component tree roots (Model classes only)
+        self.components: list[Any] = []
+        self.component_collections: list[Any] = []
+
+    def add(self, field: _FieldDecl) -> None:
+        if field.name in self.fields:
+            raise ValueError(f"duplicate field name '{field.name}'")
+        self.fields[field.name] = field
+
+    def kind_of(self, name: str) -> str | None:
+        field = self.fields.get(name)
+        return None if field is None else field.kind.name
+
+    def by_kind(self, *kinds: str) -> list[_FieldDecl]:
+        """Fields of the given kinds, kind-major, declaration order
+        within each kind."""
+        return [field for kind in kinds for field in self.fields.values()
+                if field.kind.name == kind]
+
+    def names(self, *kinds: str) -> list[str]:
+        return [field.name for field in self.by_kind(*kinds)]
+
+
+# --- Declaration markers --------------------------------------------------------
 
 if TYPE_CHECKING:
     from typing import Union
@@ -85,7 +204,7 @@ if TYPE_CHECKING:
 
     def count(n: int | str) -> Any: ...
 
-    _DECL_KINDS: dict[Any, str] = {}
+    _DECL_KINDS: dict[Any, _FieldKind] = {}
 else:
     class _Decl:
         """Marker for env field declarations in Model subclasses."""
@@ -149,14 +268,22 @@ else:
         """Declare the number of elements in a PQueues field."""
         return n
 
-    _DECL_KINDS = {Param: "param", Output: "output", State: "state",
-                   FloatState: "fstate",
-                   Queue: "queue", Resource: "resource", Pool: "pool",
-                   Store: "store", Dataset: "dataset",
-                   Condition: "condition", Predicate: "predicate",
-                   Event: "event",
-                   Processes: "processes", PQueues: "pqueues",
-                   Spawnable: "spawnable", Trace: "trace"}
+    _DECL_KINDS = {Param: _FIELD_KINDS["param"],
+                   Output: _FIELD_KINDS["output"],
+                   State: _FIELD_KINDS["state"],
+                   FloatState: _FIELD_KINDS["fstate"],
+                   Queue: _FIELD_KINDS["queue"],
+                   Resource: _FIELD_KINDS["resource"],
+                   Pool: _FIELD_KINDS["pool"],
+                   Store: _FIELD_KINDS["store"],
+                   Dataset: _FIELD_KINDS["dataset"],
+                   Condition: _FIELD_KINDS["condition"],
+                   Predicate: _FIELD_KINDS["predicate"],
+                   Event: _FIELD_KINDS["event"],
+                   Processes: _FIELD_KINDS["processes"],
+                   PQueues: _FIELD_KINDS["pqueues"],
+                   Spawnable: _FIELD_KINDS["spawnable"],
+                   Trace: _FIELD_KINDS["trace"]}
 
     _trace_data = ptr_caster(types.float64)
 
@@ -179,28 +306,14 @@ def _check_name(name: str, kind: str) -> None:
         raise ValueError(f"{kind} name '{name}' is reserved")
 
 
-def _empty_declarations() -> dict[str, Any]:
-    decls: dict[str, Any] = {"param": [], "output": [], "state": [],
-                             "fstate": [], "resource": [],
-                             "dataset": [], "condition": [],
-                             "predicate": [], "event": [], "processes": [],
-                             "spawnable": [], "trace": [],
-                             "queue": {}, "pool": {}, "store": {},
-                             "pqueues": {}, "ref": {}, "refs": {},
-                             "components": [],
-                             "component_collections": [],
-                             "field_shapes": {}}
-    return decls
-
-
 def _field_declarations(
     cls: type,
     *,
     allow_symbolic_pqueues: bool = False,
     allow_refs: bool = False,
-) -> dict[str, Any]:
+) -> _Declarations:
     """Collect direct env field declarations from a Model/Component class."""
-    decls = _empty_declarations()
+    decls = _Declarations()
     for fname, hint in get_type_hints(cls).items():
         if isinstance(hint, _RefHint):
             if not allow_refs:
@@ -208,7 +321,8 @@ def _field_declarations(
                     f"field '{fname}': Ref/Refs declarations are only "
                     "supported on Component classes")
             _check_name(fname, "ref")
-            decls["refs" if hint.table else "ref"][fname] = hint.target
+            (decls.ref_tables if hint.table else decls.refs)[fname] = \
+                hint.target
             continue
         try:
             kind = _DECL_KINDS.get(hint)
@@ -217,16 +331,16 @@ def _field_declarations(
         if kind is None:
             continue
         default = getattr(cls, fname, None)
-        if kind in ("queue", "pool", "store"):
+        if kind.capacitated:
             if isinstance(default, _Capacity):
                 default = default.cap
-            decls[kind][fname] = default
-        elif kind == "pqueues":
+            decls.add(_FieldDecl(fname, kind, capacity=default))
+        elif kind.name == "pqueues":
             if isinstance(default, int) and default >= 1:
-                decls[kind][fname] = default
+                decls.add(_FieldDecl(fname, kind, count=default))
             elif allow_symbolic_pqueues and isinstance(default, str):
                 _check_name(default, "PQueues count constant")
-                decls[kind][fname] = default
+                decls.add(_FieldDecl(fname, kind, count=default))
             else:
                 raise ValueError(
                     f"field '{fname}': a PQueues declaration needs a "
@@ -234,7 +348,7 @@ def _field_declarations(
                     "'qs: sim.PQueues = sim.count(4)'")
         else:
             method_binding = (
-                kind in ("processes", "spawnable")
+                kind.name in ("processes", "spawnable")
                 and getattr(default, "__cimba_component_process__", None)
                 is not None
             )
@@ -242,17 +356,5 @@ def _field_declarations(
                 raise ValueError(
                     f"field '{fname}': only Queue/Pool/Store declarations "
                     "may carry a capacity default")
-            decls[kind].append(fname)
+            decls.add(_FieldDecl(fname, kind))
     return decls
-
-
-def _declarations_contain(decls: dict[str, Any], name: str) -> bool:
-    for kind in ("param", "output", "state", "fstate", "resource",
-                 "dataset", "condition", "predicate", "event", "processes",
-                 "spawnable", "trace"):
-        if name in decls[kind]:
-            return True
-    for kind in ("queue", "pool", "store", "pqueues"):
-        if name in decls[kind]:
-            return True
-    return False

@@ -32,22 +32,13 @@ from . import _bindings as _b
 from ._cimba import ffi, lib
 from ._components import (
     Component,
-    _AnyComponentDecl,
     _class_declarations,
-    _ComponentCollectionDecl,
     _ComponentDecl,
     _component_collect_methods,
-    _component_instance_count,
     _component_process_methods,
-    _component_spawnable_field_names,
     _lower_component_collect,
     _lower_component_process,
     _lower_model_component_refs,
-    _process_dag_component_field_members,
-    _process_dag_component_process_members,
-    _resolve_component_process_copies,
-    _spawnable_slot_label,
-    _walk_component_declarations,
     collect,
     process,
 )
@@ -73,8 +64,10 @@ from ._declarations import (
     Store,
     Trace,
     _Capacities,
-    _STANDARD_FIELDS,
     _check_name,
+    _FIELD_KINDS,
+    _FieldDecl,
+    _STANDARD_FIELDS,
     capacity,
     count,
 )
@@ -478,8 +471,8 @@ def _as_trace_grid(value: Any, seeds: np.ndarray, n_trials: int,
         return _as_trace_sequence_grid(value, seeds, n_trials, slots, name)
 
 
-def _dedupe_process_dag_members(members: Iterable[str]) -> tuple[str, ...]:
-    return tuple(dict.fromkeys(members))
+def _spawnable_slot_label(field: str, index: int | None) -> str:
+    return field if index is None else f"{field}[{index}]"
 
 
 class Model:
@@ -512,69 +505,69 @@ class Model:
                  state: Iterable[str] = ()):
         decls = _class_declarations(type(self))
         self.name = name if name is not None else type(self).__name__
-        self.params = decls["param"] + list(params)
-        self.outputs = decls["output"] + list(outputs)
-        self.queues = decls["queue"] | _as_capacity_dict(queues)
-        self.resources = decls["resource"] + list(resources)
-        self.pools = decls["pool"] | _as_capacity_dict(pools)
-        self.stores = decls["store"] | _as_capacity_dict(stores)
-        self.datasets = decls["dataset"] + list(datasets)
-        self.conditions = decls["condition"] + list(conditions)
-        self.state = decls["state"] + list(state)
-        self.float_state: list[str] = decls["fstate"]
-        self.traces: list[str] = decls["trace"]
-        self.pqueues: dict[str, int] = decls["pqueues"]
-        self._predicate_fields: list[str] = decls["predicate"]
-        self._event_fields: list[str] = decls["event"]
-        self._process_fields: list[str] = decls["processes"]
-        self._spawnable_fields: list[str] = decls["spawnable"]
-        self._component_decls: list[_ComponentDecl] = decls["components"]
-        self._component_collection_decls: list[_ComponentCollectionDecl] = \
-            decls["component_collections"]
-        self._field_shapes: dict[str, tuple[int, ...]] = \
-            decls["field_shapes"]
+        for kind_name, names in (("param", params), ("output", outputs),
+                                 ("resource", resources),
+                                 ("dataset", datasets),
+                                 ("condition", conditions),
+                                 ("state", state)):
+            for n in names:
+                decls.add(_FieldDecl(n, _FIELD_KINDS[kind_name]))
+        for kind_name, capacities in (("queue", queues), ("pool", pools),
+                                      ("store", stores)):
+            for n, cap in _as_capacity_dict(capacities).items():
+                decls.add(_FieldDecl(n, _FIELD_KINDS[kind_name],
+                                     capacity=cap))
+        self._decls = decls
+
+        # Backwards-compatible views of the declarations, by kind
+        self.params = decls.names("param")
+        self.outputs = decls.names("output")
+        self.queues = {f.name: f.capacity for f in decls.by_kind("queue")}
+        self.resources = decls.names("resource")
+        self.pools = {f.name: f.capacity for f in decls.by_kind("pool")}
+        self.stores = {f.name: f.capacity for f in decls.by_kind("store")}
+        self.datasets = decls.names("dataset")
+        self.conditions = decls.names("condition")
+        self.state = decls.names("state")
+        self.float_state: list[str] = decls.names("fstate")
+        self.traces: list[str] = decls.names("trace")
+        self.pqueues: dict[str, int] = {
+            f.name: f.count for f in decls.by_kind("pqueues")}
+        self._predicate_fields: list[str] = decls.names("predicate")
+        self._event_fields: list[str] = decls.names("event")
+        self._process_fields: list[str] = decls.names("processes")
+        self._spawnable_fields: list[str] = decls.names("spawnable")
+        self._component_decls: list[_ComponentDecl] = decls.components
+        self._component_collection_decls: list[_ComponentDecl] = \
+            decls.component_collections
+        self._field_shapes: dict[str, tuple[int, ...]] = {
+            f.name: f.shape for f in decls.fields.values()
+            if f.shape is not None}
         self._components: dict[str, Component] = {}
         self._component_collections: dict[str, tuple[Component, ...]] = {}
         self._component_bindings: dict[str, tuple[Component, ...]] = {}
-        self._component_spawnable_fields = _component_spawnable_field_names(
-            (*self._component_decls, *self._component_collection_decls))
+        self._component_spawnable_fields = {
+            decl.direct_field_map[name]
+            for root in self._component_roots.values()
+            for decl in root.walk()
+            for name in decl.decls.names("spawnable")
+        }
 
         seen: set[str] = set()
-        for kind, names in (("param", self.params),
-                            ("output", self.outputs),
-                            ("queue", self.queues),
-                            ("resource", self.resources),
-                            ("pool", self.pools),
-                            ("store", self.stores),
-                            ("dataset", self.datasets),
-                            ("condition", self.conditions),
-                            ("state", self.state),
-                            ("fstate", self.float_state),
-                            ("trace", self.traces),
-                            ("pqueues", self.pqueues),
-                            ("predicate", self._predicate_fields),
-                            ("event", self._event_fields),
-                            ("processes", self._process_fields),
-                            ("spawnable", self._spawnable_fields)):
-            for n in names:
-                _check_name(n, kind)
-                if n in seen:
-                    raise ValueError(f"duplicate field name '{n}'")
-                seen.add(n)
-        for component in self._component_decls:
-            _check_name(component.name, "component")
-            if component.name in seen:
-                raise ValueError(f"duplicate field name '{component.name}'")
-            seen.add(component.name)
-        for collection in self._component_collection_decls:
-            _check_name(collection.name, "component collection")
-            if collection.name in seen:
-                raise ValueError(f"duplicate field name '{collection.name}'")
-            seen.add(collection.name)
-        for cap in (list(self.queues.values()) + list(self.pools.values())
-                    + list(self.stores.values())):
+        for field in decls.fields.values():
+            _check_name(field.name, field.kind.name)
+            seen.add(field.name)
+        for root in self._component_roots.values():
+            label = ("component collection" if root.collection
+                     else "component")
+            _check_name(root.name, label)
+            if root.name in seen:
+                raise ValueError(f"duplicate field name '{root.name}'")
+            seen.add(root.name)
+        for field in decls.by_kind("queue", "pool", "store"):
+            cap = field.capacity
             if cap is not None and not isinstance(cap, int) \
-                    and cap not in self.params:
+                    and decls.kind_of(cap) != "param":
                 raise ValueError(f"capacity '{cap}' is neither an int nor "
                                  "a declared param")
         self._seen = seen
@@ -599,7 +592,7 @@ class Model:
             self._bind_component_children(decl, (component,))
         for decl in self._component_collection_decls:
             components = tuple(copy.copy(template)
-                               for template in decl.templates)
+                               for template in decl.instances)
             self._component_collections[decl.name] = components
             self._component_bindings[decl.name] = components
             setattr(self, decl.name, list(components))
@@ -629,19 +622,19 @@ class Model:
 
     def _bind_component_children(
         self,
-        decl: _AnyComponentDecl,
+        decl: _ComponentDecl,
         parents: tuple[Component, ...],
     ) -> None:
         for child in decl.children:
             bound: list[Component] = []
-            if isinstance(child, _ComponentCollectionDecl):
+            if child.collection:
                 for parent_index, parent in enumerate(parents):
                     start = child.parent_offsets[parent_index]
                     length = child.parent_lengths[parent_index]
                     items: list[Component] = []
                     for item_index in range(length):
                         child_index = start + item_index
-                        component = copy.copy(child.templates[child_index])
+                        component = copy.copy(child.instances[child_index])
                         bound.append(component)
                         items.append(component)
                         self._bind_component_metadata(
@@ -663,59 +656,50 @@ class Model:
             self._bind_component_children(child, bound_tuple)
 
     def _register_component_processes(self) -> None:
-        roots: list[_AnyComponentDecl] = []
-        roots.extend(self._component_decls)
-        roots.extend(self._component_collection_decls)
-        for decl in _walk_component_declarations(roots):
-            components = self._component_bindings[decl.name]
-            for index, component in enumerate(components):
-                component_name = decl.process_names[index]
-                for method_name, method, spec in _component_process_methods(
-                        decl.cls):
-                    copies = _resolve_component_process_copies(
-                        component_name, component, method_name, spec)
-                    spawn_field = None
-                    spawn_index = None
-                    if method_name in decl.decls["spawnable"]:
-                        spawn_field = decl.direct_field_map[method_name]
-                        if _component_instance_count(decl) > 1:
-                            spawn_index = index
-                    process_field = None
-                    process_offset = 0
-                    if method_name in decl.decls["processes"]:
-                        process_field = decl.direct_field_map[method_name]
-                        process_offset = decl.process_offsets[method_name][index]
-                    lowered = _lower_component_process(
-                        component_name, component, decl, index, method_name,
-                        method, _is_struct_class)
-                    self.process(lowered, copies=copies,
-                                 priority=spec.priority,
-                                 _spawn_field=spawn_field,
-                                 _spawn_index=spawn_index,
-                                 _process_field=process_field,
-                                 _process_offset=process_offset)
-                for method_name, method in _component_collect_methods(
-                        decl.cls):
-                    self._component_collects.append(_lower_component_collect(
-                        component_name, decl, index, method_name, method))
+        for root in self._component_roots.values():
+            for decl in root.walk():
+                self._register_component_decl_processes(decl)
+
+    def _register_component_decl_processes(
+        self, decl: _ComponentDecl,
+    ) -> None:
+        components = self._component_bindings[decl.name]
+        for index, component in enumerate(components):
+            component_name = decl.process_names[index]
+            for method_name, method, spec in _component_process_methods(
+                    decl.cls):
+                copies = spec.resolve_copies(
+                    component, f"{component_name}.{method_name}")
+                field_kind = decl.decls.kind_of(method_name)
+                spawn_field = None
+                spawn_index = None
+                if field_kind == "spawnable":
+                    spawn_field = decl.direct_field_map[method_name]
+                    if decl.count > 1:
+                        spawn_index = index
+                process_field = None
+                process_offset = 0
+                if field_kind == "processes":
+                    process_field = decl.direct_field_map[method_name]
+                    process_offset = decl.process_offsets[method_name][index]
+                lowered = _lower_component_process(
+                    component_name, decl, index, method_name,
+                    method, _is_struct_class)
+                self.process(lowered, copies=copies,
+                             priority=spec.priority,
+                             _spawn_field=spawn_field,
+                             _spawn_index=spawn_index,
+                             _process_field=process_field,
+                             _process_offset=process_offset)
+            for method_name, method in _component_collect_methods(decl.cls):
+                self._component_collects.append(_lower_component_collect(
+                    component_name, decl, index, method_name, method))
 
     @property
-    def _component_field_maps(self) -> dict[str, dict[str, str]]:
-        return {decl.name: decl.field_map for decl in self._component_decls}
-
-    @property
-    def _component_collection_maps(
-        self,
-    ) -> dict[str, _ComponentCollectionDecl]:
-        return {decl.name: decl for decl in self._component_collection_decls}
-
-    @property
-    def _component_roots(self) -> dict[str, _AnyComponentDecl]:
-        roots: dict[str, _AnyComponentDecl] = {}
-        roots.update({decl.name: decl for decl in self._component_decls})
-        roots.update({decl.name: decl
-                      for decl in self._component_collection_decls})
-        return roots
+    def _component_roots(self) -> dict[str, _ComponentDecl]:
+        return {decl.name: decl
+                for decl in (*self._component_decls,
+                             *self._component_collection_decls)}
 
     def _lower_component_refs(self, fn: _F) -> _F:
         return _lower_model_component_refs(
@@ -728,66 +712,16 @@ class Model:
         entity_kinds: Mapping[str, str],
     ) -> tuple[ProcessDAGBlock, ...]:
         process_names = {process.name for process in self._processes}
-        blocks: list[ProcessDAGBlock] = []
-
-        for decl in self._component_decls:
-            members = _process_dag_component_process_members(
-                decl, process_names)
-            members.extend(_process_dag_component_field_members(
-                decl.decls, decl.direct_field_map, entity_kinds,
-                decl.aliased_fields))
-            blocks.append(
-                ProcessDAGBlock(
-                    decl.display_name or decl.name,
-                    _dedupe_process_dag_members(members),
-                )
+        return tuple(
+            ProcessDAGBlock(
+                decl.display_name or decl.name,
+                decl.dag_members(process_names, entity_kinds),
+                kind=("component_collection" if decl.collection
+                      else "component"),
             )
-            for child in _walk_component_declarations(decl.children):
-                members = _process_dag_component_process_members(
-                    child, process_names)
-                members.extend(_process_dag_component_field_members(
-                    child.decls, child.direct_field_map, entity_kinds,
-                    child.aliased_fields))
-                blocks.append(
-                    ProcessDAGBlock(
-                        child.display_name or child.name,
-                        _dedupe_process_dag_members(members),
-                        kind=("component_collection"
-                              if isinstance(child, _ComponentCollectionDecl)
-                              else "component"),
-                    )
-                )
-
-        for decl in self._component_collection_decls:
-            members = _process_dag_component_process_members(
-                decl, process_names)
-            members.extend(_process_dag_component_field_members(
-                decl.decls, decl.direct_field_map, entity_kinds,
-                decl.aliased_fields))
-            blocks.append(
-                ProcessDAGBlock(
-                    decl.display_name or decl.name,
-                    _dedupe_process_dag_members(members),
-                    kind="component_collection",
-                )
-            )
-            for child in _walk_component_declarations(decl.children):
-                members = _process_dag_component_process_members(
-                    child, process_names)
-                members.extend(_process_dag_component_field_members(
-                    child.decls, child.direct_field_map, entity_kinds,
-                    child.aliased_fields))
-                blocks.append(
-                    ProcessDAGBlock(
-                        child.display_name or child.name,
-                        _dedupe_process_dag_members(members),
-                        kind=("component_collection"
-                              if isinstance(child, _ComponentCollectionDecl)
-                              else "component"),
-                    )
-                )
-
-        return tuple(blocks)
+            for root in self._component_roots.values()
+            for decl in root.walk()
+        )
 
     # --- Declaration decorators ------------------------------------------
     @overload
@@ -945,18 +879,13 @@ class Model:
         legitimate resource cycles, so acyclicity is checked only when callers
         explicitly ask for :meth:`ProcessDAG.topological_order`.
         """
-        entity_kinds: dict[str, str] = {}
-        entity_kinds.update({name: "queue" for name in self.queues})
-        entity_kinds.update({name: "resource" for name in self.resources})
-        entity_kinds.update({name: "pool" for name in self.pools})
-        entity_kinds.update({name: "store" for name in self.stores})
-        entity_kinds.update({name: "condition" for name in self.conditions})
-        entity_kinds.update({name: "state" for name in self.state})
-        entity_kinds.update({name: "fstate" for name in self.float_state})
-        entity_kinds.update({name: "pqueues" for name in self.pqueues})
-        event_fields = set(self._event_fields)
-        event_fields.update(field for _n, _fn, field, _d in self._events)
-        entity_kinds.update({name: "event" for name in event_fields})
+        entity_kinds = {f.name: f.kind.name
+                        for f in self._decls.fields.values()
+                        if f.kind.dag_entity}
+        # Registered events without a declared field publish their address
+        # in a hidden _ev_<name> field.
+        entity_kinds.update({field: "event"
+                             for _n, _fn, field, _d in self._events})
         spawnable_field_processes: dict[str, list[str]] = {}
         spawnable_index_processes: dict[tuple[str, int], list[str]] = {}
         process_field_processes: dict[str, list[str]] = {}
@@ -1068,8 +997,8 @@ class Model:
     # --- Trial record layout ----------------------------------------------
     @property
     def _entities(self) -> list[str]:
-        return (list(self.queues) + self.resources + list(self.pools)
-                + list(self.stores) + self.datasets + self.conditions)
+        return self._decls.names("queue", "resource", "pool", "store",
+                                 "dataset", "condition")
 
     def _handle_expr(self, process: _ProcDecl, i: int) -> str:
         """Env expression for a process handle: an element of the declared
@@ -1126,13 +1055,14 @@ class Model:
     def dtype(self) -> np.dtype:
         # (name, format) or (name, format, shape) numpy field specs
         fields: list[Any] = list(_STANDARD_FIELDS)
-        fields += [self._field_spec(p, "<f8") for p in self.params]
-        fields += [self._field_spec(o, "<f8") for o in self.outputs]
-        fields += [self._field_spec(h, "<i8") for h in self._entities]
-        fields += [self._field_spec(s, "<i8") for s in self.state]
-        fields += [self._field_spec(s, "<f8") for s in self.float_state]
+        for f in self._decls.by_kind("param", "output", "queue", "resource",
+                                     "pool", "store", "dataset", "condition",
+                                     "state", "fstate"):
+            fields.append((f.name, f.kind.fmt) if f.shape is None
+                          else (f.name, f.kind.fmt, f.shape))
         fields += [self._trace_field_spec(t) for t in self.traces]
-        fields += [(f, "<i8", (n,)) for f, n in self.pqueues.items()]
+        fields += [(f.name, "<i8", (f.count,))
+                   for f in self._decls.by_kind("pqueues")]
         fields += [(p, "<i8") for p in self._predicate_fields]
         fields += [(f, "<i8") for _n, _fn, f in self._predicates
                    if f.startswith("_pred_")]
@@ -1280,17 +1210,16 @@ class Model:
                 return f"np.uint64(env['{cap}'][{index}])"
             return f"np.uint64(env['{cap}'])"
 
-        recorded = [("buffer", q) for q in self.queues]
-        recorded += [("resource", r) for r in self.resources]
-        recorded += [("resourcepool", p) for p in self.pools]
-        recorded += [("objectqueue", s) for s in self.stores]
+        entity_fields = self._decls.by_kind("queue", "resource", "pool",
+                                            "store", "dataset", "condition")
+        recorded = [f for f in entity_fields if f.kind.recordable]
         handles = self._process_handles
 
         src = ["def _start_rec(subject, obj):",
                "    env = carray(subject, 1)[0]"]
-        for kind, name in recorded:
-            src += [f"    {kind}_recording_start({ref})"
-                    for ref in self._field_refs(name)]
+        for f in recorded:
+            src += [f"    {f.kind.binding}_recording_start({ref})"
+                    for ref in self._field_refs(f.name)]
         for f, n in self.pqueues.items():
             for k in range(n):
                 src += [
@@ -1302,9 +1231,9 @@ class Model:
                     for ref in self._field_refs(dataset)]
         src += ["def _stop_rec(subject, obj):",
                 "    env = carray(subject, 1)[0]"]
-        for kind, name in recorded:
-            src += [f"    {kind}_recording_stop({ref})"
-                    for ref in self._field_refs(name)]
+        for f in recorded:
+            src += [f"    {f.kind.binding}_recording_stop({ref})"
+                    for ref in self._field_refs(f.name)]
         for f, n in self.pqueues.items():
             for k in range(n):
                 src += [
@@ -1333,43 +1262,16 @@ class Model:
                 "    event_schedule(EV_STOP, self_addr, 0, t, 0)",
                 "    t = t + env['cooldown_s']",
                 "    event_schedule(EV_END, self_addr, 0, t, 0)"]
-        for q, cap in self.queues.items():
-            for i, ref in enumerate(self._field_refs(q)):
-                name_key = self._field_name_keys(q)[i][0]
-                src += ["    h = buffer_create()",
-                        f"    buffer_initialize(h, {name_key}, "
-                        f"{cap_expr(cap, i)})",
-                        f"    {ref} = h"]
-        for r in self.resources:
-            for i, ref in enumerate(self._field_refs(r)):
-                name_key = self._field_name_keys(r)[i][0]
-                src += ["    h = resource_create()",
-                        f"    resource_initialize(h, {name_key})",
-                        f"    {ref} = h"]
-        for p, cap in self.pools.items():
-            for i, ref in enumerate(self._field_refs(p)):
-                name_key = self._field_name_keys(p)[i][0]
-                src += ["    h = resourcepool_create()",
-                        f"    resourcepool_initialize(h, {name_key}, "
-                        f"{cap_expr(cap, i)})",
-                        f"    {ref} = h"]
-        for s, cap in self.stores.items():
-            for i, ref in enumerate(self._field_refs(s)):
-                name_key = self._field_name_keys(s)[i][0]
-                src += ["    h = objectqueue_create()",
-                        f"    objectqueue_initialize(h, {name_key}, "
-                        f"{cap_expr(cap, i)})",
-                        f"    {ref} = h"]
-        for d in self.datasets:
-            for ref in self._field_refs(d):
-                src += ["    h = dataset_create()",
-                        "    dataset_initialize(h)",
-                        f"    {ref} = h"]
-        for c in self.conditions:
-            for i, ref in enumerate(self._field_refs(c)):
-                name_key = self._field_name_keys(c)[i][0]
-                src += ["    h = condition_create()",
-                        f"    condition_initialize(h, {name_key})",
+        for f in entity_fields:
+            binding = f.kind.binding
+            for i, ref in enumerate(self._field_refs(f.name)):
+                args = "h"
+                if f.kind.named:
+                    args += f", {self._field_name_keys(f.name)[i][0]}"
+                if f.kind.capacitated:
+                    args += f", {cap_expr(f.capacity, i)}"
+                src += [f"    h = {binding}_create()",
+                        f"    {binding}_initialize({args})",
                         f"    {ref} = h"]
         for f, n in self.pqueues.items():
             for k in range(n):
@@ -1404,24 +1306,9 @@ class Model:
                     f"    process_destroy({h})"]
         if has_spawns:
             src += ["    spawned_reclaim()"]
-        for q in self.queues:
-            src += [f"    buffer_destroy({ref})"
-                    for ref in self._field_refs(q)]
-        for r in self.resources:
-            src += [f"    resource_destroy({ref})"
-                    for ref in self._field_refs(r)]
-        for p in self.pools:
-            src += [f"    resourcepool_destroy({ref})"
-                    for ref in self._field_refs(p)]
-        for s in self.stores:
-            src += [f"    objectqueue_destroy({ref})"
-                    for ref in self._field_refs(s)]
-        for d in self.datasets:
-            src += [f"    dataset_destroy({ref})"
-                    for ref in self._field_refs(d)]
-        for c in self.conditions:
-            src += [f"    condition_destroy({ref})"
-                    for ref in self._field_refs(c)]
+        for f in entity_fields:
+            src += [f"    {f.kind.binding}_destroy({ref})"
+                    for ref in self._field_refs(f.name)]
         for f, n in self.pqueues.items():
             for k in range(n):
                 src += [f"    priorityqueue_terminate(env['{f}'][{k}])",

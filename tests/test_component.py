@@ -89,13 +89,15 @@ def test_component_process_dag_uses_lowered_source():
             "put") in edges
     assert ("state:retailer__on_hand", "process:retailer__reorder",
             "read") in edges
+    # Block members list the processes first, then the component's
+    # entities in declaration order.
     assert graph.blocks == (
         sim.ProcessDAGBlock(
             "retailer",
             (
                 "process:retailer__reorder",
-                "queue:retailer__orders",
                 "state:retailer__on_hand",
+                "queue:retailer__orders",
             ),
         ),
     )
