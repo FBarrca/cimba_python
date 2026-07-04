@@ -20,6 +20,37 @@ This creates every parameter combination and repeats each combination for the
 requested number of replications. Each trial receives its own seed and its own
 simulation entities.
 
+Trial-local entities
+--------------------
+
+Every row in the experiment table is a separate trial: one parameter
+combination, one replication, one ``env`` record. Entity fields declared on the
+model, including ``sim.Dataset``, are created fresh for that trial. They do not
+accumulate samples across other replications.
+
+Think of a dataset as a trial-local list of numeric observations. Process code
+adds observations to that list with ``sim.tally()``. At the end of the same
+trial, a collector chooses the metrics you want to report from that list and
+writes them to scalar ``sim.Output`` fields. Those metrics can be counts,
+means, minima, maxima, standard deviations, medians, quantiles, or whatever
+summary is relevant to the model.
+
+That gives datasets and outputs two distinct levels of meaning:
+
+* during a trial, ``sim.tally(env.waits, value)`` adds another observation to
+  that trial's dataset;
+* after the trial, ``@model.collect`` or a component ``@sim.collect`` usually
+  reduces that dataset to scalar ``sim.Output`` fields, such as
+  ``sim.dataset_mean(env.waits)`` or ``sim.dataset_count(env.waits)``;
+* after ``exp.run()``, ``exp["avg_wait"]`` is an array of those scalar outputs,
+  one value per trial row.
+
+For example, with ``replications=20``, a ``waits: sim.Dataset`` field is not
+one dataset containing all waits from all 20 replications. It is 20 separate
+trial-local datasets. If the collector writes ``env.avg_wait`` from
+``sim.dataset_mean(env.waits)``, then ``exp["avg_wait"]`` contains 20 means:
+one mean computed from the waits observed in each replication.
+
 The measurement window
 ----------------------
 
@@ -47,8 +78,9 @@ The collector is still part of the compiled model. It should read trial-local
 state and write ``sim.Output`` fields. Distribution statistics of tallied
 datasets are available here too -- ``sim.dataset_median(env.waits)`` and
 ``sim.dataset_quantile(env.waits, 0.95)`` reduce a per-trial distribution to
-an output without leaving the trial. Do broader Python analysis after
-``exp.run()`` returns.
+an output without leaving the trial. Those reductions are per replication; the
+cross-replication statistics happen later from the output arrays or from
+``exp.summary()``. Do broader Python analysis after ``exp.run()`` returns.
 
 Running and reading results
 ---------------------------
