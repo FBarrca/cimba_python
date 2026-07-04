@@ -10,8 +10,8 @@ subclass whose annotated fields are typed by their simulation role:
 ``Model``, ``Component``, ``Experiment``, ``Env``, ``Handle``, ``Param``,
 ``Output``, ``State``, ``FloatState``, ``Queue``, ``Resource``, ``Pool``,
 ``Store``, ``Dataset``, ``Condition``, ``Predicate``, ``Event``,
-``Processes``, ``PQueues``, ``Spawnable``, ``Struct``, ``Trace``,
-``capacity()``, ``count()``, ``process()``, ``collect()``.
+``Processes``, ``PQueues``, ``Ref``, ``Refs``, ``Spawnable``, ``Struct``,
+``Trace``, ``capacity()``, ``count()``, ``process()``, ``collect()``.
 
 ``sim.Param`` values are expanded into parameter combinations, ``sim.Output``
 values are collected after each trial, ``sim.State`` and ``sim.FloatState`` hold
@@ -55,6 +55,13 @@ spawned from component or model code with natural paths such as
 ``sim.spawn(self.visitor, env)`` or
 ``sim.spawn(env.park.entrance.visitor, env)``. Spawnable component processes
 may receive a final ``sim.Struct`` view parameter.
+
+Components may reference other declared components with ``sim.Ref[Target]``
+fields and routing tables of collection items with ``sim.Refs[Target]``,
+letting method bodies route through paths such as
+``sim.store_put(self.downstream.inbox, h)`` or
+``sim.store_put(self.routes[i].inbox, h)``; see
+:doc:`../advanced/components` for wiring and routing details.
 
 Fixed repeated structures can be declared with standard ``list[Component]``
 annotations, for example ``attractions: list[Attraction] = [...]``. Model

@@ -65,6 +65,8 @@ from ._declarations import (
     Predicate,
     Processes,
     Queue,
+    Ref,
+    Refs,
     Resource,
     Spawnable,
     State,

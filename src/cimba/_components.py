@@ -12,7 +12,8 @@ from typing import Any, TypeVar, get_args, get_origin, get_type_hints, overload
 import numpy as np
 
 from ._declarations import (_DECL_KINDS, _MISSING, _check_name,
-                            _declarations_contain, _field_declarations)
+                            _declarations_contain, _field_declarations,
+                            _RefHint)
 
 _F = TypeVar("_F", bound=Callable[..., Any])
 _COMPONENT_PROCESS_ATTR = "__cimba_component_process__"
@@ -77,6 +78,30 @@ class _FieldRef:
 
 _AMBIGUOUS_WIRING_TARGET: Any = object()
 _COLLECTION_WIRING_TARGET: Any = object()
+_AMBIGUOUS_REF_TARGET: Any = object()
+
+
+@dataclass
+class _ComponentRefDecl:
+    """A Ref/Refs field: raw per-instance targets captured at declaration
+    time, resolved to (target decl, item index) pairs once all component
+    declarations exist (so forward references are allowed)."""
+
+    name: str
+    table: bool
+    #: per template instance: the referenced Component or None (Ref only)
+    raw: tuple["Component | None", ...] = field(default=(), repr=False)
+    #: per template instance: tuple of referenced Components (Refs only)
+    raw_tables: tuple[tuple["Component", ...], ...] = field(
+        default=(), repr=False)
+    #: per instance: (target decl, target item index | None), or None
+    targets: tuple[Any, ...] = field(default=(), repr=False)
+    #: single decl every table entry resolves into (Refs only)
+    table_decl: Any = field(default=None, repr=False)
+    #: flattened per-entry target item indices (Refs only)
+    table_indices: tuple[int, ...] = ()
+    table_lengths: tuple[int, ...] = ()
+    table_offsets: tuple[int, ...] = ()
 
 
 def _component_field_wiring(
@@ -144,6 +169,123 @@ def _resolve_wiring_target(
             "component instance that is the default of more than one "
             "model field; the wiring target is ambiguous")
     return target[ref.field]
+
+
+def _component_ref_values(
+    component_name: str,
+    templates: Sequence["Component"],
+    decls: Mapping[str, Any],
+) -> dict[str, _ComponentRefDecl]:
+    """Capture raw Ref/Refs targets from the template instances."""
+    refs: dict[str, _ComponentRefDecl] = {}
+    for fname, target_cls in decls["ref"].items():
+        # A string target (e.g. Ref["Station"] for self-references) is
+        # only checked against the Component base; identity resolution
+        # does not need the class.
+        check_cls = target_cls if isinstance(target_cls, type) else Component
+        values = []
+        for template in templates:
+            value = vars(template).get(fname)
+            if value is not None and not isinstance(value, check_cls):
+                raise TypeError(
+                    f"component '{component_name}' ref '{fname}' value must "
+                    f"be a {check_cls.__name__} instance or None")
+            values.append(value)
+        refs[fname] = _ComponentRefDecl(fname, False, raw=tuple(values))
+    for fname, target_cls in decls["refs"].items():
+        check_cls = target_cls if isinstance(target_cls, type) else Component
+        tables = []
+        for template in templates:
+            value = vars(template).get(fname)
+            if value is None:
+                value = ()
+            if (not isinstance(value, (list, tuple))
+                    or not all(isinstance(item, check_cls)
+                               for item in value)):
+                raise TypeError(
+                    f"component '{component_name}' refs table '{fname}' "
+                    "value must be a list or tuple of "
+                    f"{check_cls.__name__} instances")
+            tables.append(tuple(value))
+        refs[fname] = _ComponentRefDecl(fname, True, raw_tables=tuple(tables))
+    return refs
+
+
+def _decl_templates(decl: "_AnyComponentDecl") -> tuple["Component", ...]:
+    if isinstance(decl, _ComponentCollectionDecl):
+        return decl.templates
+    return decl.instances
+
+
+def _resolve_component_refs(roots: Sequence["_AnyComponentDecl"]) -> None:
+    """Resolve raw Ref/Refs targets to (decl, item index) pairs; runs after
+    all component declarations are built, so forward references work."""
+    identity: dict[int, Any] = {}
+    for decl in _walk_component_declarations(roots):
+        templates = _decl_templates(decl)
+        count = len(templates)
+        for index, template in enumerate(templates):
+            key = id(template)
+            if key in identity:
+                identity[key] = _AMBIGUOUS_REF_TARGET
+            else:
+                identity[key] = (decl, index if count > 1 else None)
+
+    for decl in _walk_component_declarations(roots):
+        for ref in decl.component_refs.values():
+            _resolve_component_ref_decl(decl, ref, identity)
+
+
+def _resolve_component_ref_target(
+    decl: "_AnyComponentDecl",
+    ref: _ComponentRefDecl,
+    instance: "Component",
+    identity: Mapping[int, Any],
+) -> tuple["_AnyComponentDecl", int | None]:
+    target = identity.get(id(instance))
+    if target is None:
+        raise ValueError(
+            f"component '{decl.name}' ref '{ref.name}' references a "
+            f"{type(instance).__name__} instance that is not declared on "
+            "the model")
+    if target is _AMBIGUOUS_REF_TARGET:
+        raise ValueError(
+            f"component '{decl.name}' ref '{ref.name}' references a "
+            "component instance that is the default of more than one model "
+            "field; the target is ambiguous")
+    return target
+
+
+def _resolve_component_ref_decl(
+    decl: "_AnyComponentDecl",
+    ref: _ComponentRefDecl,
+    identity: Mapping[int, Any],
+) -> None:
+    if not ref.table:
+        ref.targets = tuple(
+            None if instance is None
+            else _resolve_component_ref_target(decl, ref, instance, identity)
+            for instance in ref.raw
+        )
+        return
+    resolved = [
+        [_resolve_component_ref_target(decl, ref, instance, identity)
+         for instance in table]
+        for table in ref.raw_tables
+    ]
+    entries = [target for table in resolved for target in table]
+    if entries:
+        first = entries[0][0]
+        if (any(target[0] is not first for target in entries)
+                or _component_instance_count(first) <= 1):
+            raise ValueError(
+                f"component '{decl.name}' refs table '{ref.name}' entries "
+                "must all be items of a single component collection")
+        ref.table_decl = first
+    ref.table_indices = tuple(
+        target[1] for table in resolved for target in table)
+    ref.table_lengths, ref.table_offsets = _offsets_from_counts(
+        len(table) for table in resolved)
 
 
 def _is_component_class(obj: Any) -> bool:
@@ -223,6 +365,7 @@ class _ComponentDecl:
     process_counts: dict[str, tuple[int, ...]] = field(default_factory=dict)
     process_offsets: dict[str, tuple[int, ...]] = field(default_factory=dict)
     aliased_fields: tuple[str, ...] = ()
+    component_refs: dict[str, _ComponentRefDecl] = field(default_factory=dict)
     children: tuple["_AnyComponentDecl", ...] = ()
 
 
@@ -245,6 +388,7 @@ class _ComponentCollectionDecl:
     item_display_name: str = ""
     direct_field_map: dict[str, str] = field(default_factory=dict)
     aliased_fields: tuple[str, ...] = ()
+    component_refs: dict[str, _ComponentRefDecl] = field(default_factory=dict)
     parent_offsets: tuple[int, ...] = ()
     parent_lengths: tuple[int, ...] = ()
     children: tuple["_AnyComponentDecl", ...] = ()
@@ -254,7 +398,8 @@ _AnyComponentDecl = _ComponentDecl | _ComponentCollectionDecl
 
 
 def _component_declarations(cls: type[Component]) -> dict[str, Any]:
-    decls = _field_declarations(cls, allow_symbolic_pqueues=True)
+    decls = _field_declarations(cls, allow_symbolic_pqueues=True,
+                                allow_refs=True)
     for kind in ("predicate", "event"):
         if decls[kind]:
             raise ValueError(
@@ -287,13 +432,15 @@ def _component_field_map(name: str, decls: dict[str, Any]) -> dict[str, str]:
 def _component_constants(
     items: Sequence[Component],
     field_map: Mapping[str, str],
+    exclude: frozenset[str] = frozenset(),
 ) -> dict[str, tuple[Any, ...]]:
     constants: dict[str, tuple[Any, ...]] = {}
     names = {
         name
         for item in items
         for name in vars(item)
-        if not name.startswith("_") and name not in field_map
+        if (not name.startswith("_") and name not in field_map
+            and name not in exclude)
     }
     for name in names:
         values = tuple(getattr(item, name, _MISSING) for item in items)
@@ -535,7 +682,9 @@ def _build_component_declaration(
     for fname, ref in wiring.items():
         direct_field_map[fname] = _resolve_wiring_target(
             name, fname, ref, wiring_registry)
-    constants = _component_constants(templates, direct_field_map)
+    component_refs = _component_ref_values(name, templates, decls)
+    constants = _component_constants(templates, direct_field_map,
+                                     exclude=frozenset(component_refs))
     pqueue_counts, pqueue_offsets = _resolve_component_pqueues(
         name, instance_count, decls, constants)
     process_counts, process_offsets = _resolve_component_processes(
@@ -630,6 +779,7 @@ def _build_component_declaration(
             item_display_name=item_display_name,
             direct_field_map=direct_field_map,
             aliased_fields=tuple(wiring),
+            component_refs=component_refs,
             parent_offsets=parent_offsets,
             parent_lengths=parent_lengths,
             children=tuple(children),
@@ -647,6 +797,7 @@ def _build_component_declaration(
         item_display_name=item_display_name,
         direct_field_map=direct_field_map,
         aliased_fields=tuple(wiring),
+        component_refs=component_refs,
         constants=constants,
         pqueue_counts=pqueue_counts,
         pqueue_offsets=pqueue_offsets,
@@ -721,6 +872,8 @@ def _class_declarations(cls: type) -> dict[str, Any]:
             parent_lengths=(len(templates),),
         )
         decls["component_collections"].append(component_decl)
+    _resolve_component_refs(
+        tuple(decls["components"]) + tuple(decls["component_collections"]))
     return decls
 
 
@@ -800,6 +953,18 @@ def _component_offsets_symbol(component: str) -> str:
     return f"_CIMBA_OFF_{component}"
 
 
+def _component_refidx_symbol(component: str, name: str) -> str:
+    return f"_CIMBA_REFIDX_{component}__{name}"
+
+
+def _component_reftab_symbol(component: str, name: str) -> str:
+    return f"_CIMBA_REFTAB_{component}__{name}"
+
+
+def _component_refoff_symbol(component: str, name: str) -> str:
+    return f"_CIMBA_REFOFF_{component}__{name}"
+
+
 def _env_attr(env_name: str, field: str, ctx: ast.expr_context) -> ast.Attribute:
     return ast.Attribute(
         value=ast.Name(id=env_name, ctx=ast.Load()),
@@ -861,6 +1026,14 @@ class _ComponentFieldAccess:
     text: str
 
 
+@dataclass(frozen=True)
+class _RefTableAccess:
+    parent: _ComponentAccess
+    name: str
+    ref: _ComponentRefDecl
+    text: str
+
+
 class _ComponentPathLowerer(ast.NodeTransformer):
     def __init__(self, *, env_name: str):
         self.env_name = env_name
@@ -878,26 +1051,135 @@ class _ComponentPathLowerer(ast.NodeTransformer):
 
         if isinstance(node, ast.Subscript):
             collection = self._collection_ref(node.value)
-            if collection is None:
-                return None
-            index = self._collection_item_index(
-                collection.decl, collection.index, node.slice)
-            return _ComponentAccess(
-                collection.decl, index, f"{collection.text}[...]")
+            if collection is not None:
+                index = self._collection_item_index(
+                    collection.decl, collection.index, node.slice)
+                return _ComponentAccess(
+                    collection.decl, index, f"{collection.text}[...]")
+            table = self._ref_table_ref(node.value)
+            if table is not None:
+                return self._ref_table_item(table, node.slice)
+            return None
 
         if isinstance(node, ast.Attribute):
             parent = self._namespace_ref(node.value)
             if parent is None:
                 return None
             child = _component_children_by_name(parent.decl).get(node.attr)
-            if child is None or isinstance(child, _ComponentCollectionDecl):
-                return None
-            index = (parent.index
-                     if _component_instance_count(child) > 1 else None)
-            return _ComponentAccess(
-                child, index, f"{parent.text}.{node.attr}")
+            if child is not None:
+                if isinstance(child, _ComponentCollectionDecl):
+                    return None
+                index = (parent.index
+                         if _component_instance_count(child) > 1 else None)
+                return _ComponentAccess(
+                    child, index, f"{parent.text}.{node.attr}")
+            ref = parent.decl.component_refs.get(node.attr)
+            if ref is not None and not ref.table:
+                return self._ref_namespace(parent, node.attr, ref)
+            return None
 
         return None
+
+    def _ref_table_ref(self, node: ast.AST) -> _RefTableAccess | None:
+        if not isinstance(node, ast.Attribute):
+            return None
+        parent = self._namespace_ref(node.value)
+        if parent is None:
+            return None
+        ref = parent.decl.component_refs.get(node.attr)
+        if ref is None or not ref.table:
+            return None
+        return _RefTableAccess(parent, node.attr, ref,
+                               f"{parent.text}.{node.attr}")
+
+    def _ref_namespace(
+        self,
+        parent: _ComponentAccess,
+        name: str,
+        ref: _ComponentRefDecl,
+    ) -> _ComponentAccess:
+        text = f"{parent.text}.{name}"
+        index = parent.index
+        if index is None or (isinstance(index, ast.Constant)
+                             and type(index.value) is int):
+            position = 0 if index is None else index.value
+            target = ref.targets[position]
+            if target is None:
+                raise ValueError(
+                    f"{self._callback_label()} dereferences {text}, which "
+                    "has no target for this instance")
+            target_decl, target_index = target
+            target_expr = (None if target_index is None
+                           else ast.Constant(target_index))
+            return _ComponentAccess(target_decl, target_expr, text)
+        if any(target is None for target in ref.targets):
+            raise ValueError(
+                f"{self._callback_label()} dereferences {text} with a "
+                "dynamic instance index, but some instances have no target")
+        first = ref.targets[0][0]
+        if any(target[0] is not first for target in ref.targets):
+            raise ValueError(
+                f"{self._callback_label()} dereferences {text} with a "
+                "dynamic instance index, which requires every instance to "
+                "reference the same component declaration")
+        if _component_instance_count(first) <= 1:
+            return _ComponentAccess(first, None, text)
+        lookup = _subscript(
+            ast.Name(id=_component_refidx_symbol(parent.decl.name, name),
+                     ctx=ast.Load()),
+            index, ast.Load())
+        return _ComponentAccess(first, lookup, text)
+
+    def _ref_table_item(
+        self,
+        table: _RefTableAccess,
+        item_slice: ast.expr,
+    ) -> _ComponentAccess:
+        item_index = self.visit(copy.deepcopy(item_slice))
+        if not isinstance(item_index, ast.expr):
+            raise TypeError("component refs table index did not lower to "
+                            "an expression")
+        ref = table.ref
+        text = f"{table.text}[...]"
+        parent_index = table.parent.index
+        parent_pos: int | None
+        if parent_index is None:
+            parent_pos = 0
+        elif (isinstance(parent_index, ast.Constant)
+                and type(parent_index.value) is int):
+            parent_pos = parent_index.value
+        else:
+            parent_pos = None
+
+        if (parent_pos is not None and isinstance(item_index, ast.Constant)
+                and type(item_index.value) is int):
+            length = ref.table_lengths[parent_pos]
+            position = item_index.value
+            if not 0 <= position < length:
+                raise ValueError(
+                    f"{self._callback_label()} index {position} is out of "
+                    f"range for {table.text} (length {length})")
+            target_index = ref.table_indices[
+                ref.table_offsets[parent_pos] + position]
+            return _ComponentAccess(ref.table_decl,
+                                    ast.Constant(target_index), text)
+
+        if ref.table_decl is None:
+            raise ValueError(
+                f"{self._callback_label()} indexes {table.text}, which has "
+                "no entries")
+        if parent_pos is not None:
+            offset: ast.expr = ast.Constant(ref.table_offsets[parent_pos])
+        else:
+            offset = _subscript(
+                ast.Name(id=_component_refoff_symbol(
+                    table.parent.decl.name, table.name), ctx=ast.Load()),
+                parent_index, ast.Load())
+        lookup = _subscript(
+            ast.Name(id=_component_reftab_symbol(
+                table.parent.decl.name, table.name), ctx=ast.Load()),
+            _add(offset, item_index), ast.Load())
+        return _ComponentAccess(ref.table_decl, lookup, text)
 
     def _collection_ref(self, node: ast.AST) -> _ComponentAccess | None:
         root = self._root_collection_ref(node)
@@ -938,6 +1220,8 @@ class _ComponentPathLowerer(ast.NodeTransformer):
                 f"{namespace.text}.{field_name}",
             )
         if field_name in _component_children_by_name(namespace.decl):
+            return None
+        if field_name in namespace.decl.component_refs:
             return None
         self._raise_unknown_field(namespace, field_name)
 
@@ -1054,14 +1338,16 @@ class _ComponentPathLowerer(ast.NodeTransformer):
         if (isinstance(node.func, ast.Name) and node.func.id == "getattr"
                 and node.args):
             target = (self._namespace_ref(node.args[0])
-                      or self._collection_ref(node.args[0]))
+                      or self._collection_ref(node.args[0])
+                      or self._ref_table_ref(node.args[0]))
             if target is not None:
                 raise ValueError(
                     f"{self._callback_label()} uses dynamic "
                     f"getattr({target.text}, ...), which is not supported")
         if isinstance(node.func, ast.Attribute):
             target = (self._namespace_ref(node.func.value)
-                      or self._collection_ref(node.func.value))
+                      or self._collection_ref(node.func.value)
+                      or self._ref_table_ref(node.func.value))
             if target is not None:
                 raise ValueError(
                     f"{self._callback_label()} cannot call "
@@ -1109,6 +1395,11 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             raise ValueError(
                 f"{self._callback_label()} uses {collection.text}[...] "
                 "directly; access one of its fields")
+        table = self._ref_table_ref(node.value)
+        if table is not None:
+            raise ValueError(
+                f"{self._callback_label()} uses {table.text}[...] "
+                "directly; access one of its fields")
         return self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
@@ -1144,6 +1435,11 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             raise ValueError(
                 f"{self._callback_label()} cannot use {collection.text} "
                 "directly; index it and access one of its fields")
+        table = self._ref_table_ref(node)
+        if table is not None:
+            raise ValueError(
+                f"{self._callback_label()} must index {table.text} before "
+                "using it")
         return self.generic_visit(node)
 
 
@@ -1413,25 +1709,56 @@ def _component_collection_namespace(
     components: Iterable[_AnyComponentDecl],
 ) -> dict[str, Any]:
     namespace: dict[str, Any] = {}
-    for decl in _walk_component_declarations(components):
-        for name, values in decl.constants.items():
-            if len(values) > 1:
-                namespace[_collection_const_symbol(decl.name, name)] = \
-                    np.asarray(values)
-        for field, offsets in decl.pqueue_offsets.items():
-            if len(offsets) > 1:
-                namespace[
-                    _collection_pqueue_offsets_symbol(decl.name, field)
-                ] = np.asarray(offsets, dtype=np.int64)
-        for field, offsets in decl.process_offsets.items():
-            if len(offsets) > 1:
-                namespace[
-                    _collection_process_offsets_symbol(decl.name, field)
-                ] = np.asarray(offsets, dtype=np.int64)
-        if (isinstance(decl, _ComponentCollectionDecl)
-                and len(decl.parent_offsets) > 1):
-            namespace[_component_offsets_symbol(decl.name)] = np.asarray(
-                decl.parent_offsets, dtype=np.int64)
+    seen: set[int] = set()
+    stack = list(components)
+    while stack:
+        root = stack.pop()
+        for decl in _walk_component_declarations((root,)):
+            if id(decl) in seen:
+                continue
+            seen.add(id(decl))
+            for name, values in decl.constants.items():
+                if len(values) > 1:
+                    namespace[_collection_const_symbol(decl.name, name)] = \
+                        np.asarray(values)
+            for field, offsets in decl.pqueue_offsets.items():
+                if len(offsets) > 1:
+                    namespace[
+                        _collection_pqueue_offsets_symbol(decl.name, field)
+                    ] = np.asarray(offsets, dtype=np.int64)
+            for field, offsets in decl.process_offsets.items():
+                if len(offsets) > 1:
+                    namespace[
+                        _collection_process_offsets_symbol(decl.name, field)
+                    ] = np.asarray(offsets, dtype=np.int64)
+            if (isinstance(decl, _ComponentCollectionDecl)
+                    and len(decl.parent_offsets) > 1):
+                namespace[_component_offsets_symbol(decl.name)] = np.asarray(
+                    decl.parent_offsets, dtype=np.int64)
+            # Referenced declarations are reachable from lowered code, so
+            # their symbols (constants, offsets, ...) must be present too.
+            for name, ref in decl.component_refs.items():
+                if ref.table:
+                    if ref.table_decl is not None:
+                        namespace[
+                            _component_reftab_symbol(decl.name, name)
+                        ] = np.asarray(ref.table_indices, dtype=np.int64)
+                        stack.append(ref.table_decl)
+                    if len(ref.table_offsets) > 1:
+                        namespace[
+                            _component_refoff_symbol(decl.name, name)
+                        ] = np.asarray(ref.table_offsets, dtype=np.int64)
+                    continue
+                targets = [t for t in ref.targets if t is not None]
+                stack.extend(target_decl for target_decl, _index in targets)
+                if len(ref.targets) > 1 and len(targets) == len(ref.targets):
+                    first = targets[0][0]
+                    if (all(t[0] is first for t in targets)
+                            and _component_instance_count(first) > 1):
+                        namespace[
+                            _component_refidx_symbol(decl.name, name)
+                        ] = np.asarray([t[1] for t in targets],
+                                       dtype=np.int64)
     return namespace
 
 

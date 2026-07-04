@@ -164,6 +164,73 @@ references them, both fields must have the same kind, and wired fields do not
 appear in the trial table (use the target's flattened name, e.g.
 ``station_1__outbox``). Component collections cannot be wired yet.
 
+Routing with component references
+---------------------------------
+
+Wiring merges two fields into one entity, which fixes the flow at declaration
+time. When the *code* must choose a target — sequences, by-condition
+transfer to one of several stations — declare a component reference with
+``sim.Ref`` or an indexable reference table with ``sim.Refs``:
+
+.. code-block:: python
+
+   class Station(sim.Component):
+       inbox: sim.Store
+       downstream: sim.Ref["Station"]
+
+       def __init__(self, mean_time: float, downstream=None):
+           self.mean_time = mean_time
+           if downstream is not None:
+               self.downstream = downstream
+
+       @sim.process
+       def server(self, env):
+           while True:
+               item = sim.store_take(self.inbox)
+               sim.hold(sim.exponential(self.mean_time))
+               sim.store_put(self.downstream.inbox, item)
+
+The reference value is another component instance declared on the model.
+Inside compiled code, ``self.downstream.inbox`` resolves to the target's
+fields, constants, and processes exactly as if they were accessed through
+their own path. Unlike wiring, references are resolved after the whole model
+class is processed, so the target may be declared *after* the component that
+references it (values can also be attached post-declaration, e.g.
+``Line.station_1.downstream = Line.station_2`` before instantiating).
+
+``sim.Refs`` declares a routing table for runtime decisions. All entries must
+be items of a single component collection, so the lookup lowers to array
+indexing:
+
+.. code-block:: python
+
+   class Dispatcher(sim.Component):
+       inbox: sim.Store
+       routes: sim.Refs[Station]
+
+       def __init__(self, routes=()):
+           self.routes = tuple(routes)
+
+       @sim.process
+       def route(self, env):
+           while True:
+               item = sim.store_take(self.inbox)
+               sim.store_put(self.routes[item % 3].inbox, item)
+
+
+   class Shop(sim.Model):
+       stations: list[Station] = [Station(5.0), Station(7.0), Station(4.0)]
+       dispatch: Dispatcher = Dispatcher(
+           routes=(stations[0], stations[1], stations[2]))
+
+Model callbacks can follow references too (``env.dispatch.routes[1].inbox``,
+``env.stations[j].downstream.inbox``). A fixed ``sim.Ref`` may target any
+declared component; following a reference under a *dynamic* collection index
+additionally requires every item to reference the same component declaration.
+
+Prefer wiring for fixed linear flows (one shared entity, no extra hop) and
+references when the model routes items among alternatives at runtime.
+
 Flattened outputs and trial data
 --------------------------------
 

@@ -125,16 +125,16 @@ from ._intrinsics import record_addr as _record_addr
 from ._model import (Component, Condition, Dataset, Env, Event, Experiment,
                      FloatState, Handle, Model, Output, Param, Pool, PQueues,
                      Predicate, ProcessDAG, ProcessDAGBlock, ProcessDAGEdge,
-                     ProcessDAGNode, Processes, Queue, Resource, Spawnable,
-                     State, Store, Struct, Trace, capacity, collect, count,
-                     process, trace_rng)
+                     ProcessDAGNode, Processes, Queue, Ref, Refs, Resource,
+                     Spawnable, State, Store, Struct, Trace, capacity,
+                     collect, count, process, trace_rng)
 
 __all__ = [
     "Model", "Component", "Experiment", "Env", "Handle",
     "Param", "Output", "State", "FloatState", "Queue", "Resource", "Pool",
     "Store", "Dataset", "Condition", "Predicate", "Event", "Processes",
-    "PQueues", "Spawnable", "Struct", "Trace", "capacity", "collect",
-    "count", "process", "trace_rng",
+    "PQueues", "Ref", "Refs", "Spawnable", "Struct", "Trace", "capacity",
+    "collect", "count", "process", "trace_rng",
     "ProcessDAG", "ProcessDAGBlock", "ProcessDAGNode", "ProcessDAGEdge",
     "SUCCESS", "PREEMPTED", "INTERRUPTED", "STOPPED", "CANCELLED", "TIMEOUT",
     "LOGGER_FATAL", "LOGGER_ERROR", "LOGGER_WARNING", "LOGGER_INFO",

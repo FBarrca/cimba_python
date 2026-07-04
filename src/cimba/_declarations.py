@@ -39,6 +39,8 @@ _RESERVED = {name for name, _ in _STANDARD_FIELDS}
 
 
 if TYPE_CHECKING:
+    from typing import Union
+
     Param = float        #: swept input, set by experiment()
     Output = float       #: result, written by the model
     State = int          #: mutable per-trial counter
@@ -57,6 +59,16 @@ if TYPE_CHECKING:
     PQueues = Sequence[Handle]
     #: the same-named @model.process, created at runtime by sim.spawn()
     Spawnable = int
+    #: reference to another declared component instance; Ref[Station]
+    #: type-checks as Station
+    Ref = Union
+    #: indexable table of component references; Refs[Station][i]
+    #: type-checks as Station
+    Refs = Sequence
+
+    class _RefHint:
+        target: Any
+        table: bool
 
     class Trace:
         """Per-trial replay array, fed to experiment(); inside model code
@@ -98,6 +110,32 @@ else:
         def __new__(cls, *args, **kwargs):
             raise TypeError("Trace(field) views are only available "
                             "inside compiled model code")
+
+    class _RefHint:
+        """Annotation marker produced by Ref[Target] / Refs[Target]."""
+
+        __slots__ = ("target", "table")
+
+        def __init__(self, target, table):
+            self.target = target
+            self.table = table
+
+    class Ref:
+        """Reference to another declared component instance, e.g.
+        ``downstream: sim.Ref[Station]``; the value is set on the instance
+        (usually in ``__init__``) and resolved when the model is built."""
+
+        def __class_getitem__(cls, target):
+            return _RefHint(target, table=False)
+
+    class Refs:
+        """Indexable table of component references, e.g.
+        ``routes: sim.Refs[Station]``; entries must be items of a single
+        component collection so ``self.routes[i]`` can lower to an
+        array lookup."""
+
+        def __class_getitem__(cls, target):
+            return _RefHint(target, table=True)
 
     class _Capacity:
         def __init__(self, cap):
@@ -148,7 +186,8 @@ def _empty_declarations() -> dict[str, Any]:
                              "predicate": [], "event": [], "processes": [],
                              "spawnable": [], "trace": [],
                              "queue": {}, "pool": {}, "store": {},
-                             "pqueues": {}, "components": [],
+                             "pqueues": {}, "ref": {}, "refs": {},
+                             "components": [],
                              "component_collections": [],
                              "field_shapes": {}}
     return decls
@@ -158,10 +197,19 @@ def _field_declarations(
     cls: type,
     *,
     allow_symbolic_pqueues: bool = False,
+    allow_refs: bool = False,
 ) -> dict[str, Any]:
     """Collect direct env field declarations from a Model/Component class."""
     decls = _empty_declarations()
     for fname, hint in get_type_hints(cls).items():
+        if isinstance(hint, _RefHint):
+            if not allow_refs:
+                raise ValueError(
+                    f"field '{fname}': Ref/Refs declarations are only "
+                    "supported on Component classes")
+            _check_name(fname, "ref")
+            decls["refs" if hint.table else "ref"][fname] = hint.target
+            continue
         try:
             kind = _DECL_KINDS.get(hint)
         except TypeError:

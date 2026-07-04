@@ -1727,3 +1727,291 @@ def test_component_field_access_outside_model_returns_wiring_ref():
         stage.seen  # Output fields are not wirable
     with pytest.raises(AttributeError):
         stage.missing
+
+class RefNode(sim.Component):
+    got: sim.State
+    inbox: sim.Store
+    downstream: sim.Ref["RefNode"]
+
+    def __init__(self, tag: int = 0, downstream=None):
+        self.tag = tag
+        if downstream is not None:
+            self.downstream = downstream
+
+    @sim.process
+    def take(self, env):
+        while True:
+            sim.store_take(self.inbox)
+            self.got += 1
+
+
+class RefRelay(sim.Component):
+    passed: sim.State
+    inbox: sim.Store
+    downstream: sim.Ref[sim.Component]
+
+    def __init__(self, downstream=None):
+        if downstream is not None:
+            self.downstream = downstream
+
+    @sim.process
+    def relay(self, env):
+        while True:
+            item = sim.store_take(self.inbox)
+            self.passed += 1
+            sim.store_put(self.downstream.inbox, item)
+
+
+def test_component_ref_chain_supports_forward_declaration_order():
+    second = RefRelay()
+    end = RefNode()
+    second.downstream = end
+
+    class Line(sim.Model):
+        relay1: RefRelay = RefRelay(downstream=second)
+        relay2: RefRelay = second
+        sink: RefNode = end
+
+    model = Line()
+
+    @model.process
+    def feed(env: Line):
+        sim.store_put(env.relay1.inbox, 1)
+        sim.store_put(env.relay1.inbox, 2)
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=5)
+    assert exp.run() == 0
+    assert exp.trials["relay1__passed"][0] == 2
+    assert exp.trials["relay2__passed"][0] == 2
+    assert exp.trials["sink__got"][0] == 2
+
+
+def test_component_refs_table_routes_by_condition():
+    class Dispatcher(sim.Component):
+        sent: sim.State
+        inbox: sim.Store
+        routes: sim.Refs[RefNode]
+
+        def __init__(self, routes=()):
+            self.routes = tuple(routes)
+
+        @sim.process
+        def route(self, env):
+            while True:
+                item = sim.store_take(self.inbox)
+                self.sent += 1
+                sim.store_put(self.routes[item % 3].inbox, item)
+
+    class Shop(sim.Model):
+        nodes: list[RefNode] = [RefNode(), RefNode(), RefNode()]
+        dispatch: Dispatcher = Dispatcher(routes=(nodes[0], nodes[1],
+                                                  nodes[2]))
+
+    model = Shop()
+
+    @model.process
+    def feed(env: Shop):
+        for i in range(7):
+            sim.store_put(env.dispatch.inbox, i)
+
+    @model.process
+    def probe(env: Shop):
+        sim.store_put(env.dispatch.routes[1].inbox, 100)
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=5)
+    assert exp.run() == 0
+    assert list(exp.trials["nodes__got"][0]) == [3, 3, 2]
+    assert exp.trials["dispatch__sent"][0] == 7
+
+
+def test_component_collection_items_can_reference_mixed_targets():
+    end = RefNode()
+    first, second = RefRelay(), RefRelay()
+    first.downstream = second   # item of the same collection
+    second.downstream = end     # separately declared component
+
+    class Chain(sim.Model):
+        relays: list[RefRelay] = [first, second]
+        sink: RefNode = end
+
+    model = Chain()
+
+    @model.process
+    def feed(env: Chain):
+        sim.store_put(env.relays[0].inbox, 9)
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=5)
+    assert exp.run() == 0
+    assert list(exp.trials["relays__passed"][0]) == [1, 1]
+    assert exp.trials["sink__got"][0] == 1
+
+
+def test_model_callback_can_follow_refs_with_dynamic_index():
+    a, b, c = RefNode(), RefNode(), RefNode()
+    a.downstream = b
+    b.downstream = c
+    c.downstream = a
+
+    class Ring(sim.Model):
+        nodes: list[RefNode] = [a, b, c]
+
+    model = Ring()
+
+    @model.process
+    def probe(env: Ring):
+        for j in range(3):
+            sim.store_put(env.nodes[j].downstream.inbox, j)
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=5)
+    assert exp.run() == 0
+    assert list(exp.trials["nodes__got"][0]) == [1, 1, 1]
+
+
+def test_component_ref_exposes_target_constants():
+    class Reader(sim.Component):
+        tag_seen: sim.State
+        downstream: sim.Ref[RefNode]
+
+        def __init__(self, downstream=None):
+            if downstream is not None:
+                self.downstream = downstream
+
+        @sim.process
+        def read(self, env):
+            self.tag_seen += self.downstream.tag
+
+    class M(sim.Model):
+        target: RefNode = RefNode(tag=7)
+        reader: Reader = Reader(downstream=target)
+
+    model = M()
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=5)
+    assert exp.run() == 0
+    assert exp.trials["reader__tag_seen"][0] == 7
+
+
+def test_component_ref_declaration_errors_are_rejected():
+    with pytest.raises(ValueError, match="only supported on Component"):
+        class BadModel(sim.Model):
+            x: sim.Ref[RefNode]
+
+        BadModel()
+
+    with pytest.raises(ValueError, match="no target for this instance"):
+        class Unset(sim.Model):
+            relay: RefRelay = RefRelay()
+
+        Unset()
+
+    with pytest.raises(ValueError, match="not declared on the model"):
+        class Undeclared(sim.Model):
+            relay: RefRelay = RefRelay(downstream=RefNode())
+            sink: RefNode = RefNode()
+
+        Undeclared()
+
+    shared = RefNode()
+    with pytest.raises(ValueError, match="ambiguous"):
+        class Ambiguous(sim.Model):
+            x: RefNode = shared
+            y: RefNode = shared
+            relay: RefRelay = RefRelay(downstream=shared)
+
+        Ambiguous()
+
+    with pytest.raises(TypeError, match="instance or None"):
+        class WrongType(sim.Model):
+            relay: RefRelay = RefRelay(downstream=5)
+
+        WrongType()
+
+
+def test_component_refs_table_errors_are_rejected():
+    class Dispatcher(sim.Component):
+        inbox: sim.Store
+        routes: sim.Refs[RefNode]
+
+        def __init__(self, routes=()):
+            self.routes = tuple(routes)
+
+        @sim.process
+        def route(self, env):
+            while True:
+                item = sim.store_take(self.inbox)
+                sim.store_put(self.routes[item % 2].inbox, item)
+
+    with pytest.raises(ValueError, match="single component collection"):
+        class SingleTarget(sim.Model):
+            sink: RefNode = RefNode()
+            dispatch: Dispatcher = Dispatcher(routes=(sink,))
+
+        SingleTarget()
+
+    with pytest.raises(ValueError, match="single component collection"):
+        class MixedCollections(sim.Model):
+            left: list[RefNode] = [RefNode(), RefNode()]
+            right: list[RefNode] = [RefNode(), RefNode()]
+            dispatch: Dispatcher = Dispatcher(routes=(left[0], right[0]))
+
+        MixedCollections()
+
+
+def test_component_ref_usage_errors_are_rejected():
+    left, right = RefNode(), RefNode()
+    left.downstream = right
+
+    class Pair(sim.Model):
+        a: RefNode = left
+        b: RefNode = right
+
+    bare = Pair()
+    with pytest.raises(ValueError, match="cannot use env.a.downstream "
+                                         "directly"):
+        @bare.process
+        def bare_ref(env: Pair):
+            _ = env.a.downstream
+            sim.suspend()
+
+    class Router(sim.Component):
+        inbox: sim.Store
+        routes: sim.Refs[RefNode]
+
+        def __init__(self, routes=()):
+            self.routes = tuple(routes)
+
+        @sim.process
+        def route(self, env):
+            sim.store_take(self.inbox)
+
+    class Routed(sim.Model):
+        nodes: list[RefNode] = [RefNode(), RefNode()]
+        router: Router = Router(routes=(nodes[0], nodes[1]))
+
+    unindexed = Routed()
+    with pytest.raises(ValueError, match="must index env.router.routes"):
+        @unindexed.process
+        def bare_table(env: Routed):
+            _ = env.router.routes
+            sim.suspend()
+
+    out_of_range = Routed()
+    with pytest.raises(ValueError, match="out of range"):
+        @out_of_range.process
+        def oob(env: Routed):
+            sim.store_put(env.router.routes[5].inbox, 1)
+
+    hetero_sink = RefNode()
+    x, y = RefNode(), RefNode()
+    x.downstream = y
+    y.downstream = hetero_sink
+
+    class Hetero(sim.Model):
+        nodes: list[RefNode] = [x, y]
+        sink: RefNode = hetero_sink
+
+    hetero = Hetero()
+    with pytest.raises(ValueError, match="same component declaration"):
+        @hetero.process
+        def dynamic(env: Hetero):
+            for j in range(2):
+                sim.store_put(env.nodes[j].downstream.inbox, j)
