@@ -209,12 +209,12 @@ def test_process_dag_infers_events_waits_and_callback_state():
     @model.event
     def tick(env: Clock):
         env.fired = env.fired + 1
-        sim.schedule(env.tick, env, 1.0)
+        env.tick.schedule(1.0)
 
     @model.process
     def timer(env: Clock):
-        handle = sim.schedule(env.tick, env, 1.0)
-        sim.wait_event(handle)
+        handle = env.tick.schedule(1.0)
+        handle.wait_event()
 
     graph = model.process_dag()
 

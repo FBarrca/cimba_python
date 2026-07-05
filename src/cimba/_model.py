@@ -537,7 +537,7 @@ class Model:
         self.entity_fields: dict[str, str] = {
             f.name: f.kind.name
             for f in decls.by_kind("queue", "resource", "pool", "store",
-                                   "pqueues", "condition")}
+                                   "pqueues", "condition", "event")}
         self._predicate_fields: list[str] = decls.names("predicate")
         self._event_fields: list[str] = decls.names("event")
         self._process_fields: list[str] = decls.names("processes")
@@ -824,11 +824,25 @@ class Model:
             register=self._register_dataset_capture,
         )
 
-    def _lower_entity_methods(self, fn: _F) -> _F:
+    def _entity_fields_with_hidden_events(self) -> dict[str, str]:
+        """``self.entity_fields`` plus hidden ``_ev_<name>`` fields for
+        undeclared ``@model.event`` callbacks (mirrors how
+        ``process_dag()``'s ``entity_kinds`` gets the same merge)."""
+        fields = dict(self.entity_fields)
+        for _name, _fn, field, _takes_data in self._events:
+            fields.setdefault(field, "event")
+        return fields
+
+    def _lower_entity_methods(
+        self, fn: _F, *, extra_fields: Mapping[str, str] = {},
+    ) -> _F:
+        fields = self._entity_fields_with_hidden_events()
+        if extra_fields:
+            fields = {**fields, **extra_fields}
         return _lower_entity_methods(
             fn,
             model_name=self.name,
-            entity_fields=self.entity_fields,
+            entity_fields=fields,
         )
 
     def _lower_random_calls(self, fn: _F) -> _F:
@@ -1084,8 +1098,8 @@ class Model:
         `def fn(env, data)` (the latter receives the int64 data word given
         at scheduling time). Its compiled address is published in the
         declared Event field of the same name, for use with
-        sim.schedule(env.<name>, env, delay, ...). (Without a declared
-        field, it is published as the hidden field `_ev_<name>`.)"""
+        env.<name>.schedule(delay, ...). (Without a declared field, it is
+        published as the hidden field `_ev_<name>`.)"""
         name = fn.__name__
         nargs = fn.__code__.co_argcount
         if nargs not in (1, 2):
@@ -1102,7 +1116,7 @@ class Model:
         fn = self._lower_component_refs(fn)
         fn = self._lower_dataset_methods(fn)
         fn = self._lower_history_methods(fn)
-        fn = self._lower_entity_methods(fn)
+        fn = self._lower_entity_methods(fn, extra_fields={field: "event"})
         fn = self._lower_random_calls(fn)
         self._events.append((name, fn, field, nargs == 2))
         return fn

@@ -32,11 +32,15 @@ spawnables use the same call through the component namespace, for example
 Low-level events
 ----------------
 
-Callbacks registered with ``@model.event`` are exposed in ``sim.Event`` fields.
-Use ``schedule()``, ``schedule_at()``, ``event_cancel()``,
-``event_reschedule()``, ``event_reprioritize()``, ``event_scheduled()``,
-``event_time()``, ``event_priority()``, ``current_event()``,
-``event_count()``, and ``clear_events()``.
+Callbacks registered with ``@model.event`` are exposed in ``sim.Event``
+fields. ``env.<event>.schedule(delay, data=0, priority=0)`` and
+``.schedule_at(at, ...)`` return a scheduled-instance handle with its own
+``.cancel()``, ``.reschedule(at)``, ``.reprioritize(priority)``,
+``.scheduled()``, ``.time()``, ``.priority()``, and ``.wait_event()``
+methods. ``sim.current_event()``, ``sim.event_count()``, and
+``sim.clear_events()`` remain free functions (they have no single event to
+act as a receiver).
 
 When several events share the same time, the higher-priority event runs first;
-ties at the same priority run in arrival order.
+ties at the same priority run in arrival order. See :doc:`../advanced/priority`
+for how this compares to process, resource/pool, and priority-queue priority.

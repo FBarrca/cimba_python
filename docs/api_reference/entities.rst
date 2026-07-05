@@ -37,6 +37,10 @@ Every queue/resource/pool also has ``.report()`` and
 recorded time-weighted history is ``env.<entity>.history()``; see
 :doc:`data` for the chained ``.history().mean()``-style summary calls.
 
+Resource and pool ``.acquire()``/``.preempt()`` queue and displace waiters by
+the calling process's priority; see :doc:`../advanced/priority` for the
+exact acquire-queue and preemption ordering rules.
+
 Stores, priority queues and conditions
 --------------------------------------
 
@@ -48,7 +52,10 @@ A ``sim.PQueues`` field is indexed to reach one priority queue:
 ``env.<pqueues>[i].put(obj, priority)``, ``.get()``, ``.take()``,
 ``.length()``, ``.space()``, ``.position(entry)``,
 ``.reprioritize(entry, priority)``, ``.cancel(entry)``, ``.mean_length()``,
-``.report()``, ``.report_file(path, append=1)``.
+``.report()``, ``.report_file(path, append=1)``. Objects come out
+highest-``priority`` first, ties broken by put order -- an ordering you
+choose per object, independent of any process's own priority; see
+:doc:`../advanced/priority`.
 
 ``env.<condition>.signal()`` wakes the condition's waiters;
 ``env.<condition>.wait_for(predicate)`` blocks until ``predicate`` (an

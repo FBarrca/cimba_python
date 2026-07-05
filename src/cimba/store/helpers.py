@@ -113,3 +113,29 @@ _condition_wait = _b.condition_wait
 @njit
 def condition_wait(condition: Handle, predicate: int, env) -> int:
     return _condition_wait(condition, predicate, _record_addr(env))
+
+
+# --- Event (cmb_event) ----------------------------------------------------
+_event_schedule = _b.event_schedule
+
+
+@njit
+def event_schedule(event: Handle, delay: float, data: int, priority: int,
+                   env) -> int:
+    return _event_schedule(event, _record_addr(env), data,
+                           _b.time() + delay, priority)
+
+
+@njit
+def event_schedule_at(event: Handle, at: float, data: int, priority: int,
+                      env) -> int:
+    return _event_schedule(event, _record_addr(env), data, at, priority)
+
+
+event_cancel = _b.event_cancel
+event_reschedule = _b.event_reschedule
+event_reprioritize = _b.event_reprioritize
+event_scheduled = _b.event_is_scheduled
+event_time = _b.event_time
+event_priority = _b.event_priority
+event_wait = _b.process_wait_event

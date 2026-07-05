@@ -202,16 +202,12 @@ class _Ref:
         return f"{self.kind}:{self.name}"
 
 
-_EVENT_PRODUCER_VERBS = {"schedule", "schedule_at"}
+#: ``sim.wait_event()`` stays a free function -- it is also used with
+#: timer-instance handles from ``sim.timer_set()``/``sim.timer_add()``,
+#: which have no declared field to hang an OO method off of. The
+#: scheduled-event-instance case (``h.wait_event()``) is handled through
+#: ``_ENTITY_METHOD_VERBS``/``_ENTITY_HELPER_VERBS`` instead.
 _EVENT_CONSUMER_VERBS = {"wait_event"}
-_EVENT_CONTROL_VERBS = {
-    "event_cancel",
-    "event_reschedule",
-    "event_reprioritize",
-    "event_scheduled",
-    "event_time",
-    "event_priority",
-}
 _DIRECT_PROCESS_VERBS = {
     "interrupt",
     "resume",
@@ -256,6 +252,15 @@ _ENTITY_METHOD_VERBS: dict[tuple[str, str], tuple[str, str]] = {
     ("pool", "available"): ("shared", "uses"),
     ("pool", "in_use"): ("shared", "uses"),
     ("pool", "held"): ("shared", "uses"),
+    ("event", "schedule"): ("produce", "schedule"),
+    ("event", "schedule_at"): ("produce", "schedule_at"),
+    ("event", "cancel"): ("produce", "event_cancel"),
+    ("event", "reschedule"): ("produce", "event_reschedule"),
+    ("event", "reprioritize"): ("produce", "event_reprioritize"),
+    ("event", "scheduled"): ("produce", "event_scheduled"),
+    ("event", "time"): ("produce", "event_time"),
+    ("event", "priority"): ("produce", "event_priority"),
+    ("event", "wait_event"): ("consume", "wait_event"),
 }
 
 #: declared field kind -> the label ``store/methods.py`` prefixes its
@@ -267,12 +272,17 @@ _ENTITY_HELPER_LABELS = {
     "store": "store",
     "pqueues": "pq",
     "condition": "condition",
+    "event": "event",
 }
 
 #: (field kind, method name) -> the helper-name method segment
 #: ``store/methods.py`` actually uses when it differs from the method name
-#: itself (only ``Condition.wait_for``, whose helper is ``condition_wait``).
-_ENTITY_HELPER_METHOD_OVERRIDES = {("condition", "wait_for"): "wait"}
+#: itself (``Condition.wait_for``'s helper is ``condition_wait``;
+#: ``Event.wait_event()``'s helper is ``event_wait``).
+_ENTITY_HELPER_METHOD_OVERRIDES = {
+    ("condition", "wait_for"): "wait",
+    ("event", "wait_event"): "wait",
+}
 
 #: By the time a *registered* process/predicate/event/collect function
 #: reaches DAG inference, the ``env.<entity>.method(...)`` sugar in its own
@@ -483,22 +493,10 @@ class _ProcessAnalyzer(ast.NodeVisitor):
                     self._add_edge(self.actor, ref, verb)
             return
 
-        if verb in _EVENT_PRODUCER_VERBS:
-            for ref in self._refs(node.args[0]):
-                if ref.kind == "event":
-                    self._add_edge(self.actor, ref, verb)
-            return
-
         if verb in _EVENT_CONSUMER_VERBS:
             for ref in self._refs(node.args[0]):
                 if ref.kind == "event":
                     self._add_edge(ref, self.actor, verb)
-            return
-
-        if verb in _EVENT_CONTROL_VERBS:
-            for ref in self._refs(node.args[0]):
-                if ref.kind == "event":
-                    self._add_edge(self.actor, ref, verb)
             return
 
     def _handle_entity_helper_call(self, node: ast.Call) -> bool:
@@ -601,11 +599,19 @@ class _ProcessAnalyzer(ast.NodeVisitor):
                     return refs
             return self._refs(node.value)
         if isinstance(node, ast.Call):
-            verb = _sim_verb(node.func)
-            if verb in _EVENT_PRODUCER_VERBS and node.args:
+            func = node.func
+            if (isinstance(func, ast.Attribute)
+                    and func.attr in ("schedule", "schedule_at")):
                 return {
-                    ref
-                    for ref in self._refs(node.args[0])
+                    ref for ref in self._refs(func.value)
+                    if ref.kind == "event"
+                }
+            if (isinstance(func, ast.Name)
+                    and func.id in ("_cimba_entity_event_schedule",
+                                    "_cimba_entity_event_schedule_at")
+                    and node.args):
+                return {
+                    ref for ref in self._refs(node.args[0])
                     if ref.kind == "event"
                 }
             fn = self._helper_function(node)

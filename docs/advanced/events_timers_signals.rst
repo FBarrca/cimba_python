@@ -30,12 +30,17 @@ callback:
 
    @model.process
    def supervisor(env: Clinic):
-       sim.schedule(env.close_shift, env, 480.0)
+       env.close_shift.schedule(480.0)
        sim.suspend()
 
-``sim.schedule()`` uses a delay from the current time. ``sim.schedule_at()``
-uses an absolute simulation time. Scheduled event handles can be cancelled,
-rescheduled, reprioritized, inspected, and waited on.
+``env.<event>.schedule()`` uses a delay from the current time.
+``.schedule_at()`` uses an absolute simulation time. Both return a
+scheduled-instance handle with its own methods: ``.cancel()``,
+``.reschedule()``, ``.reprioritize()``, ``.scheduled()``, ``.time()``,
+``.priority()``, and ``.wait_event()``. When two events are due at the exact
+same simulated time, ``priority=`` (default 0) decides which fires first,
+ties going to whichever was scheduled first; see :doc:`priority` for how
+this compares to process, resource/pool, and priority-queue priority.
 
 Waiting on scheduled events
 ---------------------------
@@ -46,12 +51,12 @@ An event can be used as a deadline that another process waits for:
 
    @model.process
    def reminder(env: Clinic):
-       handle = sim.schedule(env.close_shift, env, 480.0)
-       sig = sim.wait_event(handle)
+       handle = env.close_shift.schedule(480.0)
+       sig = handle.wait_event()
        if sig == sim.SUCCESS:
            env.closed = 1
 
-If the event is cancelled before it fires, ``sim.wait_event()`` returns a
+If the event is cancelled before it fires, ``.wait_event()`` returns a
 non-success signal. Check the signal when cancellation changes the model path.
 
 Process timers

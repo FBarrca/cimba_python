@@ -626,20 +626,20 @@ def test_low_level_events():
 
     @model.process
     def driver(env: Evented):
-        h = sim.schedule(env.ring, env, 2.0, 42, 7)
-        env.sched_ok = sim.event_scheduled(h)
-        env.t_sched = sim.event_time(h)
+        h = env.ring.schedule(2.0, 42, 7)
+        env.sched_ok = h.scheduled()
+        env.t_sched = h.time()
         env.count_ok = 1.0 if sim.event_count() >= 1 else 0.0
-        sim.event_reschedule(h, sim.now() + 3.0)
-        env.t_resched = sim.event_time(h)
-        sim.event_reprioritize(h, 9)
-        env.prio_after = sim.event_priority(h)
-        env.wait_status = sim.wait_event(h)
+        h.reschedule(sim.now() + 3.0)
+        env.t_resched = h.time()
+        h.reprioritize(9)
+        env.prio_after = h.priority()
+        env.wait_status = h.wait_event()
 
-        h2 = sim.schedule(env._ev_bump, env, 1.0)  # defaults: data/priority
-        env.cancel_first = sim.event_cancel(h2)
-        env.cancel_second = sim.event_cancel(h2)
-        sim.schedule_at(env._ev_bump, env, sim.now() + 1.0)
+        h2 = env._ev_bump.schedule(1.0)  # defaults: data/priority
+        env.cancel_first = h2.cancel()
+        env.cancel_second = h2.cancel()
+        env._ev_bump.schedule_at(sim.now() + 1.0)
         sim.hold(2.0)
         env.n_bumps = env.counter
         while True:

@@ -201,14 +201,16 @@ Use an event callback for that:
     def monitor(env: StopAtCount):
         while env.served < 100:
             sim.hold(1.0)
-        sim.schedule(env.stop_now, env, 0.0)
+        env.stop_now.schedule(0.0)
 
 ``sim.Processes`` fields publish handles for registered processes. Since
 ``arrival`` and ``service`` each have one copy, ``env.arrival[0]`` and
-``env.service[0]`` identify the running processes. ``sim.schedule()`` schedules
-the callback relative to the current simulation time; ``sim.schedule_at()``
-schedules at an absolute time. Event handles can be cancelled, rescheduled,
-reprioritized, inspected, and waited on with ``sim.wait_event()``.
+``env.service[0]`` identify the running processes. ``env.<event>.schedule()``
+schedules the callback relative to the current simulation time;
+``.schedule_at()`` schedules at an absolute time. The returned handle can be
+cancelled, rescheduled, reprioritized, inspected, and waited on with its own
+``.cancel()``/``.reschedule()``/``.reprioritize()``/``.scheduled()``/
+``.time()``/``.priority()``/``.wait_event()`` methods.
 
 We run the revised program and it reaches the same 10.0 end time:
 

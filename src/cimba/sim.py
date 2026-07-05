@@ -26,11 +26,11 @@ static type of `env`, so fields are checked and completed:
             sim.hold(cimba.random.exponential(1.0 / env.utilization))
             env.queue.put(1)
 
-Every declared Queue/Resource/Pool/Store/PQueues-element/Condition field
-carries its verbs as methods: ``env.queue.put(1)``, ``env.queue.get(1)``,
-``env.server.acquire()``, ``env.cond.wait_for(pred)``, and so on.
-Component-owned fields support the same sugar through
-``self.<field>.<method>(...)``.
+Every declared Queue/Resource/Pool/Store/PQueues-element/Condition/Event
+field carries its verbs as methods: ``env.queue.put(1)``,
+``env.queue.get(1)``, ``env.server.acquire()``, ``env.cond.wait_for(pred)``,
+``env.tick.schedule(1.0)``, and so on. Component-owned fields support the
+same sugar through ``self.<field>.<method>(...)``.
 
 Concept translation (cimba -> sim API):
 
@@ -56,11 +56,12 @@ Concept translation (cimba -> sim API):
                       sim.i2f() bit-cast timestamps in and out)
     cmb_condition     sim.Condition + sim.Predicate + @model.predicate,
                       env.<cond>.wait_for(predicate)/signal()
-    cmb_event         sim.Event + @model.event, sim.schedule()/
-                      sim.schedule_at(), sim.event_cancel()/
-                      _reschedule()/_reprioritize()/_scheduled()/
-                      _time()/_priority(), sim.current_event(),
-                      sim.event_count(), sim.clear_events()
+    cmb_event         sim.Event + @model.event, env.<event>.schedule()/
+                      schedule_at() (returns a scheduled-instance handle
+                      with its own .cancel()/.reschedule()/.reprioritize()/
+                      .scheduled()/.time()/.priority()/.wait_event()),
+                      sim.current_event(), sim.event_count(),
+                      sim.clear_events()
     cmb_dataset       sim.Dataset, env.waits.add(), env.waits.mean()/
                       count()/min()/max()/std()/median()/quantile()
     statistics        recorded over the measurement window (after warmup,
@@ -153,9 +154,7 @@ __all__ = [
     "spawn", "despawn",
     "suspend", "status", "set_priority",
     "timer_set", "timer_add", "timer_cancel", "timers_clear",
-    "schedule", "schedule_at", "event_cancel", "event_reschedule",
-    "event_reprioritize", "event_scheduled", "event_time",
-    "event_priority", "current_event", "event_count", "clear_events",
+    "current_event", "event_count", "clear_events",
     "log_text", "log_user", "log_user_i64", "log_user_f64",
     "f2i", "i2f",
 ]
@@ -266,46 +265,6 @@ if TYPE_CHECKING:
         ...
 
     # --- Low-level events (cmb_event) -----------------------------------------
-    def schedule(event: int, env: Env, delay: float, data: int = 0,
-                 priority: int = 0) -> int:
-        """Schedule a @model.event callback `delay` time units from now.
-        `event` is the env field of the same name; `data` is the int64
-        word handed to the callback. Returns the event handle used by the
-        other event verbs and sim.wait_event()."""
-        ...
-
-    def schedule_at(event: int, env: Env, at: float, data: int = 0,
-                    priority: int = 0) -> int:
-        """Schedule a @model.event callback at absolute time `at`
-        (must not be before sim.now()). Returns the event handle."""
-        ...
-
-    def event_cancel(event: int) -> int:
-        """Remove a scheduled event from the queue; 1 if found, else 0.
-        Processes blocked on it in sim.wait_event() see CANCELLED."""
-        ...
-
-    def event_reschedule(event: int, at: float) -> int:
-        """Move a scheduled event to absolute time `at`; 1 if found."""
-        ...
-
-    def event_reprioritize(event: int, priority: int) -> int:
-        """Change a scheduled event's priority; 1 if found."""
-        ...
-
-    def event_scheduled(event: int) -> int:
-        """1 if the event is currently in the event queue, else 0."""
-        ...
-
-    def event_time(event: int) -> float:
-        """Scheduled time of an event; it must still be in the queue
-        (check with event_scheduled() first if unsure)."""
-        ...
-
-    def event_priority(event: int) -> int:
-        """Priority of an event; it must still be in the queue."""
-        ...
-
     def current_event() -> int:
         """Handle of the currently (or most recently) executed event,
         zero if none."""
@@ -394,27 +353,9 @@ else:
     timers_clear = _b.process_timers_clear
 
     # Low-level events (cmb_event)
-    event_cancel = _b.event_cancel
-    event_reschedule = _b.event_reschedule
-    event_reprioritize = _b.event_reprioritize
-    event_scheduled = _b.event_is_scheduled
-    event_time = _b.event_time
-    event_priority = _b.event_priority
     current_event = _b.event_current
     event_count = _b.event_queue_count
     clear_events = _b.event_queue_clear
-
-    _event_schedule = _b.event_schedule
-
-    @njit
-    def schedule(event, env, delay, data=0, priority=0):
-        return _event_schedule(event, _record_addr(env), data,
-                               now() + delay, priority)
-
-    @njit
-    def schedule_at(event, env, at, data=0, priority=0):
-        return _event_schedule(event, _record_addr(env), data, at,
-                               priority)
 
     # Logging
     log_user = _b.logger_user_msg

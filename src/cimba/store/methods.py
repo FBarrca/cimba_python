@@ -1,9 +1,9 @@
 """AST lowering support for the ``env.<entity>.method(...)`` sugar.
 
-Every Queue/Resource/Pool/Store/PQueues-element/Condition field supports a
-fixed set of methods (``env.queue.put(1)``, ``env.server.acquire()``, and
-so on). This module defines those per-kind method tables and the two
-lowerers built on top of them:
+Every Queue/Resource/Pool/Store/PQueues-element/Condition/Event field
+supports a fixed set of methods (``env.queue.put(1)``,
+``env.server.acquire()``, and so on). This module defines those per-kind
+method tables and the two lowerers built on top of them:
 
 * ``lower_entity_method_call`` -- rewrites one already-resolved
   ``<entity>.method(...)`` call (used by ``_components.py`` for
@@ -17,6 +17,19 @@ lowerers built on top of them:
 ``env`` (the underlying ``cmb_condition_wait`` takes it as a third
 argument): the lowerers thread the function's own ``env`` name in and
 append it themselves, so model authors just write ``env.cond.wait_for(pred)``.
+``sim.Event.schedule()``/``.schedule_at()`` need the same treatment.
+
+``Event.schedule()``/``.schedule_at()`` return a *scheduled-instance*
+handle, a different value from the ``Event`` field itself, with its own
+verbs (``.cancel()``, ``.reschedule()``, ``.reprioritize()``,
+``.scheduled()``, ``.time()``, ``.priority()``, ``.wait_event()``). Kind
+``"event"`` covers the field's own two producer methods;
+``"event_instance"`` is a synthetic kind (no declared field ever has this
+kind) covering the scheduled-instance verbs, resolved by
+``EnvEntityMethodLowerer._target()`` recognizing a ``.schedule()``/
+``.schedule_at()`` call on an ``"event"``-kind receiver -- both as a
+``local = env.<field>.schedule(...)`` alias and via direct chaining
+(``env.<field>.schedule(...).cancel()``).
 """
 
 from __future__ import annotations
@@ -52,13 +65,15 @@ class _EntityMethodSpec:
             raise ValueError(
                 f"{label} passes too many arguments to {kind} {method}()")
         call_args = list(args)
-        if not keywords:
-            return call_args
 
         by_name = {name: index for index, name in enumerate(self.params)}
         supplied = set(self.params[:len(call_args)])
         keyed: dict[int, ast.expr] = {}
-        max_index = len(call_args) - 1
+        #: fill every remaining param (not just ones a keyword references),
+        #: so trailing defaults apply even when the call passes no keywords
+        #: at all (e.g. ``env.tick.schedule(1.0)`` relying on default
+        #: data/priority).
+        max_index = len(self.params) - 1
         for kw in keywords:
             if kw.arg is None:
                 raise ValueError(
@@ -176,6 +191,24 @@ _KIND_SPECS: dict[str, dict[str, _EntityMethodSpec]] = {
         "signal": _spec("condition", "signal"),
         "wait_for": _spec("condition", "wait", ("predicate",),
                           needs_env=True),
+    },
+    "event": {
+        "schedule": _spec("event", "schedule", ("delay", "data", "priority"),
+                          defaults={"data": 0, "priority": 0}, needs_env=True),
+        "schedule_at": _spec("event", "schedule_at", ("at", "data", "priority"),
+                             defaults={"data": 0, "priority": 0},
+                             needs_env=True),
+    },
+    #: synthetic kind: the scheduled-instance handle returned by
+    #: ``Event.schedule()``/``.schedule_at()``, never a declared field kind.
+    "event_instance": {
+        "cancel": _spec("event", "cancel"),
+        "reschedule": _spec("event", "reschedule", ("at",)),
+        "reprioritize": _spec("event", "reprioritize", ("priority",)),
+        "scheduled": _spec("event", "scheduled"),
+        "time": _spec("event", "time"),
+        "priority": _spec("event", "priority"),
+        "wait_event": _spec("event", "wait_event", helper_attr="event_wait"),
     },
 }
 
@@ -303,6 +336,17 @@ class EnvEntityMethodLowerer(ast.NodeTransformer):
         if isinstance(node, ast.Name) and node.id in self.aliases:
             return (ast.Name(id=node.id, ctx=ast.Load()),
                     self.aliases[node.id])
+        if (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in ("schedule", "schedule_at")):
+            receiver = self._target(node.func.value)
+            if receiver is not None and receiver[1] == "event":
+                entity, _kind = receiver
+                lowered = lower_entity_method_call(
+                    node, entity, kind="event", visit=self.visit,
+                    label=self.label,
+                    env_expr=ast.Name(id=self.env_name, ctx=ast.Load()))
+                return (lowered, "event_instance")
         return None
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:

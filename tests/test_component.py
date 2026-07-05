@@ -401,7 +401,7 @@ def test_model_event_can_use_component_field_namespace():
 
     @model.process
     def driver(env: Network):
-        sim.schedule(env.bump, env, 1.0)
+        env.bump.schedule(1.0)
         sim.hold(2.0)
         sim.suspend()
 
