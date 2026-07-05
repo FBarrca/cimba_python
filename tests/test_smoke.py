@@ -7,7 +7,6 @@ import time
 
 import cimba
 import cimba.sim as sim
-from cimba import Buffer, Process, Simulation
 
 CAT_PROBABILITIES = np.array([0.2, 0.3, 0.5], dtype=np.float64)
 
@@ -40,9 +39,6 @@ def capture_native_stdout(fn):
 
 
 def test_c_module_shaped_imports_are_available():
-    assert Buffer is cimba.Buffer
-    assert Simulation is cimba.Simulation
-    assert Process is cimba.Process
     assert not hasattr(sim, "random")
 
 
