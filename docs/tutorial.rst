@@ -1942,64 +1942,40 @@ the number of large berths from one to five with ten replications at each level:
 
 .. image:: static/tut_4_2_python.svg
 
-Adding Python-powered simulation physics
-----------------------------------------
+Tutorial 5.1: Assembly-line flow and bottlenecks
+------------------------------------------------
 
-Some simulations need heavier computation inside each process: movement,
-geometry, sensor logic, routing, forecasting, optimization, or decision rules.
-The Python modeling pattern is to keep the simulation process readable and put
-the calculation behind small numeric helper functions.
+``tutorial/tut_5_1.py`` is a standalone three-station manufacturing-line model.
+It shows parts moving through station inboxes, acquiring each station's
+processing resource, and leaving through a finished-parts sink while the model
+records cycle times, wait times, utilization, throughput, and the number of
+parts in the system.
 
-For example, an aircraft process might update position every simulated minute,
-call a helper that computes detections, tally the count, and hold until the next
-observation time.
-
-The AWACS scenario on a single CPU
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The final scenario is an airborne sensor model. The active entities might be:
-
-* an aircraft process following a patrol pattern,
-* target processes changing state over time,
-* a sensor process scheduling observations,
-* and a reporting process collecting detections.
-
-The state fields hold positions, headings, target states, and counters. Random
-draws perturb movement, weather, detection probability, or target behavior.
-Events schedule observations and state changes. Numerical helper functions keep
-the geometry and detection calculations separate from the process choreography.
-
-Running ``tutorial/tut_5_1.py`` currently reports the feature status directly:
-
-.. code-block:: none
-
-    $ .venv/bin/python tutorial/tut_5_1.py
-    CUDA/GPU simulation hooks are not exposed in cimba Python yet.
-
-Additional manufacturing-line tutorial
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The repository also includes ``tutorial/assembly_line.py``, a standalone
-three-station manufacturing-line model. It shows parts moving through station
-inboxes, acquiring each station's processing resource, and leaving through a
-finished-parts sink while the model records cycle times, wait times,
-utilization, throughput, and the number of parts in the system.
-
-Run it from the repository root with plotting dependencies installed:
+Run it from the repository root:
 
 .. code-block:: bash
 
-    uv run --extra plot python tutorial/assembly_line.py
+    uv run python tutorial/tut_5_1.py
 
-The script writes a process graph to ``tutorial/assembly_line_plots/``.
+The script writes a process graph to ``tutorial/tut_5_1_plots/``.
 
-The key lesson is the same as in every earlier chapter: active entities are
-processes, passive constraints are model fields, randomness comes from
-``cimba.sim``, and experiments are independent trial tables that can be swept
-and summarized from Python.
+This is a good final tutorial because it puts several modeling ideas in one
+small production system:
+
+* use a reusable ``Station`` component for repeated process logic,
+* pass spawned part handles through ``Store`` inboxes to model physical flow,
+* reserve ``Resource`` objects only while work is actually being processed,
+* collect local station measurements and whole-system measurements together,
+* diagnose the bottleneck from utilization, waiting time, and work in process,
+* inspect the generated process graph to check the model's structure.
+
+The key lesson is the same as in every earlier chapter, now with a richer
+workflow: active entities are processes, passive constraints are model fields,
+randomness comes from ``cimba.sim``, and experiments are independent trial
+tables that can be swept and summarized from Python.
 
 This is where the tutorial stops, but not where the modeling style stops. The
-same pattern scales from a two-process queue to a harbor to a sensor scenario:
-write the active entities as processes, make shared constraints explicit,
+same pattern scales from a two-process queue to a harbor or a manufacturing
+line: write the active entities as processes, make shared constraints explicit,
 collect the outputs that answer the question, and then run enough independent
 trials to trust the answer.

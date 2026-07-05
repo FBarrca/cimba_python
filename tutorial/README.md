@@ -13,14 +13,13 @@ The file names intentionally match the upstream C tutorial sequence:
 - `tut_4_0.py` is the empty harbor-model template.
 - `tut_4_2.py` sketches the harbor experiment sweep on top of the Python harbor
   model.
-- `tut_5_1.py` records that the CUDA/GPU tutorial is not exposed in the Python
-  API yet.
-- `assembly_line.py` is a standalone three-station manufacturing-line tutorial
-  model with cycle-time, wait-time, utilization, and process-graph outputs.
+- `tut_5_1.py` is a three-station manufacturing-line tutorial model with
+  dynamic parts, station handoffs, cycle-time, wait-time, utilization, and
+  process-graph outputs.
 
 Run from the repository root, for example:
 
 ```bash
 uv run python tutorial/tut_1_7.py -n 10 -d 1000000 -w 1000 -t
-uv run --extra plot python tutorial/assembly_line.py
+uv run python tutorial/tut_5_1.py
 ```

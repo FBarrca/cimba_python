@@ -1,16 +1,16 @@
 Assembly Line
 =============
 
-``tutorial/assembly_line.py`` is a complete manufacturing-line model. It is
+``tutorial/tut_5_1.py`` is a complete manufacturing-line model. It is
 larger than the tiny queue examples because it combines dynamic parts, station
 inboxes, exclusive processing resources, per-station measurements, whole-system
 measurements, and graph output in one runnable script.
 
-Run it from the repository root with plotting dependencies installed:
+Run it from the repository root:
 
 .. code-block:: bash
 
-   uv run --extra plot python tutorial/assembly_line.py
+   uv run python tutorial/tut_5_1.py
 
 The simulated system
 --------------------
@@ -98,7 +98,7 @@ Process graph output
 --------------------
 
 After the experiment runs, ``plot_process_dag`` writes Mermaid and Graphviz
-representations under ``tutorial/assembly_line_plots/``. If Graphviz ``dot`` is
+representations under ``tutorial/tut_5_1_plots/``. If Graphviz ``dot`` is
 available, it also writes PNG and SVG renderings. This is useful for checking
 that the arrival process, part lifecycle, station servers, and finished-parts
 sink are connected the way the model intends.
@@ -106,5 +106,5 @@ sink are connected the way the model intends.
 Full source
 -----------
 
-.. literalinclude:: ../../tutorial/assembly_line.py
+.. literalinclude:: ../../tutorial/tut_5_1.py
    :language: python
