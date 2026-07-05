@@ -23,6 +23,15 @@ ffibuilder.cdef("""
                               void (*your_trial_func)(void *));
     uint64_t cmb_random_hwseed(void);
     uint64_t cpy_process_sizeof(void);
+    void *cpy_history_capture_store_create(uint64_t num_trials,
+                                           uint64_t num_slots);
+    void cpy_history_capture_store_destroy(void *store);
+    uint64_t cpy_history_capture_store_count(const void *store,
+                                             uint64_t trial,
+                                             uint64_t slot);
+    const double *cpy_history_capture_store_data(const void *store,
+                                                 uint64_t trial,
+                                                 uint64_t slot);
     void cpy_logger_flags_on(uint32_t flags);
     void cpy_logger_flags_off(uint32_t flags);
     void cmb_logger_flags_off(uint32_t flags);

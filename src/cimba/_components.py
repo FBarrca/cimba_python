@@ -1502,6 +1502,47 @@ class _ComponentPathLowerer(ast.NodeTransformer):
                     f"{self._callback_label()} uses dynamic "
                     f"getattr({target.text}, ...), which is not supported")
         if isinstance(node.func, ast.Attribute):
+            # Leave ``.history().capture()`` as a history call after lowering
+            # the component path; Model.collect handles capture registration.
+            if node.func.attr == "capture":
+                history_call = node.func.value
+                if (isinstance(history_call, ast.Call)
+                        and isinstance(history_call.func, ast.Attribute)
+                        and history_call.func.attr == "history"
+                        and not history_call.args
+                        and not history_call.keywords):
+                    access = self._field_ref(history_call.func.value)
+                    if access is not None:
+                        lowered_history = ast.Call(
+                            func=ast.Attribute(
+                                value=self._field_target(access, ast.Load()),
+                                attr="history",
+                                ctx=ast.Load(),
+                            ),
+                            args=[],
+                            keywords=[],
+                        )
+                        args = [self.visit(arg) for arg in node.args]
+                        keywords = [
+                            ast.keyword(
+                                arg=kw.arg,
+                                value=self.visit(kw.value),
+                            )
+                            for kw in node.keywords
+                        ]
+                        self.changed = True
+                        return ast.copy_location(
+                            ast.Call(
+                                func=ast.Attribute(
+                                    value=lowered_history,
+                                    attr="capture",
+                                    ctx=ast.Load(),
+                                ),
+                                args=args,
+                                keywords=keywords,
+                            ),
+                            node,
+                        )
             # self.<field>.history().method(...)
             history_call = node.func.value
             if (isinstance(history_call, ast.Call)

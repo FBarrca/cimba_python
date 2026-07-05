@@ -329,6 +329,125 @@ double cpy_timeseries_median(const void *tsp)
     return cmb_timeseries_median(tsp);
 }
 
+struct cpy_history_capture_slot {
+    uint64_t count;
+    double *rows;
+};
+
+struct cpy_history_capture_store {
+    uint64_t num_trials;
+    uint64_t num_slots;
+    struct cpy_history_capture_slot slots[];
+};
+
+static struct cpy_history_capture_slot *history_capture_slot(
+    const struct cpy_history_capture_store *store,
+    const uint64_t trial,
+    const uint64_t slot)
+{
+    if (store == NULL || trial >= store->num_trials
+            || slot >= store->num_slots) {
+        return NULL;
+    }
+    const uint64_t index = trial * store->num_slots + slot;
+    return (struct cpy_history_capture_slot *)&store->slots[index];
+}
+
+void *cpy_history_capture_store_create(const uint64_t num_trials,
+                                       const uint64_t num_slots)
+{
+    if (num_trials == 0u || num_slots == 0u) {
+        return NULL;
+    }
+    if (num_trials > UINT64_MAX / num_slots) {
+        return NULL;
+    }
+    const uint64_t total_slots = num_trials * num_slots;
+    if (total_slots > (UINT64_MAX - sizeof(struct cpy_history_capture_store))
+            / sizeof(struct cpy_history_capture_slot)) {
+        return NULL;
+    }
+    const uint64_t bytes = sizeof(struct cpy_history_capture_store)
+        + total_slots * sizeof(struct cpy_history_capture_slot);
+    struct cpy_history_capture_store *store = calloc(1u, (size_t)bytes);
+    if (store == NULL) {
+        return NULL;
+    }
+    store->num_trials = num_trials;
+    store->num_slots = num_slots;
+    return store;
+}
+
+void cpy_history_capture_store_destroy(void *storep)
+{
+    struct cpy_history_capture_store *store = storep;
+    if (store == NULL) {
+        return;
+    }
+    const uint64_t total_slots = store->num_trials * store->num_slots;
+    for (uint64_t i = 0u; i < total_slots; i++) {
+        free(store->slots[i].rows);
+    }
+    free(store);
+}
+
+uint64_t cpy_history_capture_store_capture(void *storep,
+                                           const uint64_t trial,
+                                           const uint64_t slot,
+                                           const void *tsp)
+{
+    struct cpy_history_capture_store *store = storep;
+    struct cpy_history_capture_slot *target =
+        history_capture_slot(store, trial, slot);
+    if (target == NULL || tsp == NULL) {
+        return 0u;
+    }
+
+    const struct cmb_timeseries *ts = tsp;
+    const struct cmb_dataset *ds = (const struct cmb_dataset *)tsp;
+    const uint64_t n = cmb_timeseries_count(ts);
+    double *rows = NULL;
+    if (n > 0u) {
+        if (n > UINT64_MAX / (3u * sizeof *rows)) {
+            return 0u;
+        }
+        rows = malloc((size_t)(n * 3u * sizeof *rows));
+        if (rows == NULL) {
+            return 0u;
+        }
+        for (uint64_t i = 0u; i < n; i++) {
+            rows[i * 3u] = ts->ta[i];
+            rows[i * 3u + 1u] = ds->xa[i];
+            rows[i * 3u + 2u] = ts->wa[i];
+        }
+    }
+
+    free(target->rows);
+    target->rows = rows;
+    target->count = n;
+    return n;
+}
+
+uint64_t cpy_history_capture_store_count(const void *storep,
+                                         const uint64_t trial,
+                                         const uint64_t slot)
+{
+    const struct cpy_history_capture_store *store = storep;
+    const struct cpy_history_capture_slot *source =
+        history_capture_slot(store, trial, slot);
+    return source == NULL ? 0u : source->count;
+}
+
+const double *cpy_history_capture_store_data(const void *storep,
+                                             const uint64_t trial,
+                                             const uint64_t slot)
+{
+    const struct cpy_history_capture_store *store = storep;
+    const struct cpy_history_capture_slot *source =
+        history_capture_slot(store, trial, slot);
+    return source == NULL ? NULL : source->rows;
+}
+
 typedef void (*file_writer_func)(FILE *fp, void *ctx);
 
 static uint64_t write_file(const intptr_t path,

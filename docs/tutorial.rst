@@ -385,6 +385,25 @@ two assignments are equivalent:
 
         env.avg_queue_length = env.queue.history().mean()
 
+When you want the raw path of a single run rather than only a scalar summary,
+declare a capture in the collector and read it from the experiment after
+``run()``. Tutorial 1.2 uses this to inspect how the queue grows and shrinks:
+
+.. code-block:: python
+
+    @model.collect
+    def collect_stats(env: MM1):
+        env.avg_queue_length = env.queue.history().mean()
+        env.queue.history().capture()
+
+    exp.run()
+    queue_history = exp.history("queue")
+
+``queue_history`` is a NumPy array with three columns: simulation time, queue
+level, and the duration for which that level held. With multiple replications,
+``exp.histories("queue")`` returns one array per trial, in experiment row
+order.
+
 The explicit history form also gives access to text reports and diagnostic
 plots. During a single-trial debugging run, print the queue report and a partial
 autocorrelation correlogram directly from the collector:

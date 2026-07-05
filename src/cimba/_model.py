@@ -52,6 +52,15 @@ from ._declarations import (
     _STANDARD_FIELDS,
 )
 from ._graph import ProcessDAG, ProcessDAGBlock, infer_process_dag
+from ._history_capture import (
+    HISTORY_CAPTURE_STORE_FIELD,
+    HISTORY_CAPTURE_TRIAL_FIELD,
+    HistoryCaptureSpec,
+    copy_capture_store,
+    create_capture_store,
+    destroy_capture_store,
+    lower_history_capture_methods,
+)
 from ._intrinsics import addressof, ptr_caster
 from .random._lowering import lower_random_calls_in_function
 
@@ -519,6 +528,7 @@ class Model:
             f.name: f.kind.binding
             for f in decls.by_kind("queue", "resource", "pool", "store",
                                    "pqueues")}
+        self._history_captures: dict[str, HistoryCaptureSpec] = {}
         #: declared entity field name -> field kind, for fields whose
         #: ``env.<entity>.method(...)`` calls (put/acquire/signal/...)
         #: compile to native helper calls.
@@ -768,6 +778,26 @@ class Model:
             fn,
             model_name=self.name,
             history_fields=self.history_fields,
+        )
+
+    def _register_history_capture(self, name: str, binding: str) -> int:
+        spec = self._history_captures.get(name)
+        if spec is not None:
+            return spec.slot
+        slot = len(self._history_captures)
+        self._history_captures[name] = HistoryCaptureSpec(
+            name=name,
+            binding=binding,
+            slot=slot,
+        )
+        return slot
+
+    def _lower_history_capture_methods(self, fn: _F) -> _F:
+        return lower_history_capture_methods(
+            fn,
+            model_name=self.name,
+            history_fields=self.history_fields,
+            register=self._register_history_capture,
         )
 
     def _lower_entity_methods(self, fn: _F) -> _F:
@@ -1062,6 +1092,7 @@ class Model:
         if self._compiled is not None:
             raise RuntimeError("model is already compiled")
         fn = self._lower_component_refs(fn)
+        fn = self._lower_history_capture_methods(fn)
         fn = self._lower_dataset_methods(fn)
         fn = self._lower_history_methods(fn)
         fn = self._lower_entity_methods(fn)
@@ -1149,6 +1180,11 @@ class Model:
     def dtype(self) -> np.dtype:
         # (name, format) or (name, format, shape) numpy field specs
         fields: list[Any] = list(_STANDARD_FIELDS)
+        if self._history_captures:
+            fields += [
+                (HISTORY_CAPTURE_TRIAL_FIELD, "<u8"),
+                (HISTORY_CAPTURE_STORE_FIELD, "<i8"),
+            ]
         for f in self._decls.by_kind("param", "output", "queue", "resource",
                                      "pool", "store", "dataset", "condition",
                                      "state", "fstate"):
@@ -1617,6 +1653,10 @@ class Model:
         trials["warmup_s"] = warmup
         trials["duration_s"] = duration
         trials["cooldown_s"] = cooldown
+        if self._history_captures:
+            trials[HISTORY_CAPTURE_TRIAL_FIELD] = np.arange(
+                n_trials, dtype=np.uint64)
+            trials[HISTORY_CAPTURE_STORE_FIELD] = 0
         for p, axis, indexes in zip(self.params, axes, mesh):
             selected = axis[indexes.ravel()]
             trials[p] = np.repeat(selected, replications, axis=0)
@@ -1663,7 +1703,9 @@ class Model:
                       if axis.shape[0] > 1)
         return Experiment(self, trials, compiled["trial"].address,
                           keepalive=trace_rows, replications=replications,
-                          swept=swept)
+                          swept=swept,
+                          history_captures=tuple(
+                              self._history_captures.values()))
 
 
 class Experiment:
@@ -1680,7 +1722,8 @@ class Experiment:
 
     def __init__(self, model: Model, trials: np.ndarray, trial_addr: int,
                  keepalive: Sequence[np.ndarray] = (),
-                 replications: int = 1, swept: Sequence[str] = ()):
+                 replications: int = 1, swept: Sequence[str] = (),
+                 history_captures: Sequence[HistoryCaptureSpec] = ()):
         self.model = model
         self.trials = trials
         self._trial_addr = trial_addr
@@ -1689,6 +1732,11 @@ class Experiment:
         self.failures = None
         self.replications = replications
         self.swept = tuple(swept)
+        ordered_captures = sorted(history_captures, key=lambda spec: spec.slot)
+        self._history_capture_names = tuple(spec.name
+                                            for spec in ordered_captures)
+        self._history_capture_data: dict[
+            str, tuple[np.ndarray, ...]] | None = None
 
     def run(self) -> int:
         """Run all trials in parallel, in place. Returns the number of
@@ -1703,7 +1751,27 @@ class Experiment:
 
         fptr = ffi.cast("void(*)(void *)", self._trial_addr)
         buf = ffi.from_buffer(trials, require_writable=True)
-        lib.cimba_run_experiment(buf, trials.size, trials.itemsize, fptr)
+        capture_store = ffi.NULL
+        if self._history_capture_names:
+            self._history_capture_data = None
+            capture_store = create_capture_store(
+                trials.size, len(self._history_capture_names))
+            trials[HISTORY_CAPTURE_TRIAL_FIELD] = np.arange(
+                trials.size, dtype=np.uint64)
+            trials[HISTORY_CAPTURE_STORE_FIELD] = int(
+                ffi.cast("intptr_t", capture_store))
+        try:
+            lib.cimba_run_experiment(buf, trials.size, trials.itemsize, fptr)
+            if self._history_capture_names:
+                self._history_capture_data = copy_capture_store(
+                    capture_store,
+                    num_trials=trials.size,
+                    names=self._history_capture_names,
+                )
+        finally:
+            if capture_store != ffi.NULL:
+                destroy_capture_store(capture_store)
+                trials[HISTORY_CAPTURE_STORE_FIELD] = 0
 
         if not self.model.outputs:
             self.failures = 0
@@ -1763,3 +1831,18 @@ class Experiment:
 
     def __len__(self) -> int:
         return self.trials.size
+
+    def histories(self, name: str) -> tuple[np.ndarray, ...]:
+        """Captured raw history arrays for every trial."""
+        if name not in self._history_capture_names:
+            raise KeyError(f"unknown captured history: {name}")
+        if self._history_capture_data is None:
+            raise RuntimeError("run() the experiment before reading histories")
+        return self._history_capture_data[name]
+
+    def history(self, name: str, *, trial: int = 0) -> np.ndarray:
+        """Captured raw history array for one trial."""
+        rows = self.histories(name)
+        if trial < 0 or trial >= len(rows):
+            raise IndexError("history trial index out of range")
+        return rows[trial]

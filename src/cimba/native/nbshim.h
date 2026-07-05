@@ -85,6 +85,20 @@ CIMBA_PY_EXPORT double cpy_timeseries_max(const void *tsp);
 CIMBA_PY_EXPORT double cpy_timeseries_mean(const void *tsp);
 CIMBA_PY_EXPORT double cpy_timeseries_stddev(const void *tsp);
 CIMBA_PY_EXPORT double cpy_timeseries_median(const void *tsp);
+CIMBA_PY_EXPORT void *cpy_history_capture_store_create(uint64_t num_trials,
+                                                       uint64_t num_slots);
+CIMBA_PY_EXPORT void cpy_history_capture_store_destroy(void *store);
+CIMBA_PY_EXPORT uint64_t cpy_history_capture_store_capture(void *store,
+                                                           uint64_t trial,
+                                                           uint64_t slot,
+                                                           const void *tsp);
+CIMBA_PY_EXPORT uint64_t cpy_history_capture_store_count(const void *store,
+                                                         uint64_t trial,
+                                                         uint64_t slot);
+CIMBA_PY_EXPORT const double *cpy_history_capture_store_data(
+    const void *store,
+    uint64_t trial,
+    uint64_t slot);
 CIMBA_PY_EXPORT uint64_t cpy_dataset_print_file(const void *dsp,
                                                 intptr_t path,
                                                 uint64_t append);

@@ -83,6 +83,13 @@ py.install_sources(
 )
 
 py.install_sources(
+    'src/cimba/_history_capture/__init__.py',
+    'src/cimba/_history_capture/lowering.py',
+    'src/cimba/_history_capture/runtime.py',
+    subdir: 'cimba/_history_capture',
+)
+
+py.install_sources(
     'src/cimba/store/__init__.py',
     'src/cimba/store/helpers.py',
     'src/cimba/store/methods.py',

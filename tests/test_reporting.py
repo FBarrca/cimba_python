@@ -1,5 +1,8 @@
 import os
 
+import numpy as np
+import pytest
+
 import cimba.sim as sim
 
 
@@ -171,6 +174,130 @@ def test_timeseries_history_method_compiles_in_model_callbacks():
     assert exp.run() == 0
     assert exp["n"][0] >= 3.0
     assert exp["ok"][0] > 0.0
+
+
+def test_timeseries_history_capture_returns_per_trial_arrays():
+    class CaptureModel(sim.Model):
+        mean: sim.Output
+        q: sim.Queue = sim.capacity(5)
+
+    model = CaptureModel()
+
+    @model.process
+    def driver(env: CaptureModel):
+        for _ in range(3):
+            env.q.put(1)
+            sim.hold(1.0)
+            env.q.get(1)
+            sim.hold(1.0)
+        sim.suspend()
+
+    @model.collect
+    def collect(env: CaptureModel):
+        env.mean = env.q.history().mean()
+        env.q.history().capture()
+
+    exp = model.experiment(replications=2, duration=10.0, warmup=0.0,
+                           seed=17)
+
+    with pytest.raises(RuntimeError, match="run"):
+        exp.history("q")
+    with pytest.raises(KeyError, match="unknown captured history"):
+        exp.history("missing")
+
+    assert exp.run() == 0
+
+    histories = exp.histories("q")
+    assert len(histories) == len(exp)
+    for i, rows in enumerate(histories):
+        assert rows.dtype == np.float64
+        assert rows.ndim == 2
+        assert rows.shape[1] == 3
+        assert rows.shape[0] > 0
+        duration = rows[:, 2].sum()
+        assert duration > 0.0
+        mean = float(np.sum(rows[:, 1] * rows[:, 2]) / duration)
+        assert mean == pytest.approx(exp["mean"][i])
+
+    first = exp.history("q", trial=0)
+    first[:] = -1.0
+    assert exp.run() == 0
+    assert not np.all(exp.history("q", trial=0) == -1.0)
+
+
+def test_timeseries_history_capture_rejects_invalid_targets():
+    class DatasetCapture(sim.Model):
+        d: sim.Dataset
+
+    model = DatasetCapture()
+
+    @model.process
+    def dataset_driver(env: DatasetCapture):
+        env.d.add(1.0)
+
+    with pytest.raises(ValueError, match="unknown history field"):
+        @model.collect
+        def dataset_collect(env: DatasetCapture):
+            env.d.history().capture()
+
+    class IndexedCapture(sim.Model):
+        pqs: sim.PQueues = sim.count(1)
+
+    indexed = IndexedCapture()
+
+    @indexed.process
+    def indexed_driver(env: IndexedCapture):
+        env.pqs[0].put(1, 0)
+
+    with pytest.raises(ValueError, match="indexed entity"):
+        @indexed.collect
+        def indexed_collect(env: IndexedCapture):
+            env.pqs[0].history().capture()
+
+
+def test_timeseries_history_capture_rejects_component_collect():
+    class Station(sim.Component):
+        q: sim.Queue = sim.capacity(5)
+
+        @sim.process
+        def driver(self, env):
+            self.q.put(1)
+
+        @sim.collect
+        def collect(self, env):
+            self.q.history().capture()
+
+    with pytest.raises(ValueError, match="unsupported timeseries method"):
+        class Clinic(sim.Model):
+            station: Station = Station()
+
+        Clinic()
+
+
+def test_timeseries_history_capture_model_collect_uses_component_path():
+    class Station(sim.Component):
+        q: sim.Queue = sim.capacity(5)
+
+        @sim.process
+        def driver(self, env):
+            self.q.put(1)
+            sim.hold(1.0)
+
+    class Clinic(sim.Model):
+        station: Station = Station()
+
+    model = Clinic()
+
+    @model.collect
+    def collect(env: Clinic):
+        env.station.q.history().capture()
+
+    exp = model.experiment(replications=1, duration=2.0, warmup=0.0,
+                           seed=18)
+    assert exp.run() == 0
+    rows = exp.history("station__q")
+    assert rows.shape[1] == 3
+    assert rows[:, 2].sum() > 0.0
 
 
 def test_timeseries_history_method_compiles_in_components():

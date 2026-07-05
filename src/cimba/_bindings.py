@@ -246,6 +246,8 @@ timeseries_correlogram_file = _extern("cpy_timeseries_correlogram_file",
                                       _u64(_intp, _intp, _u64, _u64))
 timeseries_pacf_correlogram_file = _extern(
     "cpy_timeseries_pacf_correlogram_file", _u64(_intp, _intp, _u64, _u64))
+history_capture_store_capture = _extern(
+    "cpy_history_capture_store_capture", _u64(_intp, _u64, _u64, _intp))
 
 # --- Conditions -------------------------------------------------------------------
 condition_create = _extern("cmb_condition_create", _intp())

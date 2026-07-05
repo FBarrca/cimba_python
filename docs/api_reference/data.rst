@@ -93,7 +93,7 @@ counts more than one held only briefly, which is why these are separate
 chained methods are:
 
 ``count()``, ``min()``, ``max()``, ``mean()``, ``std()``, ``median()``,
-``print()``, ``print_file()``, ``fivenum()``, ``fivenum_file()``,
+``capture()``, ``print()``, ``print_file()``, ``fivenum()``, ``fivenum_file()``,
 ``histogram()``, ``histogram_file()``, ``correlogram()``,
 ``correlogram_file()``, ``pacf_correlogram()``, ``pacf_correlogram_file()``.
 
@@ -102,6 +102,28 @@ entity's recorded time series. Report several statistics off the same entity
 by chaining ``.history()`` again for each one (``env.q.history().mean()``,
 ``env.q.history().std()``, ...) -- each call is a cheap native lookup, not a
 new recording.
+
+Use ``capture()`` when you need the raw time path in Python without writing a
+file. It is declared in the model-level collector:
+
+.. code-block:: python
+
+   @model.collect
+   def collect_stats(env: Clinic):
+       env.mean_queue_len = env.waiting_room.history().mean()
+       env.waiting_room.history().capture()
+
+After ``exp.run()``, read the captured arrays from the experiment:
+
+.. code-block:: python
+
+   rows = exp.history("waiting_room", trial=0)
+   all_rows = exp.histories("waiting_room")
+
+Each returned array is ``float64`` with columns ``time``, ``value``, and
+``duration``. Captured names use the flattened field path, such as
+``"waiting_room"`` or ``"station__queue"``. The arrays are trial-local and
+aligned with the experiment row order.
 
 For text reports and text-mode plots, the no-suffix methods above (both
 dataset and ``.history()`` methods) print to stdout for console and notebook

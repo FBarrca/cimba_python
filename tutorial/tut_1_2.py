@@ -1,8 +1,16 @@
 """Tutorial 1.2: stop the M/M/1 simulation at a fixed duration."""
 
+import os
+from pathlib import Path
+
 import cimba
 import cimba.random as random
 import cimba.sim as sim
+
+PLOT_PATH = Path("queue_history.png")
+_NON_INTERACTIVE_BACKENDS = frozenset(
+    {"agg", "cairo", "pdf", "pgf", "ps", "svg", "template"}
+)
 
 
 class MM1(sim.Model):
@@ -32,7 +40,8 @@ def service(env: MM1):
 
 @model.collect
 def collect_stats(env: MM1):
-    env.avg_queue_length = env.queue.mean_level()
+    env.avg_queue_length = env.queue.history().mean()
+    env.queue.history().capture()
 
 
 def main() -> None:
@@ -48,7 +57,10 @@ def main() -> None:
     if failures:
         raise RuntimeError(f"{failures} trial(s) failed")
     avg = float(exp["avg_queue_length"][0])
+    queue_history = exp.history("queue")
     print(f"Simulation stopped at t=10.0, average queue length: {avg:.6f}")
+    print("First queue history rows: time, level, duration")
+    print(queue_history.shape)
 
 
 if __name__ == "__main__":

@@ -12,3 +12,7 @@ def test_tut_1_2_stop_event_ends_infinite_processes():
 
     assert exp.run() == 0
     assert exp["avg_queue_length"][0] >= 0.0
+    rows = exp.history("queue")
+    assert rows.ndim == 2
+    assert rows.shape[1] == 3
+    assert rows[:, 2].sum() > 0.0

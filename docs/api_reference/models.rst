@@ -119,3 +119,9 @@ half-width (``name_hw``, 95% by default)::
 level; failed trials (NaN) are excluded per output. ``exp.replications`` and
 ``exp.swept`` expose the layout (trial order is design-point-major with
 replications innermost).
+
+If a model-level collector declares ``env.<entity>.history().capture()``,
+``exp.history("field", trial=i)`` returns that trial's raw time-series rows as
+a NumPy array with columns ``time``, ``value``, and ``duration``.
+``exp.histories("field")`` returns one such array per trial, aligned with the
+experiment row order.
