@@ -34,17 +34,19 @@ A queue models waiting work:
 
 .. code-block:: python
 
+   import cimba.random as random
+
    @model.process
    def arrivals(env: Clinic):
        while True:
-           sim.hold(sim.exponential(1.0 / env.arrival_rate))
+           sim.hold(random.exponential(1.0 / env.arrival_rate))
            sim.put(env.waiting_room, 1)
 
    @model.process
    def service(env: Clinic):
        while True:
            sim.get(env.waiting_room, 1)
-           sim.hold(sim.exponential(env.mean_service))
+           sim.hold(random.exponential(env.mean_service))
 
 A resource models exclusive access:
 
@@ -54,7 +56,7 @@ A resource models exclusive access:
    def patient(env: Clinic):
        sim.acquire(env.doctor)
        try:
-           sim.hold(sim.exponential(env.mean_service))
+           sim.hold(random.exponential(env.mean_service))
        finally:
            sim.release(env.doctor)
 
@@ -108,7 +110,7 @@ A dataset collects samples:
 
 .. code-block:: python
 
-   service_time = sim.exponential(env.mean_service)
+   service_time = random.exponential(env.mean_service)
    env.service_times.add(service_time)
    sim.hold(service_time)
 

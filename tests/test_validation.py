@@ -11,9 +11,9 @@ def test_amount_capacity_handle_seed_and_priority_validation():
     with pytest.raises(TypeError):
         cimba.Buffer("Bad", capacity=1.5)
     with pytest.raises(ValueError):
-        cimba.seed(-1)
+        cimba.random.seed(-1)
     with pytest.raises(OverflowError):
-        cimba.seed(1 << 64)
+        cimba.random.seed(1 << 64)
     with pytest.raises(OverflowError):
         cimba.Process("Bad", lambda: None, priority=1 << 63)
 

@@ -9,6 +9,8 @@ areas, departments, or teams that each own their own queues and workers.
 
    import cimba.sim as sim
 
+   import cimba.random as random
+
    class Desk(sim.Component):
        waiting: sim.Queue
        completed: sim.State
@@ -17,7 +19,7 @@ areas, departments, or teams that each own their own queues and workers.
        def clerk(self, env):
            while True:
                sim.get(self.waiting, 1)
-               sim.hold(sim.exponential(env.mean_service))
+               sim.hold(random.exponential(env.mean_service))
                self.completed += 1
 
 
@@ -66,7 +68,7 @@ at the end of each trial, typically assigning the component's declared
        def clerk(self, env):
            while True:
                sim.get(self.waiting, 1)
-               sim.hold(sim.exponential(env.mean_service))
+               sim.hold(random.exponential(env.mean_service))
 
        @sim.collect
        def desk_stats(self, env):
@@ -161,7 +163,7 @@ instance's same-kind field value makes both fields name the same entity:
        def server(self, env):
            while True:
                item = sim.store_take(self.inbox)
-               sim.hold(sim.exponential(self.mean_time))
+               sim.hold(random.exponential(self.mean_time))
                sim.store_put(self.outbox, item)
 
 
@@ -205,7 +207,7 @@ transfer to one of several stations — declare a component reference with
        def server(self, env):
            while True:
                item = sim.store_take(self.inbox)
-               sim.hold(sim.exponential(self.mean_time))
+               sim.hold(random.exponential(self.mean_time))
                sim.store_put(self.downstream.inbox, item)
 
 The reference value is another component instance declared on the model.

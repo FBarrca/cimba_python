@@ -2,7 +2,8 @@
 
 This directory contains the Cimba Python M/M/1 queue benchmarks. The matching
 SimPy and native C benchmark sources are vendored with the C library in
-`subprojects/cimba/benchmark/`.
+`subprojects/cimba/benchmark/`. Additional runnable tutorial models live in
+[`../tutorial/`](../tutorial/).
 
 On an AMD Ryzen 7 9700X under WSL Ubuntu 24.04, averaged over 10 runs, with
 Cimba Python timed after its one-time Numba compile:

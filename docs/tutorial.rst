@@ -41,6 +41,7 @@ simulation entities are declared as fields on a ``sim.Model`` subclass:
 
     import cimba
     import cimba.sim as sim
+    import cimba.random as random
 
     class MM1(sim.Model):
         utilization: sim.Param
@@ -62,7 +63,7 @@ simple:
     @model.process
     def arrival(env: MM1):
         while True:
-            t_ia = sim.exponential(1.0 / env.utilization)
+            t_ia = random.exponential(1.0 / env.utilization)
             sim.hold(t_ia)
             sim.put(env.queue, 1)
 
@@ -70,7 +71,7 @@ simple:
     def service(env: MM1):
         while True:
             sim.get(env.queue, 1)
-            t_srv = sim.exponential(1.0)
+            t_srv = random.exponential(1.0)
             sim.hold(t_srv)
 
 This should hopefully be quite intuitive. The arrival process generates an
@@ -241,6 +242,7 @@ process body:
 
     import cimba
     import cimba.sim as sim
+    import cimba.random as random
 
     USERFLAG1 = 0x00000001
 
@@ -252,7 +254,7 @@ process body:
     @model.process
     def arrival(env: MM1):
         while True:
-            t_ia = sim.exponential(1.0 / env.utilization)
+            t_ia = random.exponential(1.0 / env.utilization)
             sim.log_user_f64(USERFLAG1, MSG_ARR_HOLD, t_ia)
             sim.hold(t_ia)
             sim.log_user(USERFLAG1, MSG_ARR_PUT)
@@ -263,7 +265,7 @@ process body:
         while True:
             sim.log_user(USERFLAG1, MSG_SRV_GET)
             sim.get(env.queue, 1)
-            t_srv = sim.exponential(1.0)
+            t_srv = random.exponential(1.0)
             sim.log_user_f64(USERFLAG1, MSG_SRV_HOLD, t_srv)
             sim.hold(t_srv)
 
@@ -533,7 +535,7 @@ natural station:
         @sim.process
         def arrival(self, env):
             while True:
-                t_ia = sim.exponential(1.0 / env.utilization)
+                t_ia = random.exponential(1.0 / env.utilization)
                 sim.hold(t_ia)
                 sim.put(self.queue, 1)
 
@@ -541,7 +543,7 @@ natural station:
         def service(self, env):
             while True:
                 sim.get(self.queue, 1)
-                t_srv = sim.exponential(1.0)
+                t_srv = random.exponential(1.0)
                 sim.hold(t_srv)
 
 
@@ -996,32 +998,32 @@ targeting:
     def polite(env: Game):
         me = sim.current()
         while True:
-            amount = sim.dice(1, 5)
-            sim.set_priority(me, sim.dice(-10, 10))
+            amount = random.dice(1, 5)
+            sim.set_priority(me, random.dice(-10, 10))
             sig = sim.pool_acquire(env.resource, amount)
             if sig == sim.SUCCESS:
-                sim.hold(sim.exponential(1.0))
+                sim.hold(random.exponential(1.0))
                 held = sim.pool_held(env.resource, me)
                 if held:
-                    sim.pool_release(env.resource, sim.dice(1, held))
+                    sim.pool_release(env.resource, random.dice(1, held))
 
     @model.process(copies=2)
     def aggressive(env: Game):
         me = sim.current()
         while True:
-            amount = sim.dice(3, 10)
-            sim.set_priority(me, sim.dice(-5, 15))
+            amount = random.dice(3, 10)
+            sim.set_priority(me, random.dice(-5, 15))
             sim.pool_preempt(env.resource, amount)
-            sim.hold(sim.exponential(1.0))
+            sim.hold(random.exponential(1.0))
 
     @model.process
     def controller(env: Game):
         while True:
-            sim.hold(sim.exponential(5.0))
-            if sim.flip() == 1:
-                target = env.polite[sim.dice(0, 4)]
+            sim.hold(random.exponential(5.0))
+            if random.bernoulli(0.5) == 1:
+                target = env.polite[random.dice(0, 4)]
             else:
-                target = env.aggressive[sim.dice(0, 1)]
+                target = env.aggressive[random.dice(0, 1)]
             sim.interrupt(target, sim.INTERRUPTED, 0)
             env.controller_actions += 1
 
@@ -1149,12 +1151,12 @@ runs:
         @sim.process
         def arrivals(self, env):
             while True:
-                sim.hold(sim.exponential(2.0))
+                sim.hold(random.exponential(2.0))
                 handle = sim.spawn(self.visitor, env, priority=0)
                 vip = Visitor(handle)
                 vip.entry_park = sim.now()
-                vip.patience = sim.triangular(0.5, 1.0, 1.5)
-                vip.priority = 5 if sim.bernoulli(0.25) else 0
+                vip.patience = random.triangular(0.5, 1.0, 1.5)
+                vip.priority = 5 if random.bernoulli(0.25) else 0
 
 The visitor process receives its own view as the final annotated parameter on
 the component method:
@@ -1269,7 +1271,7 @@ per-attraction primitive constants captured from ``__init__``.
                     vip = Visitor(riders[i])
                     vip.waiting += boarding - vip.entry_queue
 
-                dur = sim.pert(self.dmin, self.dmode, self.dmax)
+                dur = random.pert(self.dmin, self.dmode, self.dmax)
                 sim.hold(dur)
 
                 for i in range(cnt):
@@ -1399,7 +1401,8 @@ Alias sampling probabilities
 
 Queueing networks often use a transition matrix: after each attraction, choose
 the next attraction according to row-specific probabilities. Cimba Python
-provides weighted draws with ``sim.categorical()`` and ``sim.loaded_dice()``.
+provides probability-based draws with ``cimba.random.categorical()``, imported
+below as ``random.categorical()``.
 
 .. code-block:: python
 
@@ -1408,7 +1411,7 @@ provides weighted draws with ``sim.categorical()`` and ``sim.loaded_dice()``.
     class VisitorFlow(sim.Component):
         @sim.process
         def visitor(self, env, vip: Visitor):
-            next_stop = sim.categorical(NEXT_FROM_ENTRANCE)
+            next_stop = random.categorical(NEXT_FROM_ENTRANCE)
 
 For a large transition matrix, keep arrays at module scope and index into the
 appropriate row from helper functions. Fixed arrays outside the process loop
@@ -1420,7 +1423,7 @@ In the runnable tutorial, the helper samples the row explicitly:
 
     @njit
     def _next_attraction(attraction: int) -> int:
-        r = sim.random01()
+        r = random.uniform()
         acc = 0.0
         for j in range(NUM_ATTRACTIONS + 2):
             acc += TRANSITION_PROBS[attraction, j]
@@ -1429,8 +1432,9 @@ In the runnable tutorial, the helper samples the row explicitly:
         return IDX_EXIT
 
 The row values still represent the same thing: "given where the visitor is now,
-where do they go next?" Whether the implementation uses ``sim.categorical()`` or
-an explicit cumulative scan, the model concept is a weighted routing decision.
+where do they go next?" Whether the implementation uses
+``cimba.random.categorical()`` or an explicit cumulative scan, the model
+concept is a weighted routing decision.
 
 A day in the park
 ^^^^^^^^^^^^^^^^^
@@ -1614,7 +1618,7 @@ Conditions combine a wait list with a predicate:
         @sim.process
         def tide(self, env):
             while True:
-                self.water_depth = env.reference_depth + sim.normal(0.0, 0.5)
+                self.water_depth = env.reference_depth + random.normal(0.0, 0.5)
                 sim.signal(env.facilities.harbormaster)
                 sim.hold(1.0)
 
@@ -1652,10 +1656,10 @@ and when it arrived:
         def arrivals(self, env):
             mean_interarrival = 1.0 / env.arrival_rate
             while True:
-                sim.hold(sim.exponential(mean_interarrival))
+                sim.hold(random.exponential(mean_interarrival))
                 handle = sim.spawn(self.ship, env, 0)
                 shp = Ship(handle)
-                shp.size = sim.bernoulli(env.percent_large)
+                shp.size = random.bernoulli(env.percent_large)
                 shp.tugs_needed = TUGS_NEEDED[shp.size]
                 shp.max_wind = MAX_WIND[shp.size]
                 shp.min_depth = MIN_DEPTH[shp.size]
@@ -1682,14 +1686,14 @@ computing water depth:
         @sim.process(priority=1)
         def weather(self, env):
             while True:
-                wmag = sim.rayleigh(env.mean_wind)
+                wmag = random.rayleigh(env.mean_wind)
                 self.wind_mag = 0.5 * wmag + 0.5 * self.wind_mag
                 sim.hold(1.0)
 
         @sim.process
         def tide(self, env):
             while True:
-                self.water_depth = env.reference_depth + sim.normal(0.0, 0.5)
+                self.water_depth = env.reference_depth + random.normal(0.0, 0.5)
                 sim.signal(env.facilities.harbormaster)
                 sim.hold(1.0)
 
@@ -1767,23 +1771,23 @@ process.
             sim.pool_acquire(env.facilities.tugs, shp.tugs_needed)
 
             sim.acquire(env.facilities.comms)
-            sim.hold(sim.gamma(5.0, 0.01))
+            sim.hold(random.gamma(5.0, 0.01))
             sim.release(env.facilities.comms)
 
-            sim.hold(sim.pert(0.4, 0.5, 0.8))
+            sim.hold(random.pert(0.4, 0.5, 0.8))
             sim.pool_release(env.facilities.tugs, shp.tugs_needed)
             sim.signal(env.facilities.harbormaster)
 
             unload_avg = env.unload_avg_large if shp.size == LARGE \
                 else env.unload_avg_small
-            sim.hold(sim.pert(0.75 * unload_avg, unload_avg,
+            sim.hold(random.pert(0.75 * unload_avg, unload_avg,
                               2.0 * unload_avg))
 
             sim.pool_acquire(env.facilities.tugs, shp.tugs_needed)
             sim.acquire(env.facilities.comms)
-            sim.hold(sim.gamma(5.0, 0.01))
+            sim.hold(random.gamma(5.0, 0.01))
             sim.release(env.facilities.comms)
-            sim.hold(sim.pert(0.4, 0.5, 0.8))
+            sim.hold(random.pert(0.4, 0.5, 0.8))
 
             sim.pool_release(berths, 1)
             sim.pool_release(env.facilities.tugs, shp.tugs_needed)

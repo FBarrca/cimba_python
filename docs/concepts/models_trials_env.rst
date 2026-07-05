@@ -10,6 +10,8 @@ processes use to interact.
 
    import cimba.sim as sim
 
+   import cimba.random as random
+
    class Clinic(sim.Model):
        arrival_rate: sim.Param
        mean_service: sim.Param
@@ -35,7 +37,7 @@ Process functions receive the current trial as ``env``:
    @model.process
    def arrivals(env: Clinic):
        while True:
-           sim.hold(sim.exponential(1.0 / env.arrival_rate))
+           sim.hold(random.exponential(1.0 / env.arrival_rate))
            sim.put(env.waiting_room, 1)
 
 The ``env`` object is trial-local. Reading ``env.arrival_rate`` reads the value

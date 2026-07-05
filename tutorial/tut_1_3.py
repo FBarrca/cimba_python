@@ -1,6 +1,7 @@
 """Tutorial 1.3: user logging from Python process bodies."""
 
 import cimba
+import cimba.random as random
 import cimba.sim as sim
 
 USERFLAG1 = 0x00000001
@@ -23,7 +24,7 @@ model = MM1("MM1")
 @model.process
 def arrival(env: MM1):
     while True:
-        t_ia = sim.exponential(1.0 / env.utilization)
+        t_ia = random.exponential(1.0 / env.utilization)
         sim.log_user_f64(USERFLAG1, MSG_ARR_HOLD, t_ia)
         sim.hold(t_ia)
         sim.log_user(USERFLAG1, MSG_ARR_PUT)
@@ -35,7 +36,7 @@ def service(env: MM1):
     while True:
         sim.log_user(USERFLAG1, MSG_SRV_GET)
         sim.get(env.queue, 1)
-        t_srv = sim.exponential(1.0)
+        t_srv = random.exponential(1.0)
         sim.log_user_f64(USERFLAG1, MSG_SRV_HOLD, t_srv)
         sim.hold(t_srv)
 

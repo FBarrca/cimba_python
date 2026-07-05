@@ -23,13 +23,13 @@ def _mm1_mean_queue(i, seed):
 
         def arrival(q):
             while True:
-                cimba.hold(cimba.exponential(1.0 / 0.75))
+                cimba.hold(cimba.random.exponential(1.0 / 0.75))
                 q.put(1)
 
         def service(q):
             while True:
                 q.get(1)
-                cimba.hold(cimba.exponential(1.0))
+                cimba.hold(cimba.random.exponential(1.0))
 
         cimba.Process("Arrival", arrival, queue).start()
         cimba.Process("Service", service, queue).start()

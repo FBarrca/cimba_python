@@ -35,14 +35,14 @@ class MM1Trial:
 
 def arrival(ctx: MM1Trial) -> None:
     while True:
-        cimba.hold(cimba.exponential(1.0 / ctx.arr_rate))
+        cimba.hold(cimba.random.exponential(1.0 / ctx.arr_rate))
         ctx.queue.put(1)
 
 
 def service(ctx: MM1Trial) -> None:
     while True:
         ctx.queue.get(1)
-        cimba.hold(cimba.exponential(1.0 / ctx.srv_rate))
+        cimba.hold(cimba.random.exponential(1.0 / ctx.srv_rate))
 
 
 def recorder(ctx: MM1Trial) -> None:

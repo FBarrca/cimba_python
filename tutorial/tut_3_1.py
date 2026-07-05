@@ -57,6 +57,7 @@ import numpy as np
 from numba import njit
 
 import cimba as cp
+import cimba.random as random
 import cimba.sim as sim
 
 # --- Park structure, hard-coded as in the C tutorial -------------------------
@@ -133,7 +134,7 @@ class Visitor(sim.Struct):
 @njit
 def _next_attraction(at):
     """Sample the next stop from the transition row (alias sampler in C)."""
-    r = sim.random01()
+    r = random.uniform()
     acc = 0.0
     for j in range(IDX_EXIT + 1):
         acc += TRANSITION_PROBS[at, j]
@@ -184,7 +185,7 @@ class Attraction(sim.Component):
                 vip = Visitor(riders[i])
                 vip.waiting += boarding - vip.entry_queue
 
-            dur = sim.pert(self.dmin, self.dmode, self.dmax)
+            dur = random.pert(self.dmin, self.dmode, self.dmax)
             sim.hold(dur)
 
             # Unload and send the riders on their merry way
@@ -213,16 +214,16 @@ class VisitorFlow(sim.Component):
         closing = env.start_time + env.warmup_s + env.duration_s
         mean_interarr = 1.0 / ARRIVAL_RATE
         while True:
-            sim.hold(sim.exponential(mean_interarr))
+            sim.hold(random.exponential(mean_interarr))
             if sim.now() >= closing:
                 break
             # Spawn a new visitor and initialize it before it passes the
             # turnstile (it starts running once we block on the next hold)
-            priority = 5 if sim.bernoulli(PERCENT_GOLDCARDS) == 1 else 0
+            priority = 5 if random.bernoulli(PERCENT_GOLDCARDS) == 1 else 0
             v = sim.spawn(self.visitor, env, priority)
             vip = Visitor(v)
             vip.entry_park = sim.now()
-            vip.patience = sim.triangular(0.5, 1.0, 1.5)
+            vip.patience = random.triangular(0.5, 1.0, 1.5)
             vip.priority = priority
         while True:
             sim.suspend()       # park entrance closed for today
@@ -236,7 +237,7 @@ class VisitorFlow(sim.Component):
 
             # Walk there
             mwt = TRANSITION_TIMES[at, nxt]
-            wt = sim.pert(0.5 * mwt, mwt, 2.0 * mwt)
+            wt = random.pert(0.5 * mwt, mwt, 2.0 * mwt)
             sim.hold(wt)
             vip.walking += wt
             at = nxt

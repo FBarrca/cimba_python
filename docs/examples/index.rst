@@ -10,3 +10,4 @@ in ``tests/tutorial/``. This section shows the shape of the most useful ones.
    clocks
    mm1_queue
    resource_server
+   assembly_line

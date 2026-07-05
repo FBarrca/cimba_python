@@ -51,6 +51,7 @@ import time
 import numpy as np
 
 import cimba as cp
+import cimba.random as random
 import cimba.sim as sim
 
 # Ship classes (SMALL, LARGE), as hard-coded in the C tutorial
@@ -82,10 +83,10 @@ class SeaConditions(sim.Component):
     def weather(self, env):
         while True:
             # Wind magnitude in m/s, smoothed over the previous hour
-            wmag = sim.rayleigh(env.mean_wind)
+            wmag = random.rayleigh(env.mean_wind)
             self.wind_mag = 0.5 * wmag + 0.5 * self.wind_mag
             # Wind direction in compass degrees, dominant from the southwest
-            self.wind_dir = sim.pert(0.0, 225.0, 360.0)
+            self.wind_dir = random.pert(0.0, 225.0, 360.0)
             sim.hold(1.0)
 
     @sim.process
@@ -126,10 +127,10 @@ class ShipTraffic(sim.Component):
     def arrivals(self, env):
         mean_interarr = 1.0 / env.arrival_rate
         while True:
-            sim.hold(sim.exponential(mean_interarr))
+            sim.hold(random.exponential(mean_interarr))
             h = sim.spawn(self.ship, env, 0)
             shp = Ship(h)
-            shp.size = sim.bernoulli(env.percent_large)
+            shp.size = random.bernoulli(env.percent_large)
             shp.tugs_needed = TUGS_NEEDED[shp.size]
             shp.max_wind = MAX_WIND[shp.size]
             shp.min_depth = MIN_DEPTH[shp.size]
@@ -164,11 +165,11 @@ class ShipTraffic(sim.Component):
 
         # Announce our intention to move
         sim.acquire(env.facilities.comms)
-        sim.hold(sim.gamma(5.0, 0.01))
+        sim.hold(random.gamma(5.0, 0.01))
         sim.release(env.facilities.comms)
 
         # It takes a while to move into position
-        sim.hold(sim.pert(0.4, 0.5, 0.8))
+        sim.hold(random.pert(0.4, 0.5, 0.8))
 
         # Safely at the quay, dismiss the tugs and unload
         sim.pool_release(env.facilities.tugs, shp.tugs_needed)
@@ -177,16 +178,16 @@ class ShipTraffic(sim.Component):
             unload_avg = env.unload_avg_large
         else:
             unload_avg = env.unload_avg_small
-        sim.hold(sim.pert(0.75 * unload_avg, unload_avg, 2.0 * unload_avg))
+        sim.hold(random.pert(0.75 * unload_avg, unload_avg, 2.0 * unload_avg))
 
         # Need the tugs again to get out of here
         sim.pool_acquire(env.facilities.tugs, shp.tugs_needed)
         sim.acquire(env.facilities.comms)
-        sim.hold(sim.gamma(5.0, 0.01))
+        sim.hold(random.gamma(5.0, 0.01))
         sim.release(env.facilities.comms)
 
         # Gently move out again, assisted by tugs
-        sim.hold(sim.pert(0.4, 0.5, 0.8))
+        sim.hold(random.pert(0.4, 0.5, 0.8))
 
         # Cleared the berth, done with the tugs
         sim.pool_release(berths, 1)

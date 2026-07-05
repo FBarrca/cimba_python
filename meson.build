@@ -59,7 +59,6 @@ py.install_sources(
     'src/cimba/cmb_objectqueue.py',
     'src/cimba/cmb_priorityqueue.py',
     'src/cimba/cmb_process.py',
-    'src/cimba/cmb_random.py',
     'src/cimba/cmb_resource.py',
     'src/cimba/cmb_resourcepool.py',
     'src/cimba/cmb_timeseries.py',
@@ -79,12 +78,19 @@ py.install_sources(
     'src/cimba/cmb_objectqueue.pyi',
     'src/cimba/cmb_priorityqueue.pyi',
     'src/cimba/cmb_process.pyi',
-    'src/cimba/cmb_random.pyi',
     'src/cimba/cmb_resource.pyi',
     'src/cimba/cmb_resourcepool.pyi',
     'src/cimba/cmb_timeseries.pyi',
     'src/cimba/cmb_wtdsummary.pyi',
     subdir: 'cimba',
+)
+
+py.install_sources(
+    'src/cimba/random/__init__.py',
+    'src/cimba/random/__init__.pyi',
+    'src/cimba/random/_compiled.py',
+    'src/cimba/random/_lowering.py',
+    subdir: 'cimba/random',
 )
 
 py.install_sources(

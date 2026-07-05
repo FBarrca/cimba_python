@@ -45,14 +45,16 @@ be created dynamically:
 
 .. code-block:: python
 
+   import cimba.random as random
+
    @model.process
    def arrivals(env: Clinic):
        while True:
-           sim.hold(sim.exponential(1.0 / env.arrival_rate))
+           sim.hold(random.exponential(1.0 / env.arrival_rate))
            handle = sim.spawn(env.patients, env)
            patient = Patient(handle)
            patient.arrival = sim.now()
-           patient.acuity = 1 if sim.random01() < 0.2 else 0
+           patient.acuity = 1 if random.uniform() < 0.2 else 0
 
 The spawned process begins only after the current process blocks. That gives
 the spawning process a clean initialization window: create the process, write
@@ -117,7 +119,7 @@ subsystem that creates them:
 
        @sim.process
        def patient(self, env, p: Patient):
-           sim.hold(sim.exponential(env.mean_service))
+           sim.hold(random.exponential(env.mean_service))
 
 Use this when the dynamic process is naturally part of a component. Use a
 model-level ``sim.Spawnable`` when the dynamic process crosses many domains.

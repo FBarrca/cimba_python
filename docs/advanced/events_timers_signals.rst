@@ -89,12 +89,14 @@ or preemption:
 
 .. code-block:: python
 
+   import cimba.random as random
+
    sig = sim.acquire(env.doctor)
    if sig != sim.SUCCESS:
        return
 
    try:
-       sig = sim.hold(sim.exponential(env.mean_service))
+       sig = sim.hold(random.exponential(env.mean_service))
        if sig == sim.SUCCESS:
            env.completed += 1
    finally:

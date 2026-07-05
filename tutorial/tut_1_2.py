@@ -1,6 +1,7 @@
 """Tutorial 1.2: stop the M/M/1 simulation at a fixed duration."""
 
 import cimba
+import cimba.random as random
 import cimba.sim as sim
 
 
@@ -16,7 +17,7 @@ model = MM1("MM1")
 @model.process
 def arrival(env: MM1):
     while True:
-        t_ia = sim.exponential(1.0 / env.utilization)
+        t_ia = random.exponential(1.0 / env.utilization)
         sim.hold(t_ia)
         sim.put(env.queue, 1)
 
@@ -25,7 +26,7 @@ def arrival(env: MM1):
 def service(env: MM1):
     while True:
         sim.get(env.queue, 1)
-        t_srv = sim.exponential(1.0)
+        t_srv = random.exponential(1.0)
         sim.hold(t_srv)
 
 

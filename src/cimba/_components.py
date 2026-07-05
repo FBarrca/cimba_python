@@ -61,6 +61,10 @@ from ._dataset.methods import (
 )
 from ._declarations import (_DECL_KINDS, _MISSING, _check_name,
                             _Declarations, _field_declarations, _FieldDecl)
+from .random._lowering import (
+    lower_random_calls_in_node,
+    random_lowering_namespace,
+)
 
 _F = TypeVar("_F", bound=Callable[..., Any])
 
@@ -1782,11 +1786,18 @@ def _lower_component_method(
     lowered.body[:0] = list(prologue)
 
     namespace = _closure_namespace(method)
+    lowered, random_changed = lower_random_calls_in_node(
+        lowered,
+        namespace=namespace,
+        label=f"component {kind} '{component_name}.{method_name}'",
+    )
     if struct_view is not None:
         namespace["_CIMBA_STRUCT_VIEW"] = struct_view
     if extra_namespace:
         namespace.update(extra_namespace)
     namespace.update(dataset_lowering_namespace())
+    if random_changed:
+        namespace.update(random_lowering_namespace())
     namespace.update(_lowering_namespace((component_decl,)))
     return _compile_lowered(
         lowered,

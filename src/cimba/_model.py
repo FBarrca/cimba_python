@@ -51,6 +51,7 @@ from ._declarations import (
 )
 from ._graph import ProcessDAG, ProcessDAGBlock, infer_process_dag
 from ._intrinsics import addressof, ptr_caster
+from .random._lowering import lower_random_calls_in_function
 
 _F = TypeVar("_F", bound=Callable[..., Any])
 
@@ -77,7 +78,7 @@ class Struct:
 
         @model.process(copies=4)
         def visitor(env, vip: Visitor):
-            vip.patience = sim.triangular(0.5, 1.0, 1.5)
+            vip.patience = cimba.random.triangular(0.5, 1.0, 1.5)
 
     Each process copy then carries its own fields, zeroed at creation, in
     the same native allocation as the process (this is the Python form of
@@ -739,6 +740,12 @@ class Model:
             dataset_fields=self.datasets,
         )
 
+    def _lower_random_calls(self, fn: _F) -> _F:
+        return lower_random_calls_in_function(
+            fn,
+            label=f"model '{self.name}' callback '{fn.__qualname__}'",
+        )
+
     def _process_dag_blocks(
         self,
         entity_kinds: Mapping[str, str],
@@ -898,6 +905,7 @@ class Model:
                                  "or (env, view), not a copy index")
         fn = self._lower_component_refs(fn)
         fn = self._lower_dataset_methods(fn)
+        fn = self._lower_random_calls(fn)
         self._processes.append(_ProcDecl(name, fn, copies, priority,
                                          indexed, struct, injected,
                                          spawnable, spawn_field,
@@ -972,6 +980,7 @@ class Model:
             field = f"_pred_{name}"
         fn = self._lower_component_refs(fn)
         fn = self._lower_dataset_methods(fn)
+        fn = self._lower_random_calls(fn)
         self._predicates.append((name, fn, field))
         return fn
 
@@ -997,6 +1006,7 @@ class Model:
             field = f"_ev_{name}"
         fn = self._lower_component_refs(fn)
         fn = self._lower_dataset_methods(fn)
+        fn = self._lower_random_calls(fn)
         self._events.append((name, fn, field, nargs == 2))
         return fn
 
@@ -1010,6 +1020,7 @@ class Model:
             raise RuntimeError("model is already compiled")
         fn = self._lower_component_refs(fn)
         fn = self._lower_dataset_methods(fn)
+        fn = self._lower_random_calls(fn)
         self._collect = fn
         return fn
 

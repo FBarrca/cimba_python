@@ -12,6 +12,8 @@ Here three patients repeatedly return to a clinic that has a single doctor.
 
    import cimba.sim as sim
 
+   import cimba.random as random
+
 
    class Clinic(sim.Model):
        served: sim.Output       # patients seen over the run
@@ -25,9 +27,9 @@ Here three patients repeatedly return to a clinic that has a single doctor.
    @model.process(copies=3)
    def patient(env: Clinic):
        while True:
-           sim.hold(sim.exponential(2.0))   # time until this patient returns
+           sim.hold(random.exponential(2.0))   # time until this patient returns
            sim.acquire(env.doctor)          # wait for the one free doctor
-           sim.hold(sim.exponential(1.0))   # consultation
+           sim.hold(random.exponential(1.0))   # consultation
            sim.release(env.doctor)
            env.n_served = env.n_served + 1
 

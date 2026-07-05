@@ -9,13 +9,13 @@ def test_single_mg1_style_trial_collects_buffer_history_after_warmup():
 
     def arrival(queue):
         while True:
-            cimba.hold(cimba.exponential(1.0 / utilization))
+            cimba.hold(cimba.random.exponential(1.0 / utilization))
             assert queue.put(1) == (cimba.SUCCESS, 0)
 
     def service(queue):
         while True:
             assert queue.get(1)[0] == cimba.SUCCESS
-            cimba.hold(cimba.gamma(service_shape, service_scale))
+            cimba.hold(cimba.random.gamma(service_shape, service_scale))
 
     def recorder(queue):
         cimba.hold(10.0)

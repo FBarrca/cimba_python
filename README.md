@@ -41,13 +41,14 @@ do not need to install Cimba separately.
 
 Cimba Python gives Python models access to Cimba's native simulation engine
 through the `cimba.sim` API: processes, event queues, buffers, queues, stores,
-priority queues, resources, resource pools, conditions, timers, events, random
-distributions, logging helpers, and experiment tables.
+priority queues, resources, resource pools, conditions, timers, events, logging
+helpers, and experiment tables. Random distributions live in `cimba.random`.
 
 ## What does the code look like?
 
 ```python
 import cimba.sim as sim
+import cimba.random as random
 
 
 class MM1(sim.Model):
@@ -62,7 +63,7 @@ model = MM1("MM1")
 @model.process
 def arrival(env: MM1):
     while True:
-        sim.hold(sim.exponential(1.0 / env.utilization))
+        sim.hold(random.exponential(1.0 / env.utilization))
         sim.put(env.queue, 1)
 
 
@@ -70,7 +71,7 @@ def arrival(env: MM1):
 def service(env: MM1):
     while True:
         sim.get(env.queue, 1)
-        sim.hold(sim.exponential(1.0))
+        sim.hold(random.exponential(1.0))
 
 
 @model.collect

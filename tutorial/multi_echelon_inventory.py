@@ -9,8 +9,13 @@ The network has six nodes:
 * nodes 1-5 are stocking facilities,
 * 0 -> 1, 1 -> 2, 1 -> 3, 3 -> 4, and 3 -> 5 are replenishment arcs.
 
-Historical demand and lead-time delay observations are replayed as Cimba trace
-fields and bootstrap-sampled inside the process bodies.
+Historical demand and lead-time delay observations are bootstrap-resampled
+outside the simulation with ``cimba.bootstrap`` and replayed as Cimba trace
+fields: facility demands with a joint stationary bootstrap (one set of block
+draws for all facilities, preserving autocorrelation and cross-facility
+correlation), lead-time delays with the ordinary i.i.d. bootstrap (the
+observations are independent). See docs/advanced/bootstrapping.rst for the
+method survey.
 
 Usage with the bundled data:
 
@@ -24,6 +29,7 @@ from pathlib import Path
 import numpy as np
 
 import cimba.sim as sim
+from cimba import bootstrap
 
 
 SOURCE_NODE = 0
@@ -31,6 +37,8 @@ NUM_NODES = 6
 STOCKING_NODES = 5
 EPSILON = 1.0e-5
 REORDER_POINT_TOLERANCE = 0.05
+DURATION = 360.0
+WARMUP = 0.0
 
 # Parameters for each stocking facility (0-6)
 BASE_LEAD_TIME = np.array([0.0, 3.0, 4.0, 4.0, 2.0, 2.0])
@@ -138,6 +146,10 @@ class Facility(sim.Component):
 
     @sim.process
     def serve_customer(self, env):
+        # The trace holds this trial's bootstrap trajectory; replay it in
+        # order so the temporal structure of the resample survives.
+        trajectory = sim.Trace(self.demand)
+        day = 0
         while True:
             if self.is_source == 1:
                 sim.suspend()
@@ -147,8 +159,8 @@ class Facility(sim.Component):
                 self.on_hand_samples += 1
                 sim.hold(1.0)
 
-                history = sim.Trace(self.demand)
-                demand = history[sim.dice(0, len(history) - 1)]
+                demand = trajectory[day]
+                day += 1
                 self.total_demand += demand
 
                 if env.backorder >= 0.5:
@@ -197,6 +209,7 @@ class MultiEchelonInventory(sim.Model):
 
     shipment: sim.Spawnable
     completed_shipments: sim.Store
+    lead_time_cursor: sim.State
 
     facilities: list[Facility] = [
         Facility(0, -1, 1),
@@ -216,7 +229,10 @@ def shipment(env: MultiEchelonInventory, shipment: Shipment):
     lead_time_delay = sim.Trace(env.lead_time_delay)
     base_lead_time = sim.Trace(env.base_lead_time)
     requester = shipment.requester
-    delay = lead_time_delay[sim.dice(0, len(lead_time_delay) - 1)]
+    # Each shipment consumes the next resampled delay from the trace.
+    draw = env.lead_time_cursor
+    env.lead_time_cursor += 1
+    delay = lead_time_delay[draw]
     lead_time = base_lead_time[requester] + delay
     if lead_time > 0.0:
         sim.hold(lead_time)
@@ -251,8 +267,33 @@ def load_data(
 def main() -> int:
     demand, lead_time_delay = load_data()
 
-    demand_by_facility = np.zeros((NUM_NODES, demand.shape[0]))
-    demand_by_facility[1:, :] = demand.T
+    # One demand value per simulated day; size the resamples to cover the
+    # whole recording window (warmup + duration).
+    horizon = int(WARMUP + DURATION) + 1
+
+    # The facility demand histories are related series, so resample them
+    # jointly: one set of stationary-bootstrap block draws drives every
+    # facility, preserving autocorrelation within each series and the
+    # cross-facility correlation that stresses shared upstream capacity.
+    # Mean block length follows the n**(1/3) rule of thumb.
+    mean_block = round(demand.shape[0] ** (1.0 / 3.0))
+    demand_gens = bootstrap.joint(
+        {f"facility_{node}": demand[:, node - 1]
+         for node in range(1, NUM_NODES)},
+        length=horizon,
+        name="demand",
+        mean_block=mean_block,
+    )
+    # Node 0 has no demand, so we prepend a zero array.
+    facility_demand = [np.zeros(horizon)] + [
+        demand_gens[f"facility_{node}"] for node in range(1, NUM_NODES)
+    ]
+
+    # Lead-time extra days are independent observations, so the ordinary
+    # bootstrap applies. Each shipment consumes one draw; the stocking
+    # facilities order at most once per day, which bounds the draws needed.
+    lead_time_gen = bootstrap.iid(
+        lead_time_delay, length=STOCKING_NODES * horizon)
 
     exp = model.experiment(
         backorder=0.0,
@@ -260,11 +301,11 @@ def main() -> int:
         reorder_point=REORDER_POINT,
         initial_inventory=INITIAL_INVENTORY,
         base_lead_time=BASE_LEAD_TIME,
-        lead_time_delay=lead_time_delay,
-        facilities__demand=demand_by_facility,
+        lead_time_delay=lead_time_gen,
+        facilities__demand=facility_demand,
         replications=20,
-        duration=360.0,
-        warmup=0.0,
+        duration=DURATION,
+        warmup=WARMUP,
         seed=123,
     )
     failures = exp.run()

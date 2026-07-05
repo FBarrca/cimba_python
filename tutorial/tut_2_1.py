@@ -49,6 +49,7 @@ import numpy as np
 from numba import njit
 
 import cimba as cp
+import cimba.random as random
 import cimba.sim as sim
 
 NUM_MICE = 5
@@ -117,8 +118,8 @@ def _forage_once(env, me, preempting, amt_lo, amt_hi, pri_lo, pri_hi, held):
     interrupted = 0
 
     # Decide on a random amount and a random priority for this round
-    amount = sim.dice(amt_lo, amt_hi)
-    sim.set_priority(me, sim.dice(pri_lo, pri_hi))
+    amount = random.dice(amt_lo, amt_hi)
+    sim.set_priority(me, random.dice(pri_lo, pri_hi))
     if preempting == 1:
         sig = sim.pool_preempt(env.cheese, amount)
     else:
@@ -149,7 +150,7 @@ def _forage_once(env, me, preempting, amt_lo, amt_hi, pri_lo, pri_hi, held):
     held = held_now
 
     # Hold on to it for a while
-    sig = sim.hold(sim.exponential(1.0))
+    sig = sim.hold(random.exponential(1.0))
     if sig == sim.PREEMPTED:
         preempted = preempted + 1
     elif sig != sim.SUCCESS:
@@ -160,14 +161,14 @@ def _forage_once(env, me, preempting, amt_lo, amt_hi, pri_lo, pri_hi, held):
     # Drop some amount. Release is immediate and exact, so here the
     # books must match our belief to the unit.
     if held > 1:
-        release = sim.dice(1, held)
+        release = random.dice(1, held)
         sim.pool_release(env.cheese, release)
         held = held - release
     if held != sim.pool_held(env.cheese, me):
         env.acct_errors = env.acct_errors + 1
 
     # Hang on a moment before trying again
-    sig = sim.hold(sim.exponential(1.0))
+    sig = sim.hold(random.exponential(1.0))
     if sig == sim.PREEMPTED:
         preempted = preempted + 1
     held, lost = _take_stock(env, me, held)
@@ -205,23 +206,23 @@ def rat(env: CheeseGame):
 def cat(env: CheeseGame):
     while True:
         # Nobody interrupts a sleeping cat, disregard the signal
-        sim.hold(sim.exponential(5.0))
+        sim.hold(random.exponential(5.0))
         while True:
             # Awake, looking for rodents
-            sim.hold(sim.exponential(1.0))
-            i = sim.dice(0, NUM_MICE + NUM_RATS - 1)
+            sim.hold(random.exponential(1.0))
+            i = random.dice(0, NUM_MICE + NUM_RATS - 1)
             if i < NUM_MICE:
                 target = env.mouse[i]
             else:
                 target = env.rat[i - NUM_MICE]
             # Send it the generic signal or a random user-defined one
-            if sim.flip() == 1:
+            if random.bernoulli(0.5) == 1:
                 sim.interrupt(target, sim.INTERRUPTED, 0)
             else:
-                sim.interrupt(target, sim.dice(10, 100), 0)
+                sim.interrupt(target, random.dice(10, 100), 0)
             env.chases = env.chases + 1
             # Flip a coin to decide whether to go back to sleep
-            if sim.flip() == 0:
+            if random.bernoulli(0.5) == 0:
                 break
 
 

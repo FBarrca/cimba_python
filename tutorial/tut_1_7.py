@@ -8,6 +8,7 @@ import time
 import numpy as np
 
 import cimba
+import cimba.random as random
 import cimba.sim as sim
 
 
@@ -17,7 +18,7 @@ class MM1Station(sim.Component):
     @sim.process
     def arrival(self, env):
         while True:
-            t_ia = sim.exponential(1.0 / env.utilization)
+            t_ia = random.exponential(1.0 / env.utilization)
             sim.hold(t_ia)
             sim.put(self.queue, 1)
 
@@ -25,7 +26,7 @@ class MM1Station(sim.Component):
     def service(self, env):
         while True:
             sim.get(self.queue, 1)
-            t_srv = sim.exponential(1.0)
+            t_srv = random.exponential(1.0)
             sim.hold(t_srv)
 
 

@@ -7,9 +7,9 @@ import time
 
 import cimba
 import cimba.sim as sim
-from cimba import Buffer, Process, Simulation, exponential
+from cimba import Buffer, Process, Simulation
 
-CAT_WEIGHTS = np.array([2.0, 3.0, 5.0], dtype=np.float64)
+CAT_PROBABILITIES = np.array([0.2, 0.3, 0.5], dtype=np.float64)
 
 
 def capture_native_stdout(fn):
@@ -43,7 +43,7 @@ def test_c_module_shaped_imports_are_available():
     assert Buffer is cimba.Buffer
     assert Simulation is cimba.Simulation
     assert Process is cimba.Process
-    assert exponential is cimba.exponential
+    assert not hasattr(sim, "random")
 
 
 def test_native_version_is_linked():
@@ -171,7 +171,7 @@ def test_sim_model_run():
     @model.process
     def arrivals(env: MM1):
         while True:
-            sim.hold(sim.exponential(1.0 / env.utilization))
+            sim.hold(cimba.random.exponential(1.0 / env.utilization))
             sim.put(env.queue, 1)
 
     @model.process
@@ -339,7 +339,7 @@ def test_experiment_summary():
     @model.process
     def p(env: Sweep):
         env.y = env.x * 2.0
-        env.z = sim.uniform(0.0, 1.0)
+        env.z = cimba.random.uniform(0.0, 1.0)
         sim.suspend()
 
     exp = model.experiment(x=[1.0, 2.0, 3.0], replications=5,
@@ -371,7 +371,7 @@ def test_experiment_summary_single_point():
 
     @model.process
     def p(env: Single):
-        env.y = sim.uniform(0.0, 1.0)
+        env.y = cimba.random.uniform(0.0, 1.0)
         sim.suspend()
 
     exp = model.experiment(replications=1, duration=10.0, warmup=0.0,
@@ -397,13 +397,13 @@ def test_random_draws_and_suspend():
 
     @model.process
     def draw(env: Draws):
-        env.tri = sim.triangular(0.0, 1.0, 2.0)
-        env.wei = sim.weibull(1.5, 2.0)
-        env.lgn = sim.lognormal(0.0, 0.5)
-        env.erl = sim.erlang(3, 2.0)
-        env.bet = sim.beta(2.0, 3.0, 0.0, 1.0)
-        env.poi = sim.poisson(4.0)
-        env.die = sim.dice(1, 6)
+        env.tri = cimba.random.triangular(0.0, 1.0, 2.0)
+        env.wei = cimba.random.weibull(1.5, 2.0)
+        env.lgn = cimba.random.lognormal(0.0, 0.5)
+        env.erl = cimba.random.erlang(3, 2.0)
+        env.bet = cimba.random.beta(2.0, 3.0, 0.0, 1.0)
+        env.poi = cimba.random.poisson(4.0)
+        env.die = cimba.random.dice(1, 6)
         sim.suspend()           # idle until the trial ends
 
     exp = model.experiment(replications=1, duration=10.0, warmup=0.0,
@@ -445,27 +445,27 @@ def test_extra_random_distributions():
 
     @model.process
     def draw(env: ExtraDraws):
-        env.sn = sim.std_normal()
-        env.se = sim.std_exponential()
-        env.sg = sim.std_gamma(2.5)
-        env.sb = sim.std_beta(2.0, 3.0)
-        env.pm = sim.pert_mod(0.0, 4.0, 10.0, 6.0)
-        env.lg = sim.logistic(0.0, 1.0)
-        env.cy = sim.cauchy(0.0, 1.0)
-        env.pr = sim.pareto(2.5, 1.0)
-        env.cs = sim.chisquared(4.0)
-        env.fd = sim.f_dist(5.0, 8.0)
-        env.st = sim.std_t(7.0)
-        env.td = sim.t_dist(1.0, 2.0, 7.0)
-        env.geo = sim.geometric(0.4)
-        env.binom = sim.binomial(10, 0.4)
-        env.nbinom = sim.negative_binomial(3, 0.4)
-        env.pas = sim.pascal(3, 0.4)
-        env.hypo = sim.hypoexponential((1.0, 2.0, 4.0, 8.0))
-        env.hyper = sim.hyperexponential(
-            (1.0, 2.0, 4.0, 8.0), (1.0, 2.0, 3.0, 4.0))
-        env.loaded = sim.loaded_dice([0.2, 0.3, 0.5])
-        env.cat = sim.categorical(CAT_WEIGHTS)
+        env.sn = cimba.random.normal()
+        env.se = cimba.random.exponential()
+        env.sg = cimba.random.gamma(2.5)
+        env.sb = cimba.random.beta(2.0, 3.0)
+        env.pm = cimba.random.pert_mod(0.0, 4.0, 10.0, 6.0)
+        env.lg = cimba.random.logistic(0.0, 1.0)
+        env.cy = cimba.random.cauchy(0.0, 1.0)
+        env.pr = cimba.random.pareto(2.5, 1.0)
+        env.cs = cimba.random.chi_squared(4.0)
+        env.fd = cimba.random.f_dist(5.0, 8.0)
+        env.st = cimba.random.student_t(7.0)
+        env.td = cimba.random.student_t(7.0, 1.0, 2.0)
+        env.geo = cimba.random.geometric(0.4)
+        env.binom = cimba.random.binomial(10, 0.4)
+        env.nbinom = cimba.random.negative_binomial(3, 0.4)
+        env.pas = cimba.random.negative_binomial(3, 0.4)
+        env.hypo = cimba.random.hypoexponential((1.0, 2.0, 4.0, 8.0))
+        env.hyper = cimba.random.hyperexponential(
+            (1.0, 2.0, 4.0, 8.0), (0.1, 0.2, 0.3, 0.4))
+        env.loaded = cimba.random.categorical([0.2, 0.3, 0.5])
+        env.cat = cimba.random.categorical(CAT_PROBABILITIES)
         sim.suspend()
 
     exp = model.experiment(replications=1, duration=10.0, warmup=0.0,
@@ -488,6 +488,43 @@ def test_extra_random_distributions():
     assert exp["hyper"][0] >= 0.0
     assert 0.0 <= exp["loaded"][0] <= 2.0
     assert 0.0 <= exp["cat"][0] <= 2.0
+
+
+def test_random_namespace_defaults_keywords_and_aliases_compile():
+    class RandomAPI(sim.Model):
+        u: sim.Output
+        n: sim.Output
+        e: sim.Output
+        g: sim.Output
+        cat: sim.Output
+        hyper: sim.Output
+        td: sim.Output
+        chi: sim.Output
+
+    model = RandomAPI()
+
+    @model.process
+    def draw(env: RandomAPI):
+        env.u = cimba.random.uniform()
+        env.n = cimba.random.normal(mu=0.0, sigma=1.0)
+        env.e = cimba.random.exponential()
+        env.g = cimba.random.gamma(shape=2.0)
+        env.cat = cimba.random.categorical((0.2, 0.3, 0.5))
+        env.hyper = cimba.random.hyperexponential(
+            (1.0, 2.0), probabilities=(0.25, 0.75))
+        env.td = cimba.random.student_t(v=7.0, m=1.0, s=2.0)
+        env.chi = cimba.random.chi_squared(k=4.0)
+        sim.suspend()
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=19)
+    assert exp.run() == 0
+    assert 0.0 <= exp["u"][0] <= 1.0
+    assert exp["e"][0] >= 0.0
+    assert exp["g"][0] >= 0.0
+    assert 0.0 <= exp["cat"][0] <= 2.0
+    assert exp["hyper"][0] >= 0.0
+    for field in ("n", "td", "chi"):
+        assert np.isfinite(exp[field][0])
 
 
 def test_process_handles_and_interrupt():

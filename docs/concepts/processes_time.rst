@@ -8,11 +8,13 @@ Inside that function, ``sim`` calls such as ``sim.hold()``, ``sim.get()``, and
 
 .. code-block:: python
 
+   import cimba.random as random
+
    @model.process
    def doctor(env: Clinic):
        while True:
            sim.get(env.waiting_room, 1)
-           service_time = sim.exponential(env.mean_service)
+           service_time = random.exponential(env.mean_service)
            sim.hold(service_time)
            env.served += 1
 
@@ -63,7 +65,7 @@ Use ``copies=`` when the model has several identical active entities:
    def clerk(env: Clinic, idx: int):
        while True:
            sim.get(env.waiting_room, 1)
-           sim.hold(sim.exponential(env.mean_service))
+           sim.hold(random.exponential(env.mean_service))
            env.served += 1
 
 The second argument receives the copy index. Use it when each copy needs a

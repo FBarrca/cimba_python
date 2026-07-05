@@ -6,7 +6,8 @@ but with no `yield`: cimba's processes are stackful fibers, so sim.hold()
 and the acquire/get/wait verbs simply suspend the process, from any depth
 of the call stack. Each process is compiled with Numba into machine code,
 so models run at native speed on all cores; process bodies must stay in
-nopython-compilable Python (numbers, loops, and sim.* calls).
+nopython-compilable Python (numbers, loops, sim.* calls, and cimba.random
+draws).
 
 A model is a Model subclass whose annotated fields declare the trial
 record (the `env` seen by process bodies); the subclass doubles as the
@@ -22,7 +23,7 @@ static type of `env`, so fields are checked and completed:
     @mg1.process
     def arrivals(env: MG1):
         while True:
-            sim.hold(sim.exponential(1.0 / env.utilization))
+            sim.hold(cimba.random.exponential(1.0 / env.utilization))
             sim.put(env.queue, 1)
 
 Concept translation (cimba -> sim API):
@@ -149,7 +150,7 @@ __all__ = [
     "schedule", "schedule_at", "event_cancel", "event_reschedule",
     "event_reprioritize", "event_scheduled", "event_time",
     "event_priority", "current_event", "event_count", "clear_events",
-    "flip", "held", "pool_held",
+    "held", "pool_held",
     "pq_put", "pq_get", "pq_take", "pq_length", "pq_space", "pq_position",
     "pq_reprioritize", "pq_cancel", "pq_mean_length", "pq_history",
     "pq_report", "pq_report_file",
@@ -172,13 +173,6 @@ __all__ = [
     "timeseries_pacf_correlogram",
     "timeseries_pacf_correlogram_file",
     "wait_for", "signal",
-    "exponential", "gamma", "uniform", "normal", "random01",
-    "rayleigh", "pert", "bernoulli", "triangular", "weibull", "lognormal",
-    "erlang", "beta", "poisson", "dice",
-    "std_normal", "std_exponential", "std_gamma", "std_beta", "pert_mod",
-    "logistic", "cauchy", "pareto", "chisquared", "f_dist", "std_t",
-    "t_dist", "geometric", "binomial", "negative_binomial", "pascal",
-    "hypoexponential", "hyperexponential", "categorical", "loaded_dice",
     "log_text", "log_user", "log_user_i64", "log_user_f64",
     "f2i", "i2f",
 ]
@@ -632,153 +626,6 @@ if TYPE_CHECKING:
         """Print the native store/object-queue text report to stdout."""
         ...
 
-    # --- Random draws -----------------------------------------------------------
-    def exponential(mean: float) -> float:
-        """Exponentially distributed draw with the given mean."""
-        ...
-
-    def gamma(shape: float, scale: float) -> float:
-        """Gamma-distributed draw."""
-        ...
-
-    def uniform(low: float, high: float) -> float:
-        """Uniform draw from [low, high)."""
-        ...
-
-    def normal(mu: float, sigma: float) -> float:
-        """Normally distributed draw."""
-        ...
-
-    def random01() -> float:
-        """Uniform draw from [0, 1)."""
-        ...
-
-    def rayleigh(s: float) -> float:
-        """Rayleigh-distributed draw with scale parameter `s`."""
-        ...
-
-    def pert(low: float, mode: float, high: float) -> float:
-        """PERT-distributed draw (scaled beta) over [low, high]."""
-        ...
-
-    def pert_mod(low: float, mode: float, high: float,
-                 lambda_: float) -> float:
-        """Modified PERT draw with explicit peakiness parameter."""
-        ...
-
-    def bernoulli(p: float) -> int:
-        """1 with probability `p`, else 0."""
-        ...
-
-    def flip() -> int:
-        """Fair coin: 1 or 0, equivalent to bernoulli(0.5) but faster."""
-        ...
-
-    def triangular(low: float, mode: float, high: float) -> float:
-        """Triangular-distributed draw over [low, high]."""
-        ...
-
-    def weibull(shape: float, scale: float) -> float:
-        """Weibull-distributed draw."""
-        ...
-
-    def lognormal(m: float, s: float) -> float:
-        """Log-normal draw; mean exp(m + s^2/2), median exp(m)."""
-        ...
-
-    def erlang(k: int, m: float) -> float:
-        """Erlang draw: sum of k exponentials of mean m (mean k*m)."""
-        ...
-
-    def beta(a: float, b: float, low: float, high: float) -> float:
-        """Beta(a, b) draw scaled to [low, high]."""
-        ...
-
-    def poisson(rate: float) -> int:
-        """Poisson-distributed count with the given rate."""
-        ...
-
-    def dice(a: int, b: int) -> int:
-        """Uniform integer draw from [a, b] inclusive."""
-        ...
-
-    def std_normal() -> float:
-        """Standard normal draw with mean 0 and standard deviation 1."""
-        ...
-
-    def std_exponential() -> float:
-        """Standard exponential draw with mean 1."""
-        ...
-
-    def std_gamma(shape: float) -> float:
-        """Standard gamma draw with scale 1."""
-        ...
-
-    def std_beta(a: float, b: float) -> float:
-        """Beta(a, b) draw over [0, 1]."""
-        ...
-
-    def logistic(m: float, s: float) -> float:
-        """Logistic-distributed draw with location `m` and scale `s`."""
-        ...
-
-    def cauchy(mode: float, scale: float) -> float:
-        """Cauchy-distributed draw."""
-        ...
-
-    def pareto(shape: float, mode: float) -> float:
-        """Pareto-distributed draw on [mode, infinity)."""
-        ...
-
-    def chisquared(k: float) -> float:
-        """Chi-squared draw with `k` degrees of freedom."""
-        ...
-
-    def f_dist(a: float, b: float) -> float:
-        """F-distributed draw with numerator/denominator degrees."""
-        ...
-
-    def std_t(v: float) -> float:
-        """Standard Student's t draw with `v` degrees of freedom."""
-        ...
-
-    def t_dist(m: float, s: float, v: float) -> float:
-        """Location-scale Student's t draw."""
-        ...
-
-    def geometric(p: float) -> int:
-        """Geometric draw: trials up to and including first success."""
-        ...
-
-    def binomial(n: int, p: float) -> int:
-        """Binomial draw: successes in `n` Bernoulli trials."""
-        ...
-
-    def negative_binomial(m: int, p: float) -> int:
-        """Failures before the `m`th success."""
-        ...
-
-    def pascal(m: int, p: float) -> int:
-        """Alias for negative_binomial."""
-        ...
-
-    def hypoexponential(means: Any) -> float:
-        """Hypoexponential draw from a non-empty sequence of means."""
-        ...
-
-    def hyperexponential(means: Any, weights: Any) -> float:
-        """Hyperexponential draw from matching mean and weight sequences."""
-        ...
-
-    def categorical(weights: Any) -> int:
-        """Return an index sampled in proportion to a non-empty sequence
-        of nonnegative weights."""
-        ...
-
-    def loaded_dice(probabilities: Any) -> int:
-        """Alias for categorical(probabilities)."""
-        ...
-
     # --- Logging ---------------------------------------------------------------
     def log_user(flags: int, message: Handle) -> None:
         """Log a static message handle created by sim.log_text()."""
@@ -991,84 +838,6 @@ else:
     def timeseries_pacf_correlogram(timeseries, lags=20):
         return timeseries_pacf_correlogram_file(timeseries, 0, _np.uint64(1),
                                                 _np.uint64(lags))
-
-    # Random draws
-    exponential = _b.random_exponential
-    gamma = _b.random_gamma
-    uniform = _b.random_uniform
-    normal = _b.random_normal
-    random01 = _b.random01
-    rayleigh = _b.random_rayleigh
-    pert = _b.random_pert
-    pert_mod = _b.random_pert_mod
-    bernoulli = _b.random_bernoulli
-    flip = _b.random_flip
-    triangular = _b.random_triangular
-    weibull = _b.random_weibull
-    lognormal = _b.random_lognormal
-    erlang = _b.random_erlang
-    beta = _b.random_beta
-    poisson = _b.random_poisson
-    dice = _b.random_dice
-    std_normal = _b.random_std_normal
-    std_exponential = _b.random_std_exponential
-    std_gamma = _b.random_std_gamma
-    std_beta = _b.random_std_beta
-    logistic = _b.random_logistic
-    cauchy = _b.random_cauchy
-    pareto = _b.random_pareto
-    chisquared = _b.random_chisquared
-    f_dist = _b.random_f_dist
-    std_t = _b.random_std_t
-    t_dist = _b.random_t
-    geometric = _b.random_geometric
-    binomial = _b.random_binomial
-    negative_binomial = _b.random_negative_binomial
-    pascal = _b.random_pascal
-
-    @njit
-    def hypoexponential(means):
-        """Hypoexponential draw from a non-empty sequence of means."""
-        if len(means) == 0:
-            raise ValueError("hypoexponential() expects at least one mean")
-        x = 0.0
-        for mean in means:
-            x += exponential(mean)
-        return x
-
-    @njit
-    def categorical(weights):
-        """Return an index sampled in proportion to nonnegative weights."""
-        if len(weights) == 0:
-            raise ValueError("categorical() expects at least one weight")
-        total = 0.0
-        for weight in weights:
-            total += weight
-        if total <= 0.0:
-            raise ValueError("categorical() expects positive total weight")
-
-        target = random01() * total
-        cumulative = 0.0
-        last = 0
-        for i, weight in enumerate(weights):
-            cumulative += weight
-            last = i
-            if target < cumulative:
-                return i
-        return last
-
-    @njit
-    def loaded_dice(probabilities):
-        """Alias for categorical(probabilities)."""
-        return categorical(probabilities)
-
-    @njit
-    def hyperexponential(means, weights):
-        """Hyperexponential draw from matching mean and weight sequences."""
-        if len(means) != len(weights):
-            raise ValueError(
-                "hyperexponential() means and weights must match")
-        return exponential(means[categorical(weights)])
 
     # Conditions (cmb_condition)
     signal = _b.condition_signal
