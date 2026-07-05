@@ -72,7 +72,7 @@ Use ``@model.collect`` to write outputs after the measured run:
    @model.collect
    def collect_stats(env: Clinic):
        env.completed = float(env.served)
-       env.avg_waiting = sim.mean_level(env.waiting_room)
+       env.avg_waiting = env.waiting_room.mean_level()
 
 The collector is still part of the compiled model. It should read trial-local
 state and write ``sim.Output`` fields. Distribution statistics of dataset

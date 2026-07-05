@@ -91,7 +91,7 @@ or preemption:
 
    import cimba.random as random
 
-   sig = sim.acquire(env.doctor)
+   sig = env.doctor.acquire()
    if sig != sim.SUCCESS:
        return
 
@@ -100,8 +100,8 @@ or preemption:
        if sig == sim.SUCCESS:
            env.completed += 1
    finally:
-       if sim.held(env.doctor, sim.current()):
-           sim.release(env.doctor)
+       if env.doctor.held(sim.current()):
+           env.doctor.release()
 
 Treat every blocking call as a possible handoff point. Another process may
 interrupt this process, stop it, preempt held capacity, or resume it with a

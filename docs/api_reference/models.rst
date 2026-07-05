@@ -59,8 +59,8 @@ may receive a final ``sim.Struct`` view parameter.
 Components may reference other declared components with ``sim.Ref[Target]``
 fields and routing tables of collection items with ``sim.Refs[Target]``,
 letting method bodies route through paths such as
-``sim.store_put(self.downstream.inbox, h)`` or
-``sim.store_put(self.routes[i].inbox, h)``; see
+``self.downstream.inbox.put(h)`` or
+``self.routes[i].inbox.put(h)``; see
 :doc:`../advanced/components` for wiring and routing details.
 
 Fixed repeated structures can be declared with standard ``list[Component]``

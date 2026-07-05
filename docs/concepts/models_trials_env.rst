@@ -38,7 +38,7 @@ Process functions receive the current trial as ``env``:
    def arrivals(env: Clinic):
        while True:
            sim.hold(random.exponential(1.0 / env.arrival_rate))
-           sim.put(env.waiting_room, 1)
+           env.waiting_room.put(1)
 
 The ``env`` object is trial-local. Reading ``env.arrival_rate`` reads the value
 for this trial, and ``env.waiting_room`` is the queue handle created for this

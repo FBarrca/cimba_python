@@ -61,21 +61,21 @@ def build_reporting_model() -> ReportingModel:
         for i in range(12):
             env.d.add(float(i % 4))
 
-        sim.put(env.q, 2)
-        sim.acquire(env.resource)
-        sim.pool_acquire(env.pool, 1)
-        sim.store_put(env.store, 101)
-        sim.pq_put(env.pqs[0], 202, 5)
+        env.q.put(2)
+        env.resource.acquire()
+        env.pool.acquire(1)
+        env.store.put(101)
+        env.pqs[0].put(202, 5)
         sim.hold(1.0)
 
-        sim.get(env.q, 1)
-        sim.release(env.resource)
-        sim.pool_release(env.pool, 1)
-        sim.store_take(env.store)
-        sim.pq_take(env.pqs[0])
+        env.q.get(1)
+        env.resource.release()
+        env.pool.release(1)
+        env.store.take()
+        env.pqs[0].take()
         sim.hold(1.0)
 
-        sim.get(env.q, 1)
+        env.q.get(1)
         sim.suspend()
     return model
 
@@ -126,11 +126,11 @@ def test_native_text_report_file_variants_cover_dataset_methods(tmp_path):
     @model.collect
     def collect(env: ReportingModel):
         env.n = float(env.q.history().count())
-        ok = sim.queue_report_file(env.q, report_handle, 0)
-        ok += sim.resource_report_file(env.resource, report_handle, 1)
-        ok += sim.pool_report_file(env.pool, report_handle, 1)
-        ok += sim.store_report_file(env.store, report_handle, 1)
-        ok += sim.pq_report_file(env.pqs[0], report_handle, 1)
+        ok = env.q.report_file(report_handle, 0)
+        ok += env.resource.report_file(report_handle, 1)
+        ok += env.pool.report_file(report_handle, 1)
+        ok += env.store.report_file(report_handle, 1)
+        ok += env.pqs[0].report_file(report_handle, 1)
         ok += env.q.history().print_file(report_handle, 1)
         ok += env.q.history().fivenum_file(report_handle, 1)
         ok += env.q.history().histogram_file(report_handle, 1,
@@ -183,13 +183,13 @@ def test_timeseries_history_method_compiles_in_components():
 
         @sim.process
         def driver(self, env):
-            sim.put(self.q, 2)
-            sim.acquire(self.resource)
+            self.q.put(2)
+            self.resource.acquire()
             sim.hold(1.0)
-            sim.get(self.q, 1)
-            sim.release(self.resource)
+            self.q.get(1)
+            self.resource.release()
             sim.hold(1.0)
-            sim.get(self.q, 1)
+            self.q.get(1)
             sim.suspend()
 
         @sim.collect
@@ -214,11 +214,11 @@ def test_native_text_report_stdout_variants_print_to_console():
 
     @model.collect
     def collect(env: ReportingModel):
-        ok = sim.queue_report(env.q)
-        ok += sim.resource_report(env.resource)
-        ok += sim.pool_report(env.pool)
-        ok += sim.store_report(env.store)
-        ok += sim.pq_report(env.pqs[0])
+        ok = env.q.report()
+        ok += env.resource.report()
+        ok += env.pool.report()
+        ok += env.store.report()
+        ok += env.pqs[0].report()
         ok += env.q.history().histogram(4, 0.0, 4.0)
         ok += env.d.histogram(4, 0.0, 0.0)
         env.ok = float(ok)

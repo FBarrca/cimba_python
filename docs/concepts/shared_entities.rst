@@ -40,12 +40,12 @@ A queue models waiting work:
    def arrivals(env: Clinic):
        while True:
            sim.hold(random.exponential(1.0 / env.arrival_rate))
-           sim.put(env.waiting_room, 1)
+           env.waiting_room.put(1)
 
    @model.process
    def service(env: Clinic):
        while True:
-           sim.get(env.waiting_room, 1)
+           env.waiting_room.get(1)
            sim.hold(random.exponential(env.mean_service))
 
 A resource models exclusive access:
@@ -54,11 +54,11 @@ A resource models exclusive access:
 
    @model.process
    def patient(env: Clinic):
-       sim.acquire(env.doctor)
+       env.doctor.acquire()
        try:
            sim.hold(random.exponential(env.mean_service))
        finally:
-           sim.release(env.doctor)
+           env.doctor.release()
 
 The queue version is natural when patients are just a count. The resource
 version is natural when each patient process carries its own path through the
@@ -99,12 +99,12 @@ A condition is useful when a process waits on a predicate over model state:
 
    @model.process
    def late_staff(env: Clinic):
-       sim.wait_for(env.shift_started, env.is_open, env)
+       env.shift_started.wait_for(env.is_open)
 
    @model.process
    def manager(env: Clinic):
        env.open = 1
-       sim.signal(env.shift_started)
+       env.shift_started.signal()
 
 A dataset collects samples:
 
@@ -114,7 +114,7 @@ A dataset collects samples:
    env.service_times.add(service_time)
    sim.hold(service_time)
 
-Use entity summaries, such as ``sim.mean_level(env.waiting_room)``, for
+Use entity summaries, such as ``env.waiting_room.mean_level()``, for
 time-weighted measurements. Use datasets for samples that happen at individual
 moments.
 

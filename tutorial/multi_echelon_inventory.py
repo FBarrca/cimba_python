@@ -98,26 +98,21 @@ class Facility(sim.Component):
                 quantity = base_stock[self.node] - self.on_hand
                 if quantity > 0.0:
                     upstream = self.upstream
-                    sim.store_put(
-                        env.facilities[upstream].order_requesters,
-                        self.node,
-                    )
-                    sim.store_put(
-                        env.facilities[upstream].order_quantities,
-                        sim.f2i(quantity),
-                    )
+                    env.facilities[upstream].order_requesters.put(self.node)
+                    env.facilities[upstream].order_quantities.put(
+                        sim.f2i(quantity))
                     # Count the order immediately so we do not reorder it again.
                     self.inventory_position += quantity
 
     @sim.process
     def fulfill_orders(self, env):
         while True:
-            if sim.store_length(self.order_requesters) == 0:
+            if self.order_requesters.length() == 0:
                 sim.hold(1.0)
             else:
                 # These are replenishment orders from downstream facilities.
-                requester = sim.store_take(self.order_requesters)
-                quantity = sim.i2f(sim.store_take(self.order_quantities))
+                requester = self.order_requesters.take()
+                quantity = sim.i2f(self.order_quantities.take())
 
                 if self.is_source == 1:
                     # External supply is unlimited, so nothing is deducted.
@@ -238,13 +233,13 @@ def shipment(env: MultiEchelonInventory, shipment: Shipment):
         sim.hold(lead_time)
     # The replenishment arrives after its sampled lead time.
     env.facilities[requester].on_hand += shipment.quantity
-    sim.store_put(env.completed_shipments, sim.current())
+    env.completed_shipments.put(sim.current())
 
 
 @model.process
 def reclaim_shipments(env: MultiEchelonInventory):
     while True:
-        handle = sim.store_take(env.completed_shipments)
+        handle = env.completed_shipments.take()
         sim.despawn(handle)
 
 

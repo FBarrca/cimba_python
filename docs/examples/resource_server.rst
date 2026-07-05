@@ -2,9 +2,9 @@ Single Server Resource
 ======================
 
 Use :class:`~cimba.sim.Resource` when a process must acquire exclusive access
-to a shared server before it can continue. A process calls
-:func:`~cimba.sim.acquire` to take the resource — blocking until it is free —
-and :func:`~cimba.sim.release` to hand it back to the next waiter.
+to a shared server before it can continue. A process calls ``.acquire()`` to
+take the resource — blocking until it is free — and ``.release()`` to hand it
+back to the next waiter.
 
 Here three patients repeatedly return to a clinic that has a single doctor.
 
@@ -28,9 +28,9 @@ Here three patients repeatedly return to a clinic that has a single doctor.
    def patient(env: Clinic):
        while True:
            sim.hold(random.exponential(2.0))   # time until this patient returns
-           sim.acquire(env.doctor)          # wait for the one free doctor
+           env.doctor.acquire()             # wait for the one free doctor
            sim.hold(random.exponential(1.0))   # consultation
-           sim.release(env.doctor)
+           env.doctor.release()
            env.n_served = env.n_served + 1
 
 
@@ -50,5 +50,5 @@ Here three patients repeatedly return to a clinic that has a single doctor.
    if __name__ == "__main__":
        main()
 
-While one patient holds the doctor, the others block in :func:`~cimba.sim.acquire`;
+While one patient holds the doctor, the others block in ``.acquire()``;
 when it is released the next waiting patient is admitted.

@@ -36,14 +36,14 @@ mm1 = MM1Bench("mm1_bench_multi")
 def arrival(env: MM1Bench):
     for _ in range(NUM_OBJECTS):
         sim.hold(random.exponential(env.arr_mean))
-        sim.store_put(env.queue, sim.f2i(sim.now()))
+        env.queue.put(sim.f2i(sim.now()))
 
 
 @mm1.process
 def service(env: MM1Bench):
     env.sum_wait = 0.0
     while True:
-        job = sim.store_take(env.queue)
+        job = env.queue.take()
         sim.hold(random.exponential(env.srv_mean))
         env.sum_wait = env.sum_wait + (sim.now() - sim.i2f(job))
         env.obj_cnt = env.obj_cnt + 1

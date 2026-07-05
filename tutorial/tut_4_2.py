@@ -106,7 +106,7 @@ class SeaConditions(sim.Component):
                   * np.sin(self.wind_dir * pi / 180.0))
             self.water_depth = da + dw
             # Request the harbormaster to read the tide dial
-            sim.signal(env.facilities.harbormaster)
+            env.facilities.harbormaster.signal()
             sim.hold(1.0)
 
 
@@ -152,29 +152,28 @@ class ShipTraffic(sim.Component):
             ready = (
                 env.sea.water_depth >= shp.min_depth
                 and env.sea.wind_mag <= shp.max_wind
-                and sim.pool_available(env.facilities.tugs) >= shp.tugs_needed
-                and sim.pool_available(berths) >= 1
+                and env.facilities.tugs.available() >= shp.tugs_needed
+                and berths.available() >= 1
             )
             if ready:
                 break
-            sim.wait_for(env.facilities.harbormaster,
-                         env.harbormaster_called, env)
+            env.facilities.harbormaster.wait_for(env.harbormaster_called)
 
         # Cleared to dock: grab a berth and the tugs
-        sim.pool_acquire(berths, 1)
-        sim.pool_acquire(env.facilities.tugs, shp.tugs_needed)
+        berths.acquire(1)
+        env.facilities.tugs.acquire(shp.tugs_needed)
 
         # Announce our intention to move
-        sim.acquire(env.facilities.comms)
+        env.facilities.comms.acquire()
         sim.hold(random.gamma(5.0, 0.01))
-        sim.release(env.facilities.comms)
+        env.facilities.comms.release()
 
         # It takes a while to move into position
         sim.hold(random.pert(0.4, 0.5, 0.8))
 
         # Safely at the quay, dismiss the tugs and unload
-        sim.pool_release(env.facilities.tugs, shp.tugs_needed)
-        sim.signal(env.facilities.harbormaster)
+        env.facilities.tugs.release(shp.tugs_needed)
+        env.facilities.harbormaster.signal()
         if shp.size == LARGE:
             unload_avg = env.unload_avg_large
         else:
@@ -182,18 +181,18 @@ class ShipTraffic(sim.Component):
         sim.hold(random.pert(0.75 * unload_avg, unload_avg, 2.0 * unload_avg))
 
         # Need the tugs again to get out of here
-        sim.pool_acquire(env.facilities.tugs, shp.tugs_needed)
-        sim.acquire(env.facilities.comms)
+        env.facilities.tugs.acquire(shp.tugs_needed)
+        env.facilities.comms.acquire()
         sim.hold(random.gamma(5.0, 0.01))
-        sim.release(env.facilities.comms)
+        env.facilities.comms.release()
 
         # Gently move out again, assisted by tugs
         sim.hold(random.pert(0.4, 0.5, 0.8))
 
         # Cleared the berth, done with the tugs
-        sim.pool_release(berths, 1)
-        sim.pool_release(env.facilities.tugs, shp.tugs_needed)
-        sim.signal(env.facilities.harbormaster)
+        berths.release(1)
+        env.facilities.tugs.release(shp.tugs_needed)
+        env.facilities.harbormaster.signal()
 
         # Datasets are reset when the measurement window opens, which
         # replaces the C version's explicit warmup-time check.
@@ -201,12 +200,12 @@ class ShipTraffic(sim.Component):
             self.time_large.add(sim.now() - shp.arrival)
         else:
             self.time_small.add(sim.now() - shp.arrival)
-        sim.store_put(self.departed, me)
+        self.departed.put(me)
 
     @sim.process
     def departures(self, env):
         while True:
-            sim.despawn(sim.store_take(self.departed))
+            sim.despawn(self.departed.take())
 
 
 class Harbor(sim.Model):
@@ -250,9 +249,9 @@ def harbor_stats(env: Harbor):
     env.avg_time_large = env.traffic.time_large.mean()
     env.n_small = env.traffic.time_small.count()
     env.n_large = env.traffic.time_large.count()
-    env.tug_util = sim.pool_mean_in_use(env.facilities.tugs)
-    env.berth_small_util = sim.pool_mean_in_use(env.facilities.berths_small)
-    env.berth_large_util = sim.pool_mean_in_use(env.facilities.berths_large)
+    env.tug_util = env.facilities.tugs.mean_in_use()
+    env.berth_small_util = env.facilities.berths_small.mean_in_use()
+    env.berth_large_util = env.facilities.berths_large.mean_in_use()
 
 
 def ci95(vals: np.ndarray) -> tuple[float, float]:

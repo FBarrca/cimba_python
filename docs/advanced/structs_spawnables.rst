@@ -89,14 +89,14 @@ and have a cleanup process despawn them:
    @model.process
    def cleanup(env: Clinic):
        while True:
-           handle = sim.store_take(env.departures)
+           handle = env.departures.take()
            sim.despawn(handle)
 
 
    @model.process
    def patients(env: Clinic, patient: Patient):
        # ... patient journey ...
-       sim.store_put(env.departures, sim.current())
+       env.departures.put(sim.current())
 
 Leftover spawned processes are stopped and reclaimed at the end of a trial, but
 explicit cleanup keeps long trials from accumulating completed agents.

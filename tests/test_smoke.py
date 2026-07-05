@@ -168,17 +168,17 @@ def test_sim_model_run():
     def arrivals(env: MM1):
         while True:
             sim.hold(cimba.random.exponential(1.0 / env.utilization))
-            sim.put(env.queue, 1)
+            env.queue.put(1)
 
     @model.process
     def service(env: MM1):
         while True:
             sim.hold(1.0)
-            sim.get(env.queue, 1)
+            env.queue.get(1)
 
     @model.collect
     def collect_stats(env: MM1):
-        env.avg_queue_length = sim.mean_level(env.queue)
+        env.avg_queue_length = env.queue.mean_level()
 
     exp = model.experiment(
         utilization=[0.5],
@@ -257,11 +257,11 @@ def test_bounded_queue_and_dataset_stats():
         env.max_level = 0.0
         env.space_ok = 1.0
         while True:
-            sim.put(env.q, 1)       # blocks while the queue is full
-            lvl = sim.level(env.q)
+            env.q.put(1)       # blocks while the queue is full
+            lvl = env.q.level()
             if lvl > env.max_level:
                 env.max_level = lvl
-            if sim.space(env.q) + lvl != 5:
+            if env.q.space() + lvl != 5:
                 env.space_ok = 0.0
             env.d.add(1.0 * lvl)
             sim.hold(0.5)
@@ -270,7 +270,7 @@ def test_bounded_queue_and_dataset_stats():
     def consumer(env: Bounded):
         while True:
             sim.hold(1.0)
-            sim.get(env.q, 1)
+            env.q.get(1)
 
     @model.collect
     def stats(env: Bounded):
@@ -709,15 +709,15 @@ def test_pqueues_and_timers():
 
     @model.process
     def producer(env: Shop):
-        sim.pq_put(env.qs[0], 7, 0)     # low priority first
-        sim.pq_put(env.qs[0], 8, 5)     # high priority second
+        env.qs[0].put(7, 0)     # low priority first
+        env.qs[0].put(8, 5)     # high priority second
         sim.hold(1.0)
-        env.served_first = sim.pq_take(env.qs[0])  # leftover entry
+        env.served_first = env.qs[0].take()  # leftover entry
 
     @model.process
     def consumer(env: Shop):
         sim.hold(0.5)
-        env.served_first = sim.pq_take(env.qs[0])
+        env.served_first = env.qs[0].take()
 
     @model.process
     def waiter(env: Shop):
@@ -749,17 +749,17 @@ def test_pqueue_get_status_and_object():
     @model.process
     def actor(env: PQGet):
         q = env.qs[0]
-        sim.pq_put(q, 7, 0)
-        sim.pq_put(q, 8, 5)
+        q.put(7, 0)
+        q.put(8, 5)
 
-        status, obj = sim.pq_get(q)
+        status, obj = q.get()
         env.first_status = status
         env.first_obj = obj
-        env.take_obj = sim.pq_take(q)
+        env.take_obj = q.take()
 
         me = sim.current()
         sim.timer_set(me, 1.0, sim.TIMEOUT)
-        status, obj = sim.pq_get(q)
+        status, obj = q.get()
         env.timeout_status = status
         env.timeout_obj = obj
         while True:
@@ -789,23 +789,23 @@ def test_pqueue_space_reprioritize_and_mean_length():
     @model.process
     def actor(env: PQStats):
         q = env.qs[0]
-        low = sim.pq_put(q, 10, 0)
-        sim.pq_put(q, 20, 5)
+        low = q.put(10, 0)
+        q.put(20, 5)
         env.space_ok = 0.0
-        if sim.pq_space(q) > sim.pq_length(q):
+        if q.space() > q.length():
             env.space_ok = 1.0
-        env.pos_before = sim.pq_position(q, low)
-        sim.pq_reprioritize(q, low, 10)
-        env.pos_after = sim.pq_position(q, low)
+        env.pos_before = q.position(low)
+        q.reprioritize(low, 10)
+        env.pos_after = q.position(low)
         sim.hold(1.0)
-        env.first = sim.pq_take(q)
+        env.first = q.take()
         sim.hold(1.0)
-        sim.pq_take(q)
+        q.take()
         sim.suspend()
 
     @model.collect
     def collect(env: PQStats):
-        env.mean_len = sim.pq_mean_length(env.qs[0])
+        env.mean_len = env.qs[0].mean_length()
 
     exp = model.experiment(replications=1, duration=5.0, warmup=0.0,
                            seed=19)
@@ -835,24 +835,24 @@ def test_store_get_position_and_resource_held():
     @model.process
     def actor(env: StoreResource):
         me = sim.current()
-        sim.acquire(env.resource)
-        env.held_before = sim.held(env.resource, me)
-        sim.release(env.resource)
-        env.held_after = sim.held(env.resource, me)
+        env.resource.acquire()
+        env.held_before = env.resource.held(me)
+        env.resource.release()
+        env.held_after = env.resource.held(me)
 
-        sim.store_put(env.store, 0)
-        status, obj = sim.store_get(env.store)
+        env.store.put(0)
+        status, obj = env.store.get()
         env.zero_status = status
         env.zero_obj = obj
 
-        sim.store_put(env.store, 41)
-        sim.store_put(env.store, 42)
-        env.pos = sim.store_position(env.store, 42)
-        sim.store_take(env.store)
-        sim.store_take(env.store)
+        env.store.put(41)
+        env.store.put(42)
+        env.pos = env.store.position(42)
+        env.store.take()
+        env.store.take()
 
         sim.timer_set(me, 1.0, sim.TIMEOUT)
-        status, obj = sim.store_get(env.store)
+        status, obj = env.store.get()
         env.timeout_status = status
         env.timeout_obj = obj
         while True:
@@ -1090,9 +1090,9 @@ def test_native_timeseries_and_text_reports(tmp_path):
     def driver(env: Reports):
         for i in range(30):
             env.d.add(float(i % 7))
-            sim.put(env.q, 1)
+            env.q.put(1)
             sim.hold(0.5)
-            sim.get(env.q, 1)
+            env.q.get(1)
             sim.hold(0.5)
         sim.suspend()
 
@@ -1100,7 +1100,7 @@ def test_native_timeseries_and_text_reports(tmp_path):
     def collect(env: Reports):
         env.n = float(env.q.history().count())
         env.mean = env.q.history().mean()
-        ok = sim.queue_report_file(env.q, report_handle, 0)
+        ok = env.q.report_file(report_handle, 0)
         ok += env.q.history().histogram_file(report_handle, 1, 5, 0.0, 5.0)
         ok += env.q.history().pacf_correlogram_file(report_handle, 1, 3)
         ok += env.d.histogram_file(report_handle, 1, 5, 0.0, 0.0)
@@ -1132,15 +1132,15 @@ def test_native_reports_print_to_stdout():
     def driver(env: ConsoleReports):
         for i in range(12):
             env.d.add(float(i % 3))
-            sim.put(env.q, 1)
+            env.q.put(1)
             sim.hold(0.25)
-            sim.get(env.q, 1)
+            env.q.get(1)
             sim.hold(0.25)
         sim.suspend()
 
     @model.collect
     def collect(env: ConsoleReports):
-        ok = sim.queue_report(env.q)
+        ok = env.q.report()
         ok += env.q.history().histogram(3, 0.0, 3.0)
         ok += env.d.histogram(bins=3, low=0.0, high=0.0)
         env.ok = float(ok)

@@ -12,12 +12,12 @@ class MM1Station(sim.Component):
         while True:
             t_ia = random.exponential(1.0 / env.utilization)
             sim.hold(t_ia)
-            sim.put(self.queue, 1)
+            self.queue.put(1)
 
     @sim.process
     def service(self, env):
         while True:
-            sim.get(self.queue, 1)
+            self.queue.get(1)
             t_srv = random.exponential(1.0)
             sim.hold(t_srv)
 
@@ -33,7 +33,7 @@ def build_model() -> MM1:
 
     @model.collect
     def collect_stats(env: MM1):
-        env.avg_queue_length = sim.mean_level(env.station.queue)
+        env.avg_queue_length = env.station.queue.mean_level()
 
     return model
 

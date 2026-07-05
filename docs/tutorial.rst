@@ -65,12 +65,12 @@ simple:
         while True:
             t_ia = random.exponential(1.0 / env.utilization)
             sim.hold(t_ia)
-            sim.put(env.queue, 1)
+            env.queue.put(1)
 
     @model.process
     def service(env: MM1):
         while True:
-            sim.get(env.queue, 1)
+            env.queue.get(1)
             t_srv = random.exponential(1.0)
             sim.hold(t_srv)
 
@@ -87,11 +87,12 @@ the first run.
 
 The ``env`` argument is the trial-local model record. It holds the parameter,
 output, state, and entity handles declared on ``MM1``. Process functions are
-plain Python functions, but the blocking ``sim`` calls make them simulation
-processes. If the service process tries to get from an empty queue, it pauses.
-The dispatcher then runs some other event, such as the arrival process waking up
-and putting a customer into the queue. When the service process resumes, it
-continues immediately after the same ``sim.get()`` call.
+plain Python functions, but the blocking ``sim.hold()`` call and entity
+methods such as ``env.queue.get()`` make them simulation processes. If the
+service process tries to get from an empty queue, it pauses. The dispatcher
+then runs some other event, such as the arrival process waking up and putting
+a customer into the queue. When the service process resumes, it continues
+immediately after the same ``env.queue.get()`` call.
 
 Finally, collect a time-weighted queue statistic:
 
@@ -99,10 +100,11 @@ Finally, collect a time-weighted queue statistic:
 
     @model.collect
     def collect_stats(env: MM1):
-        env.avg_queue_length = sim.mean_level(env.queue)
+        env.avg_queue_length = env.queue.mean_level()
 
-The collector runs after the trial finishes. ``sim.mean_level()`` uses the
-recording window controlled by the experiment's ``warmup`` and ``duration``.
+The collector runs after the trial finishes. ``env.queue.mean_level()`` uses
+the recording window controlled by the experiment's ``warmup`` and
+``duration``.
 
 We also need an experiment to set it all up and run the simulation. Unlike a
 lower-level program, there is no manual object lifecycle code here: the model
@@ -258,13 +260,13 @@ process body:
             sim.log_user_f64(USERFLAG1, MSG_ARR_HOLD, t_ia)
             sim.hold(t_ia)
             sim.log_user(USERFLAG1, MSG_ARR_PUT)
-            sim.put(env.queue, 1)
+            env.queue.put(1)
 
     @model.process
     def service(env: MM1):
         while True:
             sim.log_user(USERFLAG1, MSG_SRV_GET)
-            sim.get(env.queue, 1)
+            env.queue.get(1)
             t_srv = random.exponential(1.0)
             sim.log_user_f64(USERFLAG1, MSG_SRV_HOLD, t_srv)
             sim.hold(t_srv)
@@ -368,17 +370,18 @@ to one million time units and skip the first thousand time units as warmup:
     print(float(exp["avg_queue_length"][0]))
 
 Time-weighted entity summaries are the right tool for levels and utilization:
-``sim.mean_level()`` for queues, ``sim.mean_in_use()`` for resources,
-``sim.pool_mean_in_use()`` for pools, ``sim.store_mean_length()`` for stores,
-and ``sim.pq_mean_length()`` for priority queues. These convenience functions
-are shorthand for getting the entity's recorded time series and summarizing it.
-For example, the following two assignments are equivalent:
+``env.<queue>.mean_level()`` for queues, ``env.<resource>.mean_in_use()`` for
+resources, ``env.<pool>.mean_in_use()`` for pools,
+``env.<store>.mean_length()`` for stores, and ``env.<pqueues>[i].mean_length()``
+for priority queues. These convenience methods are shorthand for getting the
+entity's recorded time series and summarizing it. For example, the following
+two assignments are equivalent:
 
 .. code-block:: python
 
     @model.collect
     def collect_stats(env: MM1):
-        env.avg_queue_length = sim.mean_level(env.queue)
+        env.avg_queue_length = env.queue.mean_level()
 
         env.avg_queue_length = env.queue.history().mean()
 
@@ -391,7 +394,7 @@ autocorrelation correlogram directly from the collector:
     @model.collect
     def collect_stats(env: MM1):
         env.avg_queue_length = env.queue.history().mean()
-        sim.queue_report(env.queue)
+        env.queue.report()
         env.queue.history().pacf_correlogram(lags=20)
 
 Very shortly thereafter, output appears. This block is from an actual run of
@@ -468,7 +471,7 @@ with ``sim.log_text()``:
 
     @model.collect
     def collect_stats(env: MM1):
-        sim.queue_report_file(env.queue, REPORT, append=0)
+        env.queue.report_file(REPORT, append=0)
 
 Use stdout reports for short single-trial runs. In parallel experiments, text
 from several trials may interleave; prefer scalar outputs for final analysis
@@ -535,12 +538,12 @@ natural station:
             while True:
                 t_ia = random.exponential(1.0 / env.utilization)
                 sim.hold(t_ia)
-                sim.put(self.queue, 1)
+                self.queue.put(1)
 
         @sim.process
         def service(self, env):
             while True:
-                sim.get(self.queue, 1)
+                self.queue.get(1)
                 t_srv = random.exponential(1.0)
                 sim.hold(t_srv)
 
@@ -564,7 +567,7 @@ The builder now only needs to create the model and register the collector:
 
         @model.collect
         def collect_stats(env: MM1):
-            env.avg_queue_length = sim.mean_level(env.station.queue)
+            env.avg_queue_length = env.station.queue.mean_level()
 
         return model
 
@@ -811,16 +814,16 @@ The typical usage pattern is also the reason the time-delay function is called
 
     @model.process
     def job(env: Shop):
-        station_sig = sim.acquire(env.station)
+        station_sig = env.station.acquire()
         if station_sig != sim.SUCCESS:
             return
 
-        tool_sig = sim.pool_acquire(env.tools, 3)
+        tool_sig = env.tools.acquire(3)
         if tool_sig == sim.SUCCESS:
             sim.hold(5.0)
-            sim.pool_release(env.tools, 3)
+            env.tools.release(3)
 
-        sim.release(env.station)
+        env.station.release()
 
 Or, for a pool:
 
@@ -828,12 +831,12 @@ Or, for a pool:
 
     @model.process
     def job(env: Shop):
-        sig = sim.pool_acquire(env.tools, 6)
+        sig = env.tools.acquire(6)
         if sig == sim.SUCCESS:
             sim.hold(2.0)
-            sim.pool_release(env.tools, 3)
+            env.tools.release(3)
             sim.hold(1.0)
-            sim.pool_release(env.tools, 3)
+            env.tools.release(3)
 
 Note that resources and pools are different from count queues. It is meaningful
 to put 100 items into a queue with capacity 10; the process can fill the queue,
@@ -852,14 +855,14 @@ Pool accounting should be read from the pool when correctness matters:
 .. code-block:: python
 
     me = sim.current()
-    held = sim.pool_held(env.tools, me)
-    available = sim.pool_available(env.tools)
-    in_use = sim.pool_in_use(env.tools)
+    held = env.tools.held(me)
+    available = env.tools.available()
+    in_use = env.tools.in_use()
 
 This is especially important when preemption is possible. A process can lose
 capacity while blocked in a different call, so a local variable that says "I
-think I hold 4 units" should be resynchronized with ``sim.pool_held()`` after
-any blocking operation.
+think I hold 4 units" should be resynchronized with ``env.tools.held()``
+after any blocking operation.
 
 Preemptions and interruptions
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -889,28 +892,28 @@ process handle is woken with a signal.
         held = 0
         while True:
             sim.set_priority(me, idx)
-            sig = sim.pool_acquire(env.tools, 4)
-            held = sim.pool_held(env.tools, me)
+            sig = env.tools.acquire(4)
+            held = env.tools.held(me)
             if sig == sim.PREEMPTED:
                 env.preempted += 1
             elif sig != sim.SUCCESS:
                 env.interrupted += 1
 
             sig = sim.hold(100.0)
-            held = sim.pool_held(env.tools, me)
+            held = env.tools.held(me)
             if sig == sim.PREEMPTED:
                 env.preempted += 1
             elif sig != sim.SUCCESS:
                 env.interrupted += 1
 
             if held:
-                sim.pool_release(env.tools, held)
+                env.tools.release(held)
 
     @model.process
     def supervisor(env: Crew):
         sim.hold(1.0)
         sim.interrupt(env.worker[0], sim.INTERRUPTED, 0)
-        sim.pool_preempt(env.tools, 6)
+        env.tools.preempt(6)
 
 The supervisor uses the process handles published by ``env.worker``. In a real
 model this could be an emergency dispatcher interrupting a crew, a maintenance
@@ -925,8 +928,8 @@ There are several possible outcomes when a process is waiting for more capacity:
    the signal value chosen by the interrupter.
 
 This is why the example checks both the return signal and the amount still held.
-Signals explain why the process woke. Entity queries such as ``sim.pool_held()``
-tell the process what the simulated world looks like now.
+Signals explain why the process woke. Entity queries such as
+``env.tools.held()`` tell the process what the simulated world looks like now.
 
 Buffers and object queues, interrupted
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -951,21 +954,21 @@ block, so the same signal discipline applies.
     @model.process
     def producer(env: Inbox):
         for job_id in range(100):
-            sig = sim.store_put(env.jobs, job_id)
+            sig = env.jobs.put(job_id)
             if sig != sim.SUCCESS:
                 return
 
     @model.process
     def consumer(env: Inbox):
         while True:
-            job_id = sim.store_get(env.jobs)
+            status, job_id = env.jobs.get()
             sim.hold(1.0 + job_id % 3)
             env.completed += 1
 
-Use ``sim.store_take()`` when a process needs a specific payload, not simply
-the next available one. Priority queues add ``sim.pq_put()``, ``sim.pq_get()``,
-``sim.pq_take()``, ``sim.pq_position()``, ``sim.pq_reprioritize()``, and
-``sim.pq_cancel()``.
+Use ``env.<store>.take()`` when a process needs a specific payload, not simply
+the next available one. Priority queue elements (indexed with
+``env.<pqueues>[i]``) add ``.put()``, ``.get()``, ``.take()``,
+``.position()``, ``.reprioritize()``, and ``.cancel()``.
 
 While the cat is away...
 ^^^^^^^^^^^^^^^^^^^^^^^^
@@ -998,12 +1001,12 @@ targeting:
         while True:
             amount = random.dice(1, 5)
             sim.set_priority(me, random.dice(-10, 10))
-            sig = sim.pool_acquire(env.resource, amount)
+            sig = env.resource.acquire(amount)
             if sig == sim.SUCCESS:
                 sim.hold(random.exponential(1.0))
-                held = sim.pool_held(env.resource, me)
+                held = env.resource.held(me)
                 if held:
-                    sim.pool_release(env.resource, random.dice(1, held))
+                    env.resource.release(random.dice(1, held))
 
     @model.process(copies=2)
     def aggressive(env: Game):
@@ -1011,7 +1014,7 @@ targeting:
         while True:
             amount = random.dice(3, 10)
             sim.set_priority(me, random.dice(-5, 15))
-            sim.pool_preempt(env.resource, amount)
+            env.resource.preempt(amount)
             sim.hold(random.exponential(1.0))
 
     @model.process
@@ -1070,7 +1073,7 @@ entity what it still holds before deciding the next action.
 
 This completes the second tutorial, demonstrating how to acquire and release
 resources, and how to use direct process interactions like ``sim.interrupt()``
-and ``sim.pool_preempt()``. We also mentioned, but did not dwell on,
+and ``env.<pool>.preempt()``. We also mentioned, but did not dwell on,
 ``sim.wait_process()`` and ``sim.wait_event()``. Those are waiting tools for
 joining another process or waiting on a scheduled event handle.
 
@@ -1169,7 +1172,7 @@ the component method:
             me = sim.current()
             vip.entry_queue = sim.now()
             q = env.attractions[0].queues.line[0]
-            entry = sim.pq_put(q, me, vip.priority)
+            entry = q.put(me, vip.priority)
             sig = sim.suspend()
             if sig == sim.SUCCESS:
                 vip.rides += 1
@@ -1211,7 +1214,7 @@ arrival generation, visitor behavior, departure cleanup, counters, and datasets:
         @sim.process
         def departures(self, env):
             while True:
-                sim.despawn(sim.store_take(self.departed))
+                sim.despawn(self.departed.take())
 
 Another process can use ``Visitor(handle)`` to view and update the same fields.
 That is how a ride server records waiting and riding time for the visitor it
@@ -1257,10 +1260,10 @@ per-attraction primitive constants captured from ``__init__``.
             riders = np.empty(MAX_BATCH, dtype=np.int64)
 
             while True:
-                riders[0] = sim.pq_take(q)
+                riders[0] = q.take()
                 cnt = 1
-                while sim.pq_length(q) > 0 and cnt < self.batch_size:
-                    riders[cnt] = sim.pq_take(q)
+                while q.length() > 0 and cnt < self.batch_size:
+                    riders[cnt] = q.take()
                     cnt += 1
 
                 boarding = sim.now()
@@ -1326,7 +1329,7 @@ fires, or a server boards it and resumes it.
         def visitor(self, env, vip: Visitor):
             me = sim.current()
             q = env.attractions[0].queues.line[0]
-            entry = sim.pq_put(q, me, vip.priority)
+            entry = q.put(me, vip.priority)
 
             sim.timer_add(me, vip.patience * 5.0, TIMER_JOCKEYING)
             sim.timer_add(me, vip.patience * 10.0, TIMER_RENEGING)
@@ -1334,10 +1337,10 @@ fires, or a server boards it and resumes it.
             while True:
                 sig = sim.suspend()
                 if sig == TIMER_JOCKEYING:
-                    my_pos = sim.pq_position(q, entry)
+                    my_pos = q.position(entry)
                     # If another queue is shorter, cancel and re-enter there.
                 elif sig == TIMER_RENEGING:
-                    sim.pq_cancel(q, entry)
+                    q.cancel(entry)
                     sim.timers_clear(me)
                     return
                 else:
@@ -1358,20 +1361,20 @@ enters the better queue with slightly higher priority:
 .. code-block:: python
 
     if sig == TIMER_JOCKEYING:
-        my_pos = sim.pq_position(q, entry)
+        my_pos = q.position(entry)
         new_q = env.attractions[ride].queues.line[0]
-        new_len = sim.pq_length(new_q)
+        new_len = new_q.length()
         for candidate in range(1, env.attractions[ride].queues.queue_count):
             candidate_q = env.attractions[ride].queues.line[candidate]
-            candidate_len = sim.pq_length(candidate_q)
+            candidate_len = candidate_q.length()
             if candidate_len < new_len:
                 new_q = candidate_q
                 new_len = candidate_len
 
         if new_len < my_pos:
-            sim.pq_cancel(q, entry)
+            q.cancel(entry)
             q = new_q
-            entry = sim.pq_put(q, me, vip.priority + 1)
+            entry = q.put(me, vip.priority + 1)
             self.jockeys += 1
 
 If the reneging timer fires, the visitor cancels the queue entry and goes
@@ -1380,7 +1383,7 @@ somewhere else:
 .. code-block:: python
 
     elif sig == TIMER_RENEGING:
-        sim.pq_cancel(q, entry)
+        q.cancel(entry)
         sim.timers_clear(me)
         self.reneges += 1
         break
@@ -1464,14 +1467,14 @@ Finished dynamic processes should be reclaimed during long trials:
         @sim.process
         def departures(self, env):
             while True:
-                sim.despawn(sim.store_take(self.departed))
+                sim.despawn(self.departed.take())
 
         @sim.process
         def visitor(self, env, vip: Visitor):
             # ... after the visitor decides to leave ...
             self.d_park.add(sim.now() - vip.entry_park)
             self.d_rides.add(1.0 * vip.rides)
-            sim.store_put(self.departed, sim.current())
+            self.departed.put(sim.current())
 
 The model can then report average time in park, rides per visitor, waiting
 time, walking time, balks, reneges, and jockeys. A typical run of
@@ -1617,7 +1620,7 @@ Conditions combine a wait list with a predicate:
         def tide(self, env):
             while True:
                 self.water_depth = env.reference_depth + random.normal(0.0, 0.5)
-                sim.signal(env.facilities.harbormaster)
+                env.facilities.harbormaster.signal()
                 sim.hold(1.0)
 
 The predicate above simply says "wake and recheck your own detailed rules."
@@ -1692,7 +1695,7 @@ computing water depth:
         def tide(self, env):
             while True:
                 self.water_depth = env.reference_depth + random.normal(0.0, 0.5)
-                sim.signal(env.facilities.harbormaster)
+                env.facilities.harbormaster.signal()
                 sim.hold(1.0)
 
 Priorities matter when events happen at the same simulated time. Giving
@@ -1722,17 +1725,16 @@ model, the ship process can read those domains through ``env.sea`` and
                 ready = (
                     env.sea.water_depth >= shp.min_depth
                     and env.sea.wind_mag <= shp.max_wind
-                    and sim.pool_available(env.facilities.tugs)
+                    and env.facilities.tugs.available()
                         >= shp.tugs_needed
-                    and sim.pool_available(berths) >= 1
+                    and berths.available() >= 1
                 )
                 if ready:
                     break
-                sim.wait_for(env.facilities.harbormaster,
-                             env.harbormaster_called, env)
+                env.facilities.harbormaster.wait_for(env.harbormaster_called)
 
-            sim.pool_acquire(berths, 1)
-            sim.pool_acquire(env.facilities.tugs, shp.tugs_needed)
+            berths.acquire(1)
+            env.facilities.tugs.acquire(shp.tugs_needed)
 
 The loop is intentional. Several ships may wake from the same signal, and one
 of them may take the last berth or tug before another resumes. The second ship
@@ -1765,37 +1767,37 @@ process.
 
             # ... wait until env.sea and env.facilities say docking is ready ...
 
-            sim.pool_acquire(berths, 1)
-            sim.pool_acquire(env.facilities.tugs, shp.tugs_needed)
+            berths.acquire(1)
+            env.facilities.tugs.acquire(shp.tugs_needed)
 
-            sim.acquire(env.facilities.comms)
+            env.facilities.comms.acquire()
             sim.hold(random.gamma(5.0, 0.01))
-            sim.release(env.facilities.comms)
+            env.facilities.comms.release()
 
             sim.hold(random.pert(0.4, 0.5, 0.8))
-            sim.pool_release(env.facilities.tugs, shp.tugs_needed)
-            sim.signal(env.facilities.harbormaster)
+            env.facilities.tugs.release(shp.tugs_needed)
+            env.facilities.harbormaster.signal()
 
             unload_avg = env.unload_avg_large if shp.size == LARGE \
                 else env.unload_avg_small
             sim.hold(random.pert(0.75 * unload_avg, unload_avg,
                               2.0 * unload_avg))
 
-            sim.pool_acquire(env.facilities.tugs, shp.tugs_needed)
-            sim.acquire(env.facilities.comms)
+            env.facilities.tugs.acquire(shp.tugs_needed)
+            env.facilities.comms.acquire()
             sim.hold(random.gamma(5.0, 0.01))
-            sim.release(env.facilities.comms)
+            env.facilities.comms.release()
             sim.hold(random.pert(0.4, 0.5, 0.8))
 
-            sim.pool_release(berths, 1)
-            sim.pool_release(env.facilities.tugs, shp.tugs_needed)
-            sim.signal(env.facilities.harbormaster)
+            berths.release(1)
+            env.facilities.tugs.release(shp.tugs_needed)
+            env.facilities.harbormaster.signal()
 
             if shp.size == LARGE:
                 self.time_large.add(sim.now() - shp.arrival)
             else:
                 self.time_small.add(sim.now() - shp.arrival)
-            sim.store_put(self.departed, me)
+            self.departed.put(me)
 
 There are two important modeling habits here. First, release resources as soon
 as the simulated entity no longer needs them. Second, signal the relevant
@@ -1815,11 +1817,11 @@ can also print the same text reports we used earlier:
     def harbor_stats(env: Harbor):
         env.avg_time_small = env.traffic.time_small.mean()
         env.avg_time_large = env.traffic.time_large.mean()
-        env.tug_util = sim.pool_mean_in_use(env.facilities.tugs)
+        env.tug_util = env.facilities.tugs.mean_in_use()
 
         env.traffic.time_small.fivenum()
         env.traffic.time_small.histogram(bins=20)
-        sim.pool_report(env.facilities.tugs)
+        env.facilities.tugs.report()
 
 This gives us scalar outputs for the experiment table, plus readable diagnostic
 reports while we are still validating the model. Once the model is trusted, the
@@ -1867,14 +1869,14 @@ collector:
     def harbor_stats(env: Harbor):
         env.avg_time_small = env.traffic.time_small.mean()
         env.avg_time_large = env.traffic.time_large.mean()
-        env.tug_util = sim.pool_mean_in_use(env.facilities.tugs)
+        env.tug_util = env.facilities.tugs.mean_in_use()
 
         env.traffic.time_large.fivenum()
         env.traffic.time_large.histogram(bins=20)
-        sim.pool_report(env.facilities.tugs)
-        sim.pool_report(env.facilities.berths_small)
-        sim.pool_report(env.facilities.berths_large)
-        sim.resource_report(env.facilities.comms)
+        env.facilities.tugs.report()
+        env.facilities.berths_small.report()
+        env.facilities.berths_large.report()
+        env.facilities.comms.report()
 
         env.facilities.tugs.history().fivenum()
         env.facilities.tugs.history().histogram(bins=20)

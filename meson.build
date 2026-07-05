@@ -83,6 +83,13 @@ py.install_sources(
 )
 
 py.install_sources(
+    'src/cimba/store/__init__.py',
+    'src/cimba/store/helpers.py',
+    'src/cimba/store/methods.py',
+    subdir: 'cimba/store',
+)
+
+py.install_sources(
     'src/cimba/bootstrap/__init__.py',
     'src/cimba/bootstrap/_common.py',
     'src/cimba/bootstrap/_decompose.py',

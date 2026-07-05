@@ -21,9 +21,9 @@ It is fast, expressive, explicit, and open source.
   much more practical than with pure Python event scheduling alone.
 
 * *Expressive*: Processes are ordinary Python functions that call blocking
-  simulation operations such as ``sim.hold()``, ``sim.get()``,
-  ``sim.acquire()``, or ``sim.wait_for()``. There is no ``yield`` protocol to
-  thread through every helper function.
+  simulation operations such as ``sim.hold()``, ``env.queue.get()``,
+  ``env.resource.acquire()``, or ``env.condition.wait_for()``. There is no
+  ``yield`` protocol to thread through every helper function.
 
 * *Experiment-oriented*: Parameters, outputs, state, and simulation entities
   are declared on a ``sim.Model`` subclass. ``model.experiment(...)`` creates a

@@ -64,19 +64,19 @@ model = MM1("MM1")
 def arrival(env: MM1):
     while True:
         sim.hold(random.exponential(1.0 / env.utilization))
-        sim.put(env.queue, 1)
+        env.queue.put(1)
 
 
 @model.process
 def service(env: MM1):
     while True:
-        sim.get(env.queue, 1)
+        env.queue.get(1)
         sim.hold(random.exponential(1.0))
 
 
 @model.collect
 def collect_stats(env: MM1):
-    env.avg_queue_length = sim.mean_level(env.queue)
+    env.avg_queue_length = env.queue.mean_level()
 
 
 exp = model.experiment(

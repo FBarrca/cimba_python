@@ -18,13 +18,13 @@ def arrival(env: MM1):
     while True:
         t_ia = random.exponential(1.0 / env.utilization)
         sim.hold(t_ia)
-        sim.put(env.queue, 1)
+        env.queue.put(1)
 
 
 @model.process
 def service(env: MM1):
     while True:
-        sim.get(env.queue, 1)
+        env.queue.get(1)
         t_srv = random.exponential(1.0)
         sim.hold(t_srv)
 
@@ -32,7 +32,7 @@ def service(env: MM1):
 @model.collect
 def collect_stats(env: MM1):
     env.avg_queue_length = env.queue.history().mean()
-    sim.queue_report(env.queue)
+    env.queue.report()
     env.queue.history().pacf_correlogram(lags=20)
 
 

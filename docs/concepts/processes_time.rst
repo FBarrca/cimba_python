@@ -3,8 +3,9 @@ Processes and Simulated Time
 
 A process is an active entity in the simulated world. In ``cimba.sim``, a
 process is an ordinary Python function registered with ``@model.process``.
-Inside that function, ``sim`` calls such as ``sim.hold()``, ``sim.get()``, and
-``sim.acquire()`` can pause the process and let another scheduled activity run.
+Inside that function, ``sim.hold()`` and entity methods such as
+``env.queue.get()`` and ``env.resource.acquire()`` can pause the process and
+let another scheduled activity run.
 
 .. code-block:: python
 
@@ -13,15 +14,15 @@ Inside that function, ``sim`` calls such as ``sim.hold()``, ``sim.get()``, and
    @model.process
    def doctor(env: Clinic):
        while True:
-           sim.get(env.waiting_room, 1)
+           env.waiting_room.get(1)
            service_time = random.exponential(env.mean_service)
            sim.hold(service_time)
            env.served += 1
 
 There is no ``yield`` in the process body. If the waiting room is empty,
-``sim.get()`` blocks the doctor process until an arrival puts a patient in the
-queue. When the process resumes, execution continues immediately after the
-blocking call.
+``env.waiting_room.get()`` blocks the doctor process until an arrival puts a
+patient in the queue. When the process resumes, execution continues
+immediately after the blocking call.
 
 Simulated time, not wall-clock time
 -----------------------------------
@@ -45,10 +46,11 @@ Blocking is the modeling language
 Most process interactions are expressed by blocking on a model entity:
 
 * ``sim.hold()`` waits for simulated time.
-* ``sim.get()`` waits for enough content in a ``sim.Queue``.
-* ``sim.acquire()`` waits for a ``sim.Resource``.
-* ``sim.pool_acquire()`` waits for capacity in a ``sim.Pool``.
-* ``sim.wait_for()`` waits until a ``sim.Condition`` predicate is true.
+* ``env.<queue>.get()`` waits for enough content in a ``sim.Queue``.
+* ``env.<resource>.acquire()`` waits for a ``sim.Resource``.
+* ``env.<pool>.acquire()`` waits for capacity in a ``sim.Pool``.
+* ``env.<condition>.wait_for()`` waits until a ``sim.Condition`` predicate is
+  true.
 
 When the operation can complete, the process resumes. Blocking calls return a
 signal value, so a process can react to interruption, timeout, cancellation, or
@@ -64,7 +66,7 @@ Use ``copies=`` when the model has several identical active entities:
    @model.process(copies=3)
    def clerk(env: Clinic, idx: int):
        while True:
-           sim.get(env.waiting_room, 1)
+           env.waiting_room.get(1)
            sim.hold(random.exponential(env.mean_service))
            env.served += 1
 

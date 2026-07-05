@@ -39,6 +39,7 @@ from ._components import (
     _lower_component_collect,
     _lower_component_process,
     _lower_dataset_methods,
+    _lower_entity_methods,
     _lower_history_methods,
     _lower_model_component_refs,
 )
@@ -518,6 +519,13 @@ class Model:
             f.name: f.kind.binding
             for f in decls.by_kind("queue", "resource", "pool", "store",
                                    "pqueues")}
+        #: declared entity field name -> field kind, for fields whose
+        #: ``env.<entity>.method(...)`` calls (put/acquire/signal/...)
+        #: compile to native helper calls.
+        self.entity_fields: dict[str, str] = {
+            f.name: f.kind.name
+            for f in decls.by_kind("queue", "resource", "pool", "store",
+                                   "pqueues", "condition")}
         self._predicate_fields: list[str] = decls.names("predicate")
         self._event_fields: list[str] = decls.names("event")
         self._process_fields: list[str] = decls.names("processes")
@@ -684,7 +692,8 @@ class Model:
                     decl.process_names[index], decl, method_name, method,
                     _is_struct_class, instance_index=index,
                     model_dataset_fields=self.datasets,
-                    model_history_fields=self.history_fields)
+                    model_history_fields=self.history_fields,
+                    model_entity_fields=self.entity_fields)
 
             if field_kind == "spawnable":
                 spawn_field = decl.direct_field_map[method_name]
@@ -703,7 +712,8 @@ class Model:
                     decl.name, decl, method_name, method, _is_struct_class,
                     copies_per_instance=counts,
                     model_dataset_fields=self.datasets,
-                    model_history_fields=self.history_fields),
+                    model_history_fields=self.history_fields,
+                    model_entity_fields=self.entity_fields),
                 lower_instance)
             for fn, index in lowered:
                 if index is None:
@@ -722,12 +732,14 @@ class Model:
                 lambda: _lower_component_collect(
                     decl.name, decl, method_name, method, per_class=True,
                     model_dataset_fields=self.datasets,
-                    model_history_fields=self.history_fields),
+                    model_history_fields=self.history_fields,
+                    model_entity_fields=self.entity_fields),
                 lambda index: _lower_component_collect(
                     decl.process_names[index], decl, method_name, method,
                     instance_index=index,
                     model_dataset_fields=self.datasets,
-                    model_history_fields=self.history_fields))
+                    model_history_fields=self.history_fields,
+                    model_entity_fields=self.entity_fields))
             for fn, index in lowered:
                 self._component_collects.append(
                     (fn, decl.count if index is None else 1))
@@ -756,6 +768,13 @@ class Model:
             fn,
             model_name=self.name,
             history_fields=self.history_fields,
+        )
+
+    def _lower_entity_methods(self, fn: _F) -> _F:
+        return _lower_entity_methods(
+            fn,
+            model_name=self.name,
+            entity_fields=self.entity_fields,
         )
 
     def _lower_random_calls(self, fn: _F) -> _F:
@@ -924,6 +943,7 @@ class Model:
         fn = self._lower_component_refs(fn)
         fn = self._lower_dataset_methods(fn)
         fn = self._lower_history_methods(fn)
+        fn = self._lower_entity_methods(fn)
         fn = self._lower_random_calls(fn)
         self._processes.append(_ProcDecl(name, fn, copies, priority,
                                          indexed, struct, injected,
@@ -984,8 +1004,8 @@ class Model:
     def predicate(self, fn: _F) -> _F:
         """Register a condition predicate `def fn(env) -> bool`. Its
         compiled address is published in the declared Predicate field of
-        the same name, for use with sim.wait_for(env.<cond>, env.<name>,
-        env). (Without a declared field, it is published as the hidden
+        the same name, for use with env.<cond>.wait_for(env.<name>).
+        (Without a declared field, it is published as the hidden
         field `_pred_<name>`.)"""
         name = fn.__name__
         if name in self._predicate_fields:
@@ -1000,6 +1020,7 @@ class Model:
         fn = self._lower_component_refs(fn)
         fn = self._lower_dataset_methods(fn)
         fn = self._lower_history_methods(fn)
+        fn = self._lower_entity_methods(fn)
         fn = self._lower_random_calls(fn)
         self._predicates.append((name, fn, field))
         return fn
@@ -1027,6 +1048,7 @@ class Model:
         fn = self._lower_component_refs(fn)
         fn = self._lower_dataset_methods(fn)
         fn = self._lower_history_methods(fn)
+        fn = self._lower_entity_methods(fn)
         fn = self._lower_random_calls(fn)
         self._events.append((name, fn, field, nargs == 2))
         return fn
@@ -1042,6 +1064,7 @@ class Model:
         fn = self._lower_component_refs(fn)
         fn = self._lower_dataset_methods(fn)
         fn = self._lower_history_methods(fn)
+        fn = self._lower_entity_methods(fn)
         fn = self._lower_random_calls(fn)
         self._collect = fn
         return fn

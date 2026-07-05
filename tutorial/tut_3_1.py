@@ -172,10 +172,10 @@ class Attraction(sim.Component):
 
         while True:
             # Wait for the first rider, then fill the ride as best possible
-            riders[0] = sim.pq_take(q)
+            riders[0] = q.take()
             cnt = 1
-            while sim.pq_length(q) > 0 and cnt < batch_size:
-                riders[cnt] = sim.pq_take(q)
+            while q.length() > 0 and cnt < batch_size:
+                riders[cnt] = q.take()
                 cnt = cnt + 1
             # Boarding: no more jockeying or reneging for this batch, and
             # the waiting is over -- log it into each visitor's record
@@ -247,10 +247,10 @@ class VisitorFlow(sim.Component):
             # Join the shortest queue if several
             ride = at - 1
             q = env.attractions[ride].queues.line[0]
-            qlen = sim.pq_length(q)
+            qlen = q.length()
             for candidate in range(1, env.attractions[ride].queues.queue_count):
                 candidate_q = env.attractions[ride].queues.line[candidate]
-                candidate_len = sim.pq_length(candidate_q)
+                candidate_len = candidate_q.length()
                 if candidate_len < qlen:
                     q = candidate_q
                     qlen = candidate_len
@@ -266,7 +266,7 @@ class VisitorFlow(sim.Component):
             sim.timer_add(me, vip.patience * RENEGING_THRESHOLD,
                           TIMER_RENEGING)
             vip.entry_queue = sim.now()
-            entry = sim.pq_put(q, me, vip.priority)
+            entry = q.put(me, vip.priority)
 
             # Suspend until we have finished both queue and ride, trusting
             # the server to clear our timers at boarding and to update our
@@ -274,24 +274,24 @@ class VisitorFlow(sim.Component):
             while True:
                 sig = sim.suspend()
                 if sig == TIMER_JOCKEYING:
-                    my_pos = sim.pq_position(q, entry)
+                    my_pos = q.position(entry)
                     new_q = env.attractions[ride].queues.line[0]
-                    new_len = sim.pq_length(new_q)
+                    new_len = new_q.length()
                     for candidate in range(
                             1, env.attractions[ride].queues.queue_count):
                         candidate_q = \
                             env.attractions[ride].queues.line[candidate]
-                        candidate_len = sim.pq_length(candidate_q)
+                        candidate_len = candidate_q.length()
                         if candidate_len < new_len:
                             new_q = candidate_q
                             new_len = candidate_len
                     if new_len < my_pos:
-                        sim.pq_cancel(q, entry)
+                        q.cancel(entry)
                         q = new_q
-                        entry = sim.pq_put(q, me, vip.priority + 1)
+                        entry = q.put(me, vip.priority + 1)
                         self.jockeys += 1
                 elif sig == TIMER_RENEGING:
-                    sim.pq_cancel(q, entry)
+                    q.cancel(entry)
                     sim.timers_clear(me)
                     self.reneges += 1
                     break       # give up, go somewhere else
@@ -305,12 +305,12 @@ class VisitorFlow(sim.Component):
         self.d_waiting.add(vip.waiting)
         self.d_walking.add(vip.walking)
         self.d_rides.add(1.0 * vip.rides)
-        sim.store_put(self.departed, me)
+        self.departed.put(me)
 
     @sim.process
     def departures(self, env):
         while True:
-            sim.despawn(sim.store_take(self.departed))
+            sim.despawn(self.departed.take())
 
 
 class Park(sim.Model):

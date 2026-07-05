@@ -6,7 +6,7 @@ import cimba.sim as sim
 
 
 def _take_from_helper(env):
-    sim.get(env.queue, 1)
+    env.queue.get(1)
 
 
 def test_process_dag_infers_queue_flow_with_aliases_and_helpers():
@@ -18,7 +18,7 @@ def test_process_dag_infers_queue_flow_with_aliases_and_helpers():
     @model.process
     def producer(env: Line):
         q = env.queue
-        sim.put(q, 1)
+        q.put(1)
 
     @model.process
     def consumer(env: Line):
@@ -47,11 +47,11 @@ def test_process_dag_mermaid_and_dot_output_are_stable():
 
     @model.process
     def arrivals(env):
-        sim.put(env.queue, 1)
+        env.queue.put(1)
 
     @model.process
     def service(env):
-        sim.get(env.queue, 1)
+        env.queue.get(1)
 
     graph = model.process_dag()
 
@@ -88,22 +88,22 @@ def test_process_dag_infers_spawn_store_pqueues_and_conditions():
     @model.process
     def arrivals(env: Park):
         sim.spawn(env.visitor, env)
-        sim.signal(env.ready)
+        env.ready.signal()
 
     @model.process
     def visitor(env: Park):
-        sim.pq_put(env.ride_queues[0], sim.current(), 0)
-        sim.wait_for(env.ready, env.ready_pred, env)
-        sim.store_put(env.departed, sim.current())
+        env.ride_queues[0].put(sim.current(), 0)
+        env.ready.wait_for(env.ready_pred)
+        env.departed.put(sim.current())
 
     @model.process
     def server(env: Park):
         q = env.ride_queues[0]
-        sim.pq_take(q)
+        q.take()
 
     @model.process
     def departures(env: Park):
-        sim.despawn(sim.store_take(env.departed))
+        sim.despawn(env.departed.take())
 
     graph = model.process_dag()
 
@@ -150,12 +150,12 @@ def test_process_dag_tracks_shared_resource_usage_without_fake_dependencies():
 
     @model.process
     def worker(env: Shop):
-        sim.pool_acquire(env.crew, 1)
-        sim.pool_release(env.crew, 1)
+        env.crew.acquire(1)
+        env.crew.release(1)
 
     @model.process
     def inspector(env: Shop):
-        sim.pool_available(env.crew)
+        env.crew.available()
 
     graph = model.process_dag()
 
@@ -237,8 +237,8 @@ def test_process_dag_renders_cycles_but_topological_order_rejects_them():
 
     @model.process
     def actor(env):
-        sim.put(env.queue, 1)
-        sim.get(env.queue, 1)
+        env.queue.put(1)
+        env.queue.get(1)
 
     graph = model.process_dag()
 

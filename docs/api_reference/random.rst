@@ -23,12 +23,12 @@ when Cimba should choose independent seeds for you. In model code, import
    def arrivals(env: Clinic):
        while True:
            sim.hold(random.exponential(env.mean_interarrival))
-           sim.put(env.queue, 1)
+           env.queue.put(1)
 
    @model.process
    def server(env: Clinic):
        while True:
-           sim.get(env.queue, 1)
+           env.queue.get(1)
            sim.hold(random.gamma(shape=2.0, scale=env.mean_service / 2.0))
 
 Use ``cimba.random`` in both model code and ordinary Python code. Importing it

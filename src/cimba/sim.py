@@ -24,7 +24,13 @@ static type of `env`, so fields are checked and completed:
     def arrivals(env: MG1):
         while True:
             sim.hold(cimba.random.exponential(1.0 / env.utilization))
-            sim.put(env.queue, 1)
+            env.queue.put(1)
+
+Every declared Queue/Resource/Pool/Store/PQueues-element/Condition field
+carries its verbs as methods: ``env.queue.put(1)``, ``env.queue.get(1)``,
+``env.server.acquire()``, ``env.cond.wait_for(pred)``, and so on.
+Component-owned fields support the same sugar through
+``self.<field>.<method>(...)``.
 
 Concept translation (cimba -> sim API):
 
@@ -37,18 +43,19 @@ Concept translation (cimba -> sim API):
     derived structs   sim.Struct subclasses; a process declares its own
                       fields with a final `vip: Visitor` parameter, and
                       Visitor(handle) views any such process's fields
-    cmb_buffer        sim.Queue, sim.put()/sim.get()/sim.level()
-    cmb_resource      sim.Resource, sim.acquire()/sim.release()/
-                      sim.preempt(), sim.held()
+    cmb_buffer        sim.Queue, env.<queue>.put()/get()/level()/space()/
+                      mean_level()
+    cmb_resource      sim.Resource, env.<resource>.acquire()/release()/
+                      preempt()/available()/in_use()/held()/mean_in_use()
     cmb_resourcepool  sim.Pool (= n or sim.capacity(param)),
-                      sim.pool_acquire()/sim.pool_release()/
-                      sim.pool_preempt()
-    cmb_objectqueue   sim.Store, sim.store_put()/sim.store_take()/
-                      sim.store_get()/sim.store_position()
+                      env.<pool>.acquire()/release()/preempt()/
+                      available()/held()/in_use()/mean_in_use()
+    cmb_objectqueue   sim.Store, env.<store>.put()/get()/take()/length()/
+                      space()/position()/mean_length()
                       (objects are opaque int64 values; sim.f2i()/
                       sim.i2f() bit-cast timestamps in and out)
     cmb_condition     sim.Condition + sim.Predicate + @model.predicate,
-                      sim.wait_for()/sim.signal()
+                      env.<cond>.wait_for(predicate)/signal()
     cmb_event         sim.Event + @model.event, sim.schedule()/
                       sim.schedule_at(), sim.event_cancel()/
                       _reschedule()/_reprioritize()/_scheduled()/
@@ -57,9 +64,8 @@ Concept translation (cimba -> sim API):
     cmb_dataset       sim.Dataset, env.waits.add(), env.waits.mean()/
                       count()/min()/max()/std()/median()/quantile()
     statistics        recorded over the measurement window (after warmup,
-                      datasets are reset when it opens): sim.mean_level(),
-                      sim.mean_in_use(), sim.pool_mean_in_use(),
-                      sim.store_mean_length(), sim.pq_mean_length()
+                      datasets are reset when it opens): env.<x>.mean_level()/
+                      mean_in_use()/mean_length() (or env.<pq>[i].mean_length())
 
 Data-driven generators replay per-trial trajectories generated outside
 the simulation (bootstrap, fitted models, recorded traces): declare a
@@ -150,21 +156,6 @@ __all__ = [
     "schedule", "schedule_at", "event_cancel", "event_reschedule",
     "event_reprioritize", "event_scheduled", "event_time",
     "event_priority", "current_event", "event_count", "clear_events",
-    "held", "pool_held",
-    "pq_put", "pq_get", "pq_take", "pq_length", "pq_space", "pq_position",
-    "pq_reprioritize", "pq_cancel", "pq_mean_length",
-    "pq_report", "pq_report_file",
-    "put", "get", "level", "space", "mean_level",
-    "queue_report", "queue_report_file",
-    "acquire", "release", "preempt", "available", "in_use", "mean_in_use",
-    "resource_report", "resource_report_file",
-    "pool_acquire", "pool_release", "pool_preempt", "pool_available",
-    "pool_in_use", "pool_mean_in_use", "pool_report",
-    "pool_report_file",
-    "store_put", "store_get", "store_take", "store_length", "store_space",
-    "store_position", "store_mean_length",
-    "store_report", "store_report_file",
-    "wait_for", "signal",
     "log_text", "log_user", "log_user_i64", "log_user_f64",
     "f2i", "i2f",
 ]
@@ -331,198 +322,6 @@ if TYPE_CHECKING:
         running processes are not stopped -- low-level escape hatch."""
         ...
 
-    # --- Queues (cmb_buffer): counted amounts --------------------------------
-    def put(queue: Handle, amount: int) -> int:
-        """Add `amount` to the queue, blocking while it is full."""
-        ...
-
-    def get(queue: Handle, amount: int) -> int:
-        """Remove `amount` from the queue, blocking until available."""
-        ...
-
-    def level(queue: Handle) -> int:
-        """Current queue content."""
-        ...
-
-    def space(queue: Handle) -> int:
-        """Remaining queue capacity (huge for unbounded queues)."""
-        ...
-
-    def mean_level(queue: Handle) -> float:
-        """Time-weighted mean queue content over the recording window."""
-        ...
-
-    # --- Resources (cmb_resource): single holder, priority-aware -------------
-    def acquire(resource: Handle) -> int:
-        """Acquire the resource, blocking until it is free."""
-        ...
-
-    def release(resource: Handle) -> None:
-        """Release the resource."""
-        ...
-
-    def preempt(resource: Handle) -> int:
-        """Acquire the resource, preempting a lower-priority holder."""
-        ...
-
-    def available(resource: Handle) -> int:
-        """1 if the resource is currently free, else 0."""
-        ...
-
-    def in_use(resource: Handle) -> int:
-        """1 if the resource is currently held, else 0."""
-        ...
-
-    def held(resource: Handle, process: Handle) -> int:
-        """1 if `process` holds this resource, else 0."""
-        ...
-
-    def mean_in_use(resource: Handle) -> float:
-        """Time-weighted mean utilization over the recording window."""
-        ...
-
-    # --- Resource pools (cmb_resourcepool): capacity > 1 ----------------------
-    def pool_acquire(pool: Handle, amount: int) -> int:
-        """Acquire `amount` units from the pool, blocking until available."""
-        ...
-
-    def pool_release(pool: Handle, amount: int) -> None:
-        """Return `amount` units to the pool."""
-        ...
-
-    def pool_preempt(pool: Handle, amount: int) -> int:
-        """Acquire `amount` units, preempting lower-priority holders."""
-        ...
-
-    def pool_available(pool: Handle) -> int:
-        """Number of pool units currently free."""
-        ...
-
-    def pool_held(pool: Handle, process: Handle) -> int:
-        """Number of pool units held by the given process."""
-        ...
-
-    def pool_in_use(pool: Handle) -> int:
-        """Number of pool units currently held."""
-        ...
-
-    def pool_mean_in_use(pool: Handle) -> float:
-        """Time-weighted mean units in use over the recording window."""
-        ...
-
-    # --- Stores (cmb_objectqueue): FIFO of opaque int64 objects ---------------
-    def store_put(store: Handle, obj: int) -> int:
-        """Append an object, blocking while full."""
-        ...
-
-    def store_get(store: Handle) -> tuple[int, int]:
-        """Remove the oldest object, returning (status, object)."""
-        ...
-
-    def store_take(store: Handle) -> int:
-        """Remove and return the oldest object; interrupted takes return 0."""
-        ...
-
-    def store_length(store: Handle) -> int:
-        """Current number of objects in the store."""
-        ...
-
-    def store_space(store: Handle) -> int:
-        """Remaining store capacity (huge for unbounded stores)."""
-        ...
-
-    def store_position(store: Handle, obj: int) -> int:
-        """1-based position of an object in the store, or 0 if absent."""
-        ...
-
-    def store_mean_length(store: Handle) -> float:
-        """Time-weighted mean store length over the recording window."""
-        ...
-
-    # --- Priority queues (cmb_priorityqueue) ------------------------------------
-    def pq_put(pqueue: Handle, obj: int, priority: int) -> int:
-        """Insert an object (any nonzero int64) ordered by priority;
-        returns the entry handle for pq_position()/pq_cancel()."""
-        ...
-
-    def pq_get(pqueue: Handle) -> tuple[int, int]:
-        """Remove the highest-priority object, returning (status, object)."""
-        ...
-
-    def pq_take(pqueue: Handle) -> int:
-        """Remove and return the highest-priority object, blocking while
-        the queue is empty."""
-        ...
-
-    def pq_length(pqueue: Handle) -> int:
-        """Current number of entries in the queue."""
-        ...
-
-    def pq_space(pqueue: Handle) -> int:
-        """Remaining priority queue capacity."""
-        ...
-
-    def pq_position(pqueue: Handle, entry: int) -> int:
-        """1-based position of the entry in the queue."""
-        ...
-
-    def pq_reprioritize(pqueue: Handle, entry: int, priority: int) -> None:
-        """Change an entry's priority, reshuffling queue order."""
-        ...
-
-    def pq_cancel(pqueue: Handle, entry: int) -> int:
-        """Remove an entry from the queue; 1 if found, else 0."""
-        ...
-
-    def pq_mean_length(pqueue: Handle) -> float:
-        """Time-weighted mean queue length over the recording window."""
-        ...
-
-    def pq_report_file(pqueue: Handle, path: Handle,
-                       append: int = 1) -> int:
-        """Write the native priority-queue text report to `path`."""
-        ...
-
-    def pq_report(pqueue: Handle) -> int:
-        """Print the native priority-queue text report to stdout."""
-        ...
-
-    def queue_report_file(queue: Handle, path: Handle,
-                          append: int = 1) -> int:
-        """Write the native queue text report to `path`."""
-        ...
-
-    def queue_report(queue: Handle) -> int:
-        """Print the native queue text report to stdout."""
-        ...
-
-    def resource_report_file(resource: Handle, path: Handle,
-                             append: int = 1) -> int:
-        """Write the native resource text report to `path`."""
-        ...
-
-    def resource_report(resource: Handle) -> int:
-        """Print the native resource text report to stdout."""
-        ...
-
-    def pool_report_file(pool: Handle, path: Handle,
-                         append: int = 1) -> int:
-        """Write the native resource-pool text report to `path`."""
-        ...
-
-    def pool_report(pool: Handle) -> int:
-        """Print the native resource-pool text report to stdout."""
-        ...
-
-    def store_report_file(store: Handle, path: Handle,
-                          append: int = 1) -> int:
-        """Write the native store/object-queue text report to `path`."""
-        ...
-
-    def store_report(store: Handle) -> int:
-        """Print the native store/object-queue text report to stdout."""
-        ...
-
     # --- Logging ---------------------------------------------------------------
     def log_user(flags: int, message: Handle) -> None:
         """Log a static message handle created by sim.log_text()."""
@@ -536,16 +335,6 @@ if TYPE_CHECKING:
         """Log a static label and float64 value."""
         ...
 
-    # --- Conditions (cmb_condition) ---------------------------------------------
-    def signal(condition: Handle) -> int:
-        """Wake the condition's waiters to re-evaluate their predicates."""
-        ...
-
-    def wait_for(condition: Handle, predicate: int, env: Env) -> int:
-        """Block until the predicate is satisfied; re-evaluated on every
-        sim.signal(condition). `predicate` is an env._pred_<name> field."""
-        ...
-
     # --- Bit-casts for store objects ----------------------------------------------
     def f2i(x: float) -> int:
         """Bit-cast a float64 to int64."""
@@ -556,7 +345,7 @@ if TYPE_CHECKING:
         ...
 
 else:
-    from ._intrinsics import f2i, i2f, pq_get, store_get
+    from ._intrinsics import f2i, i2f
 
     # Process verbs
     hold = _b.process_hold
@@ -626,83 +415,6 @@ else:
     def schedule_at(event, env, at, data=0, priority=0):
         return _event_schedule(event, _record_addr(env), data, at,
                                priority)
-
-    # Queues (cmb_buffer)
-    put = _b.buffer_put
-    get = _b.buffer_get
-    level = _b.buffer_level
-    space = _b.buffer_space
-    mean_level = _b.buffer_mean_level
-    queue_report_file = _b.buffer_report_file
-
-    @njit
-    def queue_report(queue):
-        return queue_report_file(queue, 0, _np.uint64(1))
-
-    # Resources (cmb_resource)
-    acquire = _b.resource_acquire
-    release = _b.resource_release
-    preempt = _b.resource_preempt
-    available = _b.resource_available
-    in_use = _b.resource_in_use
-    held = _b.resource_held
-    mean_in_use = _b.resource_mean_in_use
-    resource_report_file = _b.resource_report_file
-
-    @njit
-    def resource_report(resource):
-        return resource_report_file(resource, 0, _np.uint64(1))
-
-    # Resource pools (cmb_resourcepool)
-    pool_acquire = _b.resourcepool_acquire
-    pool_release = _b.resourcepool_release
-    pool_preempt = _b.resourcepool_preempt
-    pool_available = _b.resourcepool_available
-    pool_held = _b.resourcepool_held
-    pool_in_use = _b.resourcepool_in_use
-    pool_mean_in_use = _b.resourcepool_mean_in_use
-    pool_report_file = _b.resourcepool_report_file
-
-    @njit
-    def pool_report(pool):
-        return pool_report_file(pool, 0, _np.uint64(1))
-
-    # Stores (cmb_objectqueue)
-    store_put = _b.objectqueue_put
-    store_take = _b.objectqueue_take
-    store_length = _b.objectqueue_length
-    store_space = _b.objectqueue_space
-    store_position = _b.objectqueue_position
-    store_mean_length = _b.objectqueue_mean_length
-    store_report_file = _b.objectqueue_report_file
-
-    @njit
-    def store_report(store):
-        return store_report_file(store, 0, _np.uint64(1))
-
-    # Priority queues (cmb_priorityqueue)
-    pq_put = _b.priorityqueue_put
-    pq_take = _b.priorityqueue_take
-    pq_length = _b.priorityqueue_length
-    pq_space = _b.priorityqueue_space
-    pq_position = _b.priorityqueue_position
-    pq_reprioritize = _b.priorityqueue_reprioritize
-    pq_cancel = _b.priorityqueue_cancel
-    pq_mean_length = _b.priorityqueue_mean_length
-    pq_report_file = _b.priorityqueue_report_file
-
-    @njit
-    def pq_report(pqueue):
-        return pq_report_file(pqueue, 0, _np.uint64(1))
-
-    # Conditions (cmb_condition)
-    signal = _b.condition_signal
-
-    _condition_wait = _b.condition_wait
-
-    @njit
-    def wait_for(cond, pred, env):
-        return _condition_wait(cond, pred, _record_addr(env))
 
     # Logging
     log_user = _b.logger_user_msg

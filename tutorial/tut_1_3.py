@@ -28,14 +28,14 @@ def arrival(env: MM1):
         sim.log_user_f64(USERFLAG1, MSG_ARR_HOLD, t_ia)
         sim.hold(t_ia)
         sim.log_user(USERFLAG1, MSG_ARR_PUT)
-        sim.put(env.queue, 1)
+        env.queue.put(1)
 
 
 @model.process
 def service(env: MM1):
     while True:
         sim.log_user(USERFLAG1, MSG_SRV_GET)
-        sim.get(env.queue, 1)
+        env.queue.get(1)
         t_srv = random.exponential(1.0)
         sim.log_user_f64(USERFLAG1, MSG_SRV_HOLD, t_srv)
         sim.hold(t_srv)
@@ -43,7 +43,7 @@ def service(env: MM1):
 
 @model.collect
 def collect_stats(env: MM1):
-    env.avg_queue_length = sim.mean_level(env.queue)
+    env.avg_queue_length = env.queue.mean_level()
 
 
 def main() -> None:

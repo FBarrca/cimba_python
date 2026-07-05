@@ -21,7 +21,7 @@ Translation notes (C -> cimba.sim):
 * The C version verifies cheese accounting with debug asserts against
   cmb_resourcepool_held_by_process() after every step; here the checks
   count mismatches into the accounting_errors output (asserted to be 0),
-  via sim.pool_held().
+  via ``env.cheese.held()``.
 * The C tutorial infers its holdings from the returned signals: PREEMPTED
   means "all my cheese is gone", anything else "unchanged". Both readings
   are wrong: a preemptor only takes what it needs starting from the
@@ -32,7 +32,7 @@ Translation notes (C -> cimba.sim):
   in-flight request granted and kept before the raid). The header warns
   "do not assume" -- signals say why you woke, not what you hold -- and
   the C tutorial's own debug assert fails within ~1000 time units. This
-  port treats the pool's books (sim.pool_held()) as authoritative after
+  port treats the pool's books (``env.cheese.held()``) as authoritative after
   every blocking call and classifies the net change as grabbed/stolen.
 * The C version logs every move; here the events are tallied into
   per-species counters instead.
@@ -101,7 +101,7 @@ def _take_stock(env, me, expected):
     """Resync our belief with the pool's books after a blocking call.
     Holdings can only shrink while we are blocked (preemptors raiding
     them); anything else is an accounting error. Returns (held, stolen)."""
-    held = sim.pool_held(env.cheese, me)
+    held = env.cheese.held(me)
     stolen = expected - held
     if stolen < 0:
         env.acct_errors = env.acct_errors + 1
@@ -121,10 +121,10 @@ def _forage_once(env, me, preempting, amt_lo, amt_hi, pri_lo, pri_hi, held):
     amount = random.dice(amt_lo, amt_hi)
     sim.set_priority(me, random.dice(pri_lo, pri_hi))
     if preempting == 1:
-        sig = sim.pool_preempt(env.cheese, amount)
+        sig = env.cheese.preempt(amount)
     else:
-        sig = sim.pool_acquire(env.cheese, amount)
-    held_now = sim.pool_held(env.cheese, me)
+        sig = env.cheese.acquire(amount)
+    held_now = env.cheese.held(me)
     grabbed = 0
     stolen = 0
     if sig == sim.SUCCESS:
@@ -162,9 +162,9 @@ def _forage_once(env, me, preempting, amt_lo, amt_hi, pri_lo, pri_hi, held):
     # books must match our belief to the unit.
     if held > 1:
         release = random.dice(1, held)
-        sim.pool_release(env.cheese, release)
+        env.cheese.release(release)
         held = held - release
-    if held != sim.pool_held(env.cheese, me):
+    if held != env.cheese.held(me):
         env.acct_errors = env.acct_errors + 1
 
     # Hang on a moment before trying again
@@ -238,7 +238,7 @@ def game_stats(env: CheeseGame):
     env.rats_interrupted = env.r_int
     env.cat_chases = env.chases
     env.accounting_errors = env.acct_errors
-    env.cheese_in_use = sim.pool_mean_in_use(env.cheese)
+    env.cheese_in_use = env.cheese.mean_in_use()
 
 
 def main() -> None:

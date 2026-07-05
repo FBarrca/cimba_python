@@ -18,7 +18,7 @@ areas, departments, or teams that each own their own queues and workers.
        @sim.process
        def clerk(self, env):
            while True:
-               sim.get(self.waiting, 1)
+               self.waiting.get(1)
                sim.hold(random.exponential(env.mean_service))
                self.completed += 1
 
@@ -67,12 +67,12 @@ at the end of each trial, typically assigning the component's declared
        @sim.process
        def clerk(self, env):
            while True:
-               sim.get(self.waiting, 1)
+               self.waiting.get(1)
                sim.hold(random.exponential(env.mean_service))
 
        @sim.collect
        def desk_stats(self, env):
-           self.avg_queue = sim.mean_level(self.waiting)
+           self.avg_queue = self.waiting.mean_level()
 
 Every instance of a component collection runs its own collect, so per-desk
 outputs land in per-instance output slots. Component collects run before the
@@ -128,13 +128,13 @@ Use a ``list[ComponentType]`` declaration for fixed repeated subsystems:
    @model.process
    def router(env: Clinic):
        target = 0
-       best = sim.level(env.desks[0].waiting)
+       best = env.desks[0].waiting.level()
        for i in range(1, 3):
-           length = sim.level(env.desks[i].waiting)
+           length = env.desks[i].waiting.level()
            if length < best:
                target = i
                best = length
-       sim.put(env.desks[target].waiting, 1)
+       env.desks[target].waiting.put(1)
 
 The collection length is fixed by the model class. This is a good fit for
 known departments, stations, gates, or desks. If the number of active entities
@@ -162,9 +162,9 @@ instance's same-kind field value makes both fields name the same entity:
        @sim.process
        def server(self, env):
            while True:
-               item = sim.store_take(self.inbox)
+               item = self.inbox.take()
                sim.hold(random.exponential(self.mean_time))
-               sim.store_put(self.outbox, item)
+               self.outbox.put(item)
 
 
    class AssemblyLine(sim.Model):
@@ -206,9 +206,9 @@ transfer to one of several stations — declare a component reference with
        @sim.process
        def server(self, env):
            while True:
-               item = sim.store_take(self.inbox)
+               item = self.inbox.take()
                sim.hold(random.exponential(self.mean_time))
-               sim.store_put(self.downstream.inbox, item)
+               self.downstream.inbox.put(item)
 
 The reference value is another component instance declared on the model.
 Inside compiled code, ``self.downstream.inbox`` resolves to the target's
@@ -234,8 +234,8 @@ indexing:
        @sim.process
        def route(self, env):
            while True:
-               item = sim.store_take(self.inbox)
-               sim.store_put(self.routes[item % 3].inbox, item)
+               item = self.inbox.take()
+               self.routes[item % 3].inbox.put(item)
 
 
    class Shop(sim.Model):

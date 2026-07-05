@@ -64,13 +64,13 @@ class Station(sim.Component):
     @sim.collect
     def station_stats(self, env):
         self.avg_wait_time = self.wait_time.mean()
-        self.utilization = 100.0 * sim.mean_in_use(self.resource)
+        self.utilization = 100.0 * self.resource.mean_in_use()
 
     @sim.process
     def server(self, env):
         while True:
             # Take a part from the inbox.
-            handle = sim.store_take(self.inbox)
+            handle = self.inbox.take()
             item = Part(handle)
 
             # Update the part's wait time.
@@ -78,15 +78,15 @@ class Station(sim.Component):
             self.wait_time.add(wait_time)
 
             # Hold the resource for the processing time.
-            sim.acquire(self.resource)
+            self.resource.acquire()
             sim.hold(random.exponential(self.mean_processing_time))
-            sim.release(self.resource)
+            self.resource.release()
 
             # Update the part's station entry time to the current time.
             item.station_entry = sim.now()
 
             # Put the part in the downstream station's inbox.
-            sim.store_put(self.downstream.inbox, handle)
+            self.downstream.inbox.put(handle)
 
 
 class FinishedParts(sim.Component):
@@ -96,16 +96,16 @@ class FinishedParts(sim.Component):
     @sim.process
     def finish(self, env):
         while True:
-            handle = sim.store_take(self.inbox)
+            handle = self.inbox.take()
             item = Part(handle)
             env.cycle_time.add(sim.now() - item.arrival_system)
-            sim.get(env.system, 1)
-            sim.store_put(self.departed, handle)
+            env.system.get(1)
+            self.departed.put(handle)
 
     @sim.process
     def reclaim(self, env):
         while True:
-            sim.despawn(sim.store_take(self.departed))
+            sim.despawn(self.departed.take())
 
 
 class AssemblyLine(sim.Model):
@@ -154,9 +154,9 @@ def build_model(raw_dir: Path) -> AssemblyLine:
 
     @model.process
     def part_lifecycle(env: AssemblyLine, item: Part):
-        sim.put(env.system, 1)
+        env.system.put(1)
         item.station_entry = sim.now()
-        sim.store_put(env.station_1.inbox, sim.current())
+        env.station_1.inbox.put(sim.current())
 
     @model.collect
     def collect_stats(env: AssemblyLine):
@@ -165,9 +165,9 @@ def build_model(raw_dir: Path) -> AssemblyLine:
         env.avg_cycle_time = env.cycle_time.mean()
         env.max_cycle_time = env.cycle_time.max()
         env.throughput_rate = completed / env.duration_s
-        env.avg_number_in_system = sim.mean_level(env.system)
+        env.avg_number_in_system = env.system.mean_level()
         env.max_number_in_system = env.system.history().max()
-        env.final_number_in_system = sim.level(env.system)
+        env.final_number_in_system = env.system.level()
 
         env.cycle_time.print_file(cycle_file, 0)
         env.station_1.wait_time.print_file(wait_files[0], 0)

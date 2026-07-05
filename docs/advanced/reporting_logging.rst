@@ -25,7 +25,7 @@ text handles created outside the hot loop:
    @model.process
    def arrivals(env: Clinic):
        sim.log_user(USER_TRACE, MSG_ARRIVED)
-       sim.log_user_i64(USER_TRACE, MSG_WAITING, sim.level(env.waiting_room))
+       sim.log_user_i64(USER_TRACE, MSG_WAITING, env.waiting_room.level())
 
 
    cimba.logger_flags_on(USER_TRACE)
@@ -36,18 +36,20 @@ experiments unless the output is part of the experiment design.
 Native text reports
 -------------------
 
-Some ``sim`` helpers print or write native-style text reports for queues,
-resources, pools, stores, priority queues, datasets, and time series:
+Every entity's ``.report()`` method prints a native-style text report for
+queues, resources, pools, stores, and priority queues (datasets and time
+series have the same ``.report()``/``.report_file()`` pair, described in
+:doc:`../api_reference/data`):
 
 .. code-block:: python
 
    @model.process
    def debug_report(env: Clinic):
        sim.hold(480.0)
-       sim.queue_report(env.waiting_room)
-       sim.resource_report(env.doctor)
+       env.waiting_room.report()
+       env.doctor.report()
 
-The ``*_file()`` variants write to a path handle created with
+``.report_file(path, append=1)`` writes to a path handle created with
 ``sim.log_text()``. These reports are most useful for single-trial debugging
 and tutorial-style inspection.
 
@@ -81,7 +83,7 @@ are usually the best data surface:
 
    @model.collect
    def collect_stats(env: Clinic):
-       env.avg_waiting = sim.mean_level(env.waiting_room)
+       env.avg_waiting = env.waiting_room.mean_level()
        env.completed = float(env.served)
 
 Outputs are aligned with the experiment trial table and are easy to group by

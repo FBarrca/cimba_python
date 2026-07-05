@@ -202,15 +202,6 @@ class _Ref:
         return f"{self.kind}:{self.name}"
 
 
-_PRODUCER_VERBS = {"put", "store_put", "pq_put", "signal"}
-_CONSUMER_VERBS = {
-    "get",
-    "store_get",
-    "store_take",
-    "pq_get",
-    "pq_take",
-    "wait_for",
-}
 _EVENT_PRODUCER_VERBS = {"schedule", "schedule_at"}
 _EVENT_CONSUMER_VERBS = {"wait_event"}
 _EVENT_CONTROL_VERBS = {
@@ -220,20 +211,6 @@ _EVENT_CONTROL_VERBS = {
     "event_scheduled",
     "event_time",
     "event_priority",
-}
-_SHARED_VERBS = {
-    "acquire",
-    "release",
-    "preempt",
-    "available",
-    "in_use",
-    "held",
-    "pool_acquire",
-    "pool_release",
-    "pool_preempt",
-    "pool_available",
-    "pool_in_use",
-    "pool_held",
 }
 _DIRECT_PROCESS_VERBS = {
     "interrupt",
@@ -247,6 +224,70 @@ _DIRECT_PROCESS_VERBS = {
     "timers_clear",
 }
 _STATE_KINDS = {"state", "fstate"}
+
+#: (declared field kind, ``env.<field>.<method>(...)`` method name) -> the
+#: (edge category, edge label) it infers, mirroring the verb names the old
+#: ``sim.put()``/``sim.store_put()``/``sim.pq_put()``/... free functions
+#: used, so existing graphs keep the same edge labels under the
+#: object-oriented sugar. Used directly against a process's *unlowered*
+#: source -- e.g. a plain helper function's own body, inlined via
+#: ``_handle_helper_call`` below, which never goes through
+#: ``Model.process()``'s entity-method lowering.
+_ENTITY_METHOD_VERBS: dict[tuple[str, str], tuple[str, str]] = {
+    ("queue", "put"): ("produce", "put"),
+    ("queue", "get"): ("consume", "get"),
+    ("store", "put"): ("produce", "store_put"),
+    ("store", "get"): ("consume", "store_get"),
+    ("store", "take"): ("consume", "store_take"),
+    ("pqueues", "put"): ("produce", "pq_put"),
+    ("pqueues", "get"): ("consume", "pq_get"),
+    ("pqueues", "take"): ("consume", "pq_take"),
+    ("condition", "signal"): ("produce", "signal"),
+    ("condition", "wait_for"): ("consume", "wait_for"),
+    ("resource", "acquire"): ("shared", "uses"),
+    ("resource", "release"): ("shared", "uses"),
+    ("resource", "preempt"): ("shared", "uses"),
+    ("resource", "available"): ("shared", "uses"),
+    ("resource", "in_use"): ("shared", "uses"),
+    ("resource", "held"): ("shared", "uses"),
+    ("pool", "acquire"): ("shared", "uses"),
+    ("pool", "release"): ("shared", "uses"),
+    ("pool", "preempt"): ("shared", "uses"),
+    ("pool", "available"): ("shared", "uses"),
+    ("pool", "in_use"): ("shared", "uses"),
+    ("pool", "held"): ("shared", "uses"),
+}
+
+#: declared field kind -> the label ``store/methods.py`` prefixes its
+#: lowered helper names with (``_cimba_entity_<label>_<method>``).
+_ENTITY_HELPER_LABELS = {
+    "queue": "queue",
+    "resource": "resource",
+    "pool": "pool",
+    "store": "store",
+    "pqueues": "pq",
+    "condition": "condition",
+}
+
+#: (field kind, method name) -> the helper-name method segment
+#: ``store/methods.py`` actually uses when it differs from the method name
+#: itself (only ``Condition.wait_for``, whose helper is ``condition_wait``).
+_ENTITY_HELPER_METHOD_OVERRIDES = {("condition", "wait_for"): "wait"}
+
+#: By the time a *registered* process/predicate/event/collect function
+#: reaches DAG inference, the ``env.<entity>.method(...)`` sugar in its own
+#: body has already been lowered (in ``Model.process()``/
+#: ``_lower_component_process()``) into calls to these internal helpers
+#: (see ``store/methods.py``), which structurally mirror the old
+#: ``sim.put(entity, ...)``-style free functions: a plain call with the
+#: entity handle as the first argument. Helper name suffix (after
+#: ``_cimba_entity_``) -> (edge category, edge label).
+_ENTITY_HELPER_PREFIX = "_cimba_entity_"
+_ENTITY_HELPER_VERBS: dict[str, tuple[str, str]] = {
+    f"{_ENTITY_HELPER_LABELS[kind]}_"
+    f"{_ENTITY_HELPER_METHOD_OVERRIDES.get((kind, method), method)}": spec
+    for (kind, method), spec in _ENTITY_METHOD_VERBS.items()
+}
 
 
 def infer_process_dag(
@@ -418,6 +459,10 @@ class _ProcessAnalyzer(ast.NodeVisitor):
         verb = _sim_verb(node.func)
         if verb is not None:
             self._handle_sim_call(verb, node)
+        elif self._handle_entity_helper_call(node):
+            pass
+        elif self._handle_entity_method_call(node):
+            pass
         else:
             self._handle_helper_call(node)
         self.generic_visit(node)
@@ -456,19 +501,61 @@ class _ProcessAnalyzer(ast.NodeVisitor):
                     self._add_edge(self.actor, ref, verb)
             return
 
-        refs = self._refs(node.args[0])
-        if verb in _PRODUCER_VERBS:
-            for ref in refs:
-                if ref.kind != "process":
-                    self._add_edge(self.actor, ref, verb)
-        elif verb in _CONSUMER_VERBS:
-            for ref in refs:
-                if ref.kind != "process":
-                    self._add_edge(ref, self.actor, verb)
-        elif verb in _SHARED_VERBS:
-            for ref in refs:
-                if ref.kind != "process":
-                    self._add_edge(self.actor, ref, "uses")
+    def _handle_entity_helper_call(self, node: ast.Call) -> bool:
+        """Recognize a lowered ``env.<entity>.method(...)`` call (a
+        ``_cimba_entity_<label>_<method>(entity, ...)`` helper invocation,
+        as it appears in the already-lowered source of a *registered*
+        process/predicate/event/collect function) and infer the same edges
+        the matching legacy ``sim.put()``/``sim.acquire()``/... free
+        function used to. Returns whether the call was recognized (so
+        callers don't also try treating it as a helper-function call)."""
+        func = node.func
+        if not isinstance(func, ast.Name) or not node.args:
+            return False
+        if not func.id.startswith(_ENTITY_HELPER_PREFIX):
+            return False
+        spec = _ENTITY_HELPER_VERBS.get(func.id[len(_ENTITY_HELPER_PREFIX):])
+        if spec is None:
+            return True
+        category, label = spec
+        for ref in self._refs(node.args[0]):
+            if category == "produce":
+                self._add_edge(self.actor, ref, label)
+            elif category == "consume":
+                self._add_edge(ref, self.actor, label)
+            else:
+                self._add_edge(self.actor, ref, label)
+        return True
+
+    def _handle_entity_method_call(self, node: ast.Call) -> bool:
+        """Recognize an unlowered ``env.<entity>.method(...)`` call (and
+        the indexed ``env.<entity>[i].method(...)`` form), as it appears in
+        a plain helper function's own source -- helper functions are
+        inlined by AST for this analysis (see ``_handle_helper_call``
+        below) but never go through ``Model.process()``'s entity-method
+        lowering, since they aren't registered process/predicate/event/
+        collect callbacks. Returns whether the call was recognized."""
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            return False
+        method = func.attr
+        refs = self._refs(func.value)
+        if not refs:
+            return False
+        handled = False
+        for ref in refs:
+            spec = _ENTITY_METHOD_VERBS.get((ref.kind, method))
+            if spec is None:
+                continue
+            handled = True
+            category, label = spec
+            if category == "produce":
+                self._add_edge(self.actor, ref, label)
+            elif category == "consume":
+                self._add_edge(ref, self.actor, label)
+            else:
+                self._add_edge(self.actor, ref, label)
+        return handled
 
     def _handle_helper_call(self, node: ast.Call) -> None:
         fn = self._helper_function(node)

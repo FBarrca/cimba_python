@@ -16,7 +16,7 @@ class Warehouse(sim.Component):
     @sim.process
     def reorder(self, env):
         if self.on_hand < self.R:
-            sim.put(self.orders, self.B)
+            self.orders.put(self.B)
             self.on_hand += self.B
             self.ordered = 1.0
 
@@ -120,12 +120,12 @@ def test_model_collect_can_use_component_field_namespace():
 
     @model.process
     def feeder(env: Network):
-        sim.put(env.station.queue, 2)
+        env.station.queue.put(2)
         sim.suspend()
 
     @model.collect
     def collect_stats(env: Network):
-        env.avg = sim.mean_level(env.station.queue)
+        env.avg = env.station.queue.mean_level()
 
     assert "env.station__queue" in model._processes[0].fn.__cimba_source__
     assert "env.station__queue" in model._collect.__cimba_source__
@@ -142,12 +142,12 @@ def test_component_collect_assigns_own_outputs():
 
         @sim.process
         def feeder(self, env):
-            sim.put(self.queue, 2)
+            self.queue.put(2)
             sim.suspend()
 
         @sim.collect
         def station_stats(self, env):
-            self.avg = sim.mean_level(self.queue)
+            self.avg = self.queue.mean_level()
 
     class Network(sim.Model):
         station: Station = Station()
@@ -230,12 +230,12 @@ def test_component_collection_collects_run_per_instance_before_model():
 
         @sim.process
         def feeder(self, env):
-            sim.put(self.waiting, self.amount)
+            self.waiting.put(self.amount)
             sim.suspend()
 
         @sim.collect
         def desk_stats(self, env):
-            self.served = sim.mean_level(self.waiting)
+            self.served = self.waiting.mean_level()
 
     class Clinic(sim.Model):
         total: sim.Output
@@ -370,12 +370,12 @@ def test_model_predicate_can_use_component_field_namespace():
     def opener(env: Network):
         sim.hold(1.0)
         env.flags.open = 1
-        sim.signal(env.gate)
+        env.gate.signal()
         sim.suspend()
 
     @model.process
     def waiter(env: Network):
-        sim.wait_for(env.gate, env.ready, env)
+        env.gate.wait_for(env.ready)
         env.ok = 1.0
         sim.suspend()
 
@@ -424,7 +424,7 @@ def test_model_process_dag_uses_lowered_component_namespace_source():
     @model.process
     def feeder(env: Network):
         env.station.count += 1
-        sim.put(env.station.queue, 1)
+        env.station.queue.put(1)
         sim.suspend()
 
     graph = model.process_dag()
@@ -641,8 +641,8 @@ def test_model_process_can_index_component_collection_fields_and_constants():
         at = 1
         qi = 1
         q = env.attractions[at].lanes[qi]
-        sim.pq_put(q, env.attractions[at].bias, 0)
-        env.attractions[at].visits += sim.pq_take(q)
+        q.put(env.attractions[at].bias, 0)
+        env.attractions[at].visits += q.take()
         env.total = env.attractions[at].visits \
             + env.attractions[at].queue_count
         sim.suspend()
@@ -738,7 +738,7 @@ def test_component_collection_params_can_size_entity_capacities():
 
         @sim.process
         def inspect(self, env):
-            self.open_space = sim.space(self.queue)
+            self.open_space = self.queue.space()
 
     class Network(sim.Model):
         items: list[Item] = [Item(), Item()]
@@ -845,8 +845,8 @@ def test_component_collection_processes_run_per_item_with_symbolic_copies():
         @sim.process(copies="server_count", priority=6)
         def server(self, env, idx):
             q = self.lanes[idx % self.queue_count]
-            sim.pq_put(q, self.base + idx, 0)
-            self.done += sim.pq_take(q)
+            q.put(self.base + idx, 0)
+            self.done += q.take()
             sim.suspend()
 
     class Park(sim.Model):
@@ -888,8 +888,8 @@ def test_component_collection_process_dag_uses_lowered_source():
 
         @sim.process
         def server(self, env):
-            sim.pq_put(self.lanes[0], 3, 0)
-            self.visits += sim.pq_take(self.lanes[0])
+            self.lanes[0].put(3, 0)
+            self.visits += self.lanes[0].take()
             sim.suspend()
 
     class Park(sim.Model):
@@ -903,7 +903,7 @@ def test_component_collection_process_dag_uses_lowered_source():
     @model.process
     def visitor(env: Park):
         at = 1
-        sim.pq_put(env.attractions[at].lanes[0], 7, 0)
+        env.attractions[at].lanes[0].put(7, 0)
         env.attractions[at].visits += 1
         sim.suspend()
 
@@ -1081,8 +1081,8 @@ def test_nested_component_collection_pqueues_use_nested_offsets():
     @model.process
     def actor(env: Campus):
         q = env.zones[1].gates[0].lanes[1]
-        sim.pq_put(q, 12, 0)
-        env.zones[1].gates[0].hits += sim.pq_take(q)
+        q.put(12, 0)
+        env.zones[1].gates[0].hits += q.take()
         env.total = env.zones[1].gates[0].hits
         sim.suspend()
 
@@ -1678,9 +1678,9 @@ class Stage(sim.Component):
     @sim.process
     def worker(self, env):
         while True:
-            item = sim.store_take(self.inbox)
+            item = self.inbox.take()
             self.seen += 1
-            sim.store_put(self.outbox, item)
+            self.outbox.put(item)
 
 
 def test_component_store_wiring_shares_entity_and_runs():
@@ -1700,11 +1700,11 @@ def test_component_store_wiring_shares_entity_and_runs():
 
     @model.process
     def feed(env: Line):
-        sim.store_put(env.first.inbox, 7)
+        env.first.inbox.put(7)
 
     @model.process
     def drain(env: Line):
-        env.done = float(sim.store_take(env.second.outbox))
+        env.done = float(env.second.outbox.take())
 
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=3)
     assert exp.run() == 0
@@ -1739,9 +1739,9 @@ def test_component_resource_wiring_shares_resource():
 
         @sim.process
         def run(self, env):
-            sim.acquire(self.machine)
+            self.machine.acquire()
             sim.hold(1.0)
-            sim.release(self.machine)
+            self.machine.release()
             self.done = sim.now()
 
     class Shop(sim.Model):
@@ -1866,7 +1866,7 @@ class RefNode(sim.Component):
     @sim.process
     def take(self, env):
         while True:
-            sim.store_take(self.inbox)
+            self.inbox.take()
             self.got += 1
 
 
@@ -1882,9 +1882,9 @@ class RefRelay(sim.Component):
     @sim.process
     def relay(self, env):
         while True:
-            item = sim.store_take(self.inbox)
+            item = self.inbox.take()
             self.passed += 1
-            sim.store_put(self.downstream.inbox, item)
+            self.downstream.inbox.put(item)
 
 
 def test_component_ref_chain_supports_forward_declaration_order():
@@ -1901,8 +1901,8 @@ def test_component_ref_chain_supports_forward_declaration_order():
 
     @model.process
     def feed(env: Line):
-        sim.store_put(env.relay1.inbox, 1)
-        sim.store_put(env.relay1.inbox, 2)
+        env.relay1.inbox.put(1)
+        env.relay1.inbox.put(2)
 
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=5)
     assert exp.run() == 0
@@ -1923,9 +1923,9 @@ def test_component_refs_table_routes_by_condition():
         @sim.process
         def route(self, env):
             while True:
-                item = sim.store_take(self.inbox)
+                item = self.inbox.take()
                 self.sent += 1
-                sim.store_put(self.routes[item % 3].inbox, item)
+                self.routes[item % 3].inbox.put(item)
 
     class Shop(sim.Model):
         nodes: list[RefNode] = [RefNode(), RefNode(), RefNode()]
@@ -1937,11 +1937,11 @@ def test_component_refs_table_routes_by_condition():
     @model.process
     def feed(env: Shop):
         for i in range(7):
-            sim.store_put(env.dispatch.inbox, i)
+            env.dispatch.inbox.put(i)
 
     @model.process
     def probe(env: Shop):
-        sim.store_put(env.dispatch.routes[1].inbox, 100)
+        env.dispatch.routes[1].inbox.put(100)
 
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=5)
     assert exp.run() == 0
@@ -1963,7 +1963,7 @@ def test_component_collection_items_can_reference_mixed_targets():
 
     @model.process
     def feed(env: Chain):
-        sim.store_put(env.relays[0].inbox, 9)
+        env.relays[0].inbox.put(9)
 
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=5)
     assert exp.run() == 0
@@ -1985,7 +1985,7 @@ def test_model_callback_can_follow_refs_with_dynamic_index():
     @model.process
     def probe(env: Ring):
         for j in range(3):
-            sim.store_put(env.nodes[j].downstream.inbox, j)
+            env.nodes[j].downstream.inbox.put(j)
 
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=5)
     assert exp.run() == 0
@@ -2062,8 +2062,8 @@ def test_component_refs_table_errors_are_rejected():
         @sim.process
         def route(self, env):
             while True:
-                item = sim.store_take(self.inbox)
-                sim.store_put(self.routes[item % 2].inbox, item)
+                item = self.inbox.take()
+                self.routes[item % 2].inbox.put(item)
 
     with pytest.raises(ValueError, match="single component collection"):
         class SingleTarget(sim.Model):
@@ -2106,7 +2106,7 @@ def test_component_ref_usage_errors_are_rejected():
 
         @sim.process
         def route(self, env):
-            sim.store_take(self.inbox)
+            self.inbox.take()
 
     class Routed(sim.Model):
         nodes: list[RefNode] = [RefNode(), RefNode()]
@@ -2123,7 +2123,7 @@ def test_component_ref_usage_errors_are_rejected():
     with pytest.raises(ValueError, match="out of range"):
         @out_of_range.process
         def oob(env: Routed):
-            sim.store_put(env.router.routes[5].inbox, 1)
+            env.router.routes[5].inbox.put(1)
 
     hetero_sink = RefNode()
     x, y = RefNode(), RefNode()
@@ -2139,4 +2139,4 @@ def test_component_ref_usage_errors_are_rejected():
         @hetero.process
         def dynamic(env: Hetero):
             for j in range(2):
-                sim.store_put(env.nodes[j].downstream.inbox, j)
+                env.nodes[j].downstream.inbox.put(j)

@@ -52,6 +52,7 @@ from dataclasses import dataclass, field
 from typing import Any, TypeVar, get_args, get_origin, get_type_hints, overload
 
 import numpy as np
+from numba import njit
 
 from ._dataset.methods import (
     DATASET_METHOD_NAMES,
@@ -71,6 +72,12 @@ from ._timeseries.methods import (
 from .random._lowering import (
     lower_random_calls_in_node,
     random_lowering_namespace,
+)
+from .store.methods import (
+    ENTITY_METHOD_NAMES,
+    entity_lowering_namespace,
+    lower_entity_method_call,
+    lower_env_entity_method_calls,
 )
 
 _F = TypeVar("_F", bound=Callable[..., Any])
@@ -97,6 +104,15 @@ _COMPONENT_HISTORY_BINDINGS = {
     "pool": "resourcepool",
     "store": "objectqueue",
 }
+
+#: scalar entity field kinds whose ``self.<field>.method(...)`` sugar
+#: (put/get/acquire/release/...) is lowered directly inside component
+#: methods, same restriction as ``_COMPONENT_HISTORY_BINDINGS``: PQueues
+#: elements are indexed (``self.pq[i]``) before a method applies, so they
+#: are lowered by the later env-based pass (``lower_env_entity_method_calls``)
+#: instead.
+_COMPONENT_ENTITY_KINDS = frozenset(
+    {"queue", "resource", "pool", "store", "condition"})
 
 
 def _wirable_fields(cls: type) -> dict[str, str]:
@@ -1521,12 +1537,22 @@ class _ComponentPathLowerer(ast.NodeTransformer):
         if isinstance(node.func, ast.Attribute):
             access = self._field_ref(node.func.value)
             if access is not None:
-                if access.decl.decls.kind_of(access.field) == "dataset":
+                field_kind = access.decl.decls.kind_of(access.field)
+                if field_kind == "dataset":
                     return lower_dataset_method_call(
                         node,
                         self._field_target(access, ast.Load()),
                         visit=self.visit,
                         label=self._callback_label(),
+                    )
+                if field_kind in _COMPONENT_ENTITY_KINDS:
+                    return lower_entity_method_call(
+                        node,
+                        self._field_target(access, ast.Load()),
+                        kind=field_kind,
+                        visit=self.visit,
+                        label=self._callback_label(),
+                        env_expr=ast.Name(id=self.env_name, ctx=ast.Load()),
                     )
                 raise ValueError(
                     f"{self._callback_label()} cannot call "
@@ -1795,6 +1821,7 @@ def _lower_component_method(
     extra_namespace: Mapping[str, Any] | None = None,
     model_dataset_fields: Iterable[str] = (),
     model_history_fields: Mapping[str, str] = {},
+    model_entity_fields: Mapping[str, str] = {},
 ) -> Callable[..., Any]:
     """Shared tail of process/collect lowering: drop `self`, rewrite the
     body against the flattened env, and compile the result."""
@@ -1843,9 +1870,21 @@ def _lower_component_method(
             history_fields=model_history_fields,
             label=f"component {kind} '{component_name}.{method_name}'",
         )
+    if model_entity_fields:
+        lowered, _ = lower_env_entity_method_calls(
+            lowered,
+            env_name=env_name,
+            entity_fields=model_entity_fields,
+            label=f"component {kind} '{component_name}.{method_name}'",
+        )
     lowered.body[:0] = list(prologue)
 
     namespace = _closure_namespace(method)
+    if model_entity_fields:
+        _rewire_entity_method_helpers(
+            namespace, set(method.__code__.co_names),
+            model_name=component_name, entity_fields=model_entity_fields,
+            cache={})
     lowered, random_changed = lower_random_calls_in_node(
         lowered,
         namespace=namespace,
@@ -1857,6 +1896,7 @@ def _lower_component_method(
         namespace.update(extra_namespace)
     namespace.update(dataset_lowering_namespace())
     namespace.update(timeseries_lowering_namespace())
+    namespace.update(entity_lowering_namespace())
     if random_changed:
         namespace.update(random_lowering_namespace())
     namespace.update(_lowering_namespace((component_decl,)))
@@ -1981,6 +2021,7 @@ def _lower_component_process(
     copies_per_instance: tuple[int, ...] | None = None,
     model_dataset_fields: Iterable[str] = (),
     model_history_fields: Mapping[str, str] = {},
+    model_entity_fields: Mapping[str, str] = {},
 ) -> Callable[..., Any]:
     """Lower a component process method into a flat process function.
 
@@ -2010,7 +2051,8 @@ def _lower_component_process(
         method_name=method_name, method=method, struct_view=struct_view,
         prologue=prologue, extra_namespace=tables,
         model_dataset_fields=model_dataset_fields,
-        model_history_fields=model_history_fields)
+        model_history_fields=model_history_fields,
+        model_entity_fields=model_entity_fields)
 
 
 def _lower_component_collect(
@@ -2023,6 +2065,7 @@ def _lower_component_collect(
     per_class: bool = False,
     model_dataset_fields: Iterable[str] = (),
     model_history_fields: Mapping[str, str] = {},
+    model_entity_fields: Mapping[str, str] = {},
 ) -> Callable[..., Any]:
     """Lower a component collect method; with ``per_class``, one function
     covers every instance and takes the instance index as its second
@@ -2044,7 +2087,8 @@ def _lower_component_collect(
         component_decl=component_decl, instance_index=index_expr,
         method_name=method_name, method=method,
         model_dataset_fields=model_dataset_fields,
-        model_history_fields=model_history_fields)
+        model_history_fields=model_history_fields,
+        model_entity_fields=model_entity_fields)
 
 
 def _lower_model_component_refs(
@@ -2091,6 +2135,8 @@ def _lower_model_component_refs(
 
     namespace = _closure_namespace(fn)
     namespace.update(dataset_lowering_namespace())
+    namespace.update(timeseries_lowering_namespace())
+    namespace.update(entity_lowering_namespace())
     namespace.update(_lowering_namespace(component_roots.values()))
     return _compile_lowered(
         lowered,
@@ -2198,6 +2244,170 @@ def _lower_history_methods(
 
     namespace = _closure_namespace(fn)
     namespace.update(timeseries_lowering_namespace())
+    return _compile_lowered(
+        lowered,
+        filename=f"<cimba model callback '{model_name}.{fn.__name__}'>",
+        fn_name=fn.__name__,
+        qualname=fn.__qualname__,
+        namespace=namespace,
+        like=fn,
+    )
+
+
+def _lower_entity_method_helper(
+    helper: Any,
+    *,
+    model_name: str,
+    entity_fields: Mapping[str, str],
+    cache: dict[int, Any],
+) -> Any:
+    """If ``helper`` is a Numba dispatcher (an ``@njit``-decorated plain
+    helper function, the kind processes commonly factor shared logic
+    into) whose own body uses ``env.<entity>.method(...)`` sugar --
+    directly, or transitively through helpers *it* calls -- rewrite and
+    recompile it, returning the new dispatcher. Otherwise (not a
+    dispatcher, or nothing to rewrite) returns ``helper`` unchanged.
+
+    Entity-method lowering is normally per-registered-callback (see
+    ``_lower_entity_methods`` below), because that's the only place the
+    AST rewrite naturally has an ``env`` name to anchor on. A plain helper
+    called with ``env`` as its own first argument has exactly the same
+    shape, so it gets the same treatment here -- memoized by
+    ``id(py_func)`` in ``cache`` so a helper shared by several processes
+    is only rewritten once."""
+    py_func = getattr(helper, "py_func", None)
+    if py_func is None:
+        return helper
+    key = id(py_func)
+    if key in cache:
+        return cache[key]
+    # Guard recursive/mutually-recursive helpers: while we're rewriting
+    # this one, references to it (including from itself) resolve to the
+    # original -- an accepted limitation for the exotic self-recursive case.
+    cache[key] = helper
+    names = set(py_func.__code__.co_names)
+    direct = bool(names.intersection(entity_fields)
+                 and names.intersection(ENTITY_METHOD_NAMES))
+    namespace = _closure_namespace(py_func)
+    helpers_changed = _rewire_entity_method_helpers(
+        namespace, names, model_name=model_name, entity_fields=entity_fields,
+        cache=cache)
+    if not direct and not helpers_changed:
+        return helper
+    try:
+        node = copy.deepcopy(_function_def_from_source(py_func))
+    except (OSError, TypeError):
+        return helper
+    if not node.args.args:
+        return helper
+
+    env_name = node.args.args[0].arg
+    lowered, changed = lower_env_entity_method_calls(
+        node,
+        env_name=env_name,
+        entity_fields=entity_fields,
+        label=f"model '{model_name}' helper '{py_func.__qualname__}'",
+    )
+    if not changed and not helpers_changed:
+        return helper
+
+    lowered.decorator_list = []
+    lowered.returns = None
+    lowered.type_comment = None
+    for arg in lowered.args.args:
+        arg.annotation = None
+        arg.type_comment = None
+
+    namespace.update(entity_lowering_namespace())
+    plain = _compile_lowered(
+        lowered,
+        filename=f"<cimba model '{model_name}' helper "
+                f"'{py_func.__qualname__}'>",
+        fn_name=py_func.__name__,
+        qualname=py_func.__qualname__,
+        namespace=namespace,
+        like=py_func,
+    )
+    result = njit(plain)
+    cache[key] = result
+    return result
+
+
+def _rewire_entity_method_helpers(
+    namespace: dict[str, Any],
+    names: Iterable[str],
+    *,
+    model_name: str,
+    entity_fields: Mapping[str, str],
+    cache: dict[int, Any],
+) -> bool:
+    """Rewrite, in place, every referenced global name in ``namespace``
+    that is a helper dispatcher needing entity-method lowering. Returns
+    whether anything changed."""
+    changed = False
+    for name in names:
+        obj = namespace.get(name)
+        if obj is None:
+            continue
+        rewritten = _lower_entity_method_helper(
+            obj, model_name=model_name, entity_fields=entity_fields,
+            cache=cache)
+        if rewritten is not obj:
+            namespace[name] = rewritten
+            changed = True
+    return changed
+
+
+def _lower_entity_methods(
+    fn: Callable[..., Any],
+    *,
+    model_name: str,
+    entity_fields: Mapping[str, str],
+) -> Callable[..., Any]:
+    """Rewrite ``env.<entity>.method(...)`` (and the indexed
+    ``env.<entity>[i].method(...)`` form) to native helper calls, e.g.
+    ``env.queue.put(1)`` or ``env.server.acquire()`` -- in ``fn``'s own
+    body, and in any ``@njit`` helper function it (transitively) calls."""
+    if not entity_fields:
+        return fn
+    names = set(fn.__code__.co_names)
+    direct = bool(names.intersection(entity_fields)
+                 and names.intersection(ENTITY_METHOD_NAMES))
+    namespace = _closure_namespace(fn)
+    cache: dict[int, Any] = {}
+    helpers_changed = _rewire_entity_method_helpers(
+        namespace, names, model_name=model_name, entity_fields=entity_fields,
+        cache=cache)
+    if not direct and not helpers_changed:
+        return fn
+    try:
+        node = copy.deepcopy(_function_def_from_source(fn))
+    except (OSError, TypeError) as exc:
+        raise ValueError(
+            f"model '{model_name}' callback '{fn.__qualname__}' needs "
+            "inspectable source to use entity methods"
+        ) from exc
+    if not node.args.args:
+        return fn
+
+    env_name = node.args.args[0].arg
+    lowered, changed = lower_env_entity_method_calls(
+        node,
+        env_name=env_name,
+        entity_fields=entity_fields,
+        label=f"model '{model_name}' callback '{fn.__name__}'",
+    )
+    if not changed and not helpers_changed:
+        return fn
+
+    lowered.decorator_list = []
+    lowered.returns = None
+    lowered.type_comment = None
+    for arg in lowered.args.args:
+        arg.annotation = None
+        arg.type_comment = None
+
+    namespace.update(entity_lowering_namespace())
     return _compile_lowered(
         lowered,
         filename=f"<cimba model callback '{model_name}.{fn.__name__}'>",
