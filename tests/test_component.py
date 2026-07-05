@@ -161,6 +161,65 @@ def test_component_collect_assigns_own_outputs():
     assert exp["station__avg"][0] == 2.0
 
 
+def test_component_collect_can_use_dataset_methods():
+    class Sampler(sim.Component):
+        avg: sim.Output
+        samples: sim.Dataset
+
+        @sim.process
+        def feeder(self, env):
+            self.samples.add(1.0)
+            self.samples.add(3.0)
+
+        @sim.collect
+        def sampler_stats(self, env):
+            self.avg = self.samples.mean()
+
+    class Network(sim.Model):
+        sampler: Sampler = Sampler()
+
+    model = Network()
+    ((lowered, _instances),) = model._component_collects
+    assert (
+        "_cimba_dataset_mean(env.sampler__samples)"
+        in lowered.__cimba_source__
+    )
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
+                           seed=24)
+    assert exp.run() == 0
+    assert exp["sampler__avg"][0] == 2.0
+
+
+def test_component_methods_can_use_model_dataset_methods():
+    class Sampler(sim.Component):
+        avg: sim.Output
+
+        @sim.process
+        def feeder(self, env):
+            env.samples.add(2.0)
+            env.samples.add(4.0)
+
+        @sim.collect
+        def sampler_stats(self, env):
+            self.avg = env.samples.mean()
+
+    class Network(sim.Model):
+        samples: sim.Dataset
+        sampler: Sampler = Sampler()
+
+    model = Network()
+    assert (
+        "_cimba_dataset_add(env.samples"
+        in model._processes[0].fn.__cimba_source__
+    )
+    ((lowered, _instances),) = model._component_collects
+    assert "_cimba_dataset_mean(env.samples)" in lowered.__cimba_source__
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
+                           seed=25)
+    assert exp.run() == 0
+    assert exp["sampler__avg"][0] == 3.0
+
+
 def test_component_collection_collects_run_per_instance_before_model():
     class Desk(sim.Component):
         served: sim.Output

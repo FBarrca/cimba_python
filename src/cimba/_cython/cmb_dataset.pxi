@@ -1,5 +1,25 @@
 # This file is included by ../_cimba.pyx.
 
+import os as _os
+
+
+cdef bytes _dataset_path_bytes(object path):
+    cdef bytes encoded = _os.fsencode(path)
+    if len(encoded) == 0:
+        raise ValueError("path must not be empty")
+    if b"\0" in encoded:
+        raise ValueError("path must not contain NUL bytes")
+    return encoded
+
+
+cdef inline uint64_t _append_to_u64(object append) except *:
+    return 1 if append else 0
+
+
+cdef inline uint64_t _bins_to_u64(object bins) except *:
+    return _u64_value(bins, "bins", 1)
+
+
 cdef class Dataset:
     """Resizable unweighted data set of doubles."""
 
@@ -141,10 +161,124 @@ cdef class Dataset:
             _raise_if_closed(self)
             return cmb_dataset_max(self._ptr)
 
+    property mean:
+        def __get__(self):
+            _raise_if_closed(self)
+            return cpy_dataset_mean(self._ptr)
+
+    property std:
+        def __get__(self):
+            _raise_if_closed(self)
+            return cpy_dataset_stddev(self._ptr)
+
+    property stddev:
+        def __get__(self):
+            _raise_if_closed(self)
+            return cpy_dataset_stddev(self._ptr)
+
     property median:
         def __get__(self):
             _raise_if_closed(self)
             return cmb_dataset_median(self._ptr)
+
+    def quantile(self, double q) -> float:
+        _raise_if_closed(self)
+        return cpy_dataset_quantile(self._ptr, q)
+
+    def print(self) -> int:
+        _raise_if_closed(self)
+        return <object>cpy_dataset_print_file(self._ptr, <intptr_t>0, 1)
+
+    def print_file(self, object path, object append=True) -> int:
+        _raise_if_closed(self)
+        cdef bytes path_bytes = _dataset_path_bytes(path)
+        cdef const char *path_ptr = path_bytes
+        return <object>cpy_dataset_print_file(
+            self._ptr,
+            <intptr_t>path_ptr,
+            _append_to_u64(append),
+        )
+
+    def fivenum(self) -> int:
+        _raise_if_closed(self)
+        return <object>cpy_dataset_fivenum_file(self._ptr, <intptr_t>0, 1)
+
+    def fivenum_file(self, object path, object append=True) -> int:
+        _raise_if_closed(self)
+        cdef bytes path_bytes = _dataset_path_bytes(path)
+        cdef const char *path_ptr = path_bytes
+        return <object>cpy_dataset_fivenum_file(
+            self._ptr,
+            <intptr_t>path_ptr,
+            _append_to_u64(append),
+        )
+
+    def histogram(self, object bins=20, double low=0.0, double high=0.0) -> int:
+        _raise_if_closed(self)
+        return <object>cpy_dataset_histogram_file(
+            self._ptr,
+            <intptr_t>0,
+            1,
+            _bins_to_u64(bins),
+            low,
+            high,
+        )
+
+    def histogram_file(self, object path, object append=True, object bins=20,
+                       double low=0.0, double high=0.0) -> int:
+        _raise_if_closed(self)
+        cdef bytes path_bytes = _dataset_path_bytes(path)
+        cdef const char *path_ptr = path_bytes
+        return <object>cpy_dataset_histogram_file(
+            self._ptr,
+            <intptr_t>path_ptr,
+            _append_to_u64(append),
+            _bins_to_u64(bins),
+            low,
+            high,
+        )
+
+    def correlogram(self, object lags=20) -> int:
+        _raise_if_closed(self)
+        return <object>cpy_dataset_correlogram_file(
+            self._ptr,
+            <intptr_t>0,
+            1,
+            _lags_to_u16(lags),
+        )
+
+    def correlogram_file(self, object path, object append=True,
+                         object lags=20) -> int:
+        _raise_if_closed(self)
+        cdef bytes path_bytes = _dataset_path_bytes(path)
+        cdef const char *path_ptr = path_bytes
+        return <object>cpy_dataset_correlogram_file(
+            self._ptr,
+            <intptr_t>path_ptr,
+            _append_to_u64(append),
+            _lags_to_u16(lags),
+        )
+
+    def pacf_correlogram(self, object lags=20) -> int:
+        _raise_if_closed(self)
+        return <object>cpy_dataset_pacf_correlogram_file(
+            self._ptr,
+            <intptr_t>0,
+            1,
+            _lags_to_u16(lags),
+        )
+
+    def pacf_correlogram_file(self, object path, object append=True,
+                              object lags=20) -> int:
+        _raise_if_closed(self)
+        cdef bytes path_bytes = _dataset_path_bytes(path)
+        cdef const char *path_ptr = path_bytes
+        return <object>cpy_dataset_pacf_correlogram_file(
+            self._ptr,
+            <intptr_t>path_ptr,
+            _append_to_u64(append),
+            _lags_to_u16(lags),
+        )
 
     def close(self) -> None:
         if self._closed:

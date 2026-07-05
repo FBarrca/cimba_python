@@ -2,11 +2,12 @@ Datasets, Summaries and Reporting
 =================================
 
 ``sim.Dataset`` is a trial-local list of untimed numeric observations. Add one
-observation with ``sim.tally()`` each time the measured event happens. At
-collection time, use the ``dataset_*`` functions to turn that list into the
-metric you want to report for the current replication. Time-weighted histories
-are attached to simulation entities and read back through the ``*_history()``
-accessors as time-series handles.
+observation with ``env.waits.add(value)`` each time the measured event happens.
+At collection time, call methods such as ``env.waits.mean()`` or
+``env.waits.quantile(0.95)`` to turn that list into the metric you want to
+report for the current replication. Time-weighted histories are attached to
+simulation entities and read back through the ``*_history()`` accessors as
+time-series handles.
 
 Datasets
 --------
@@ -20,12 +21,12 @@ Declare datasets as model or component fields:
        avg_wait: sim.Output
        p95_wait: sim.Output
 
-Inside process code, each tally appends one sample to the current trial's
+Inside process code, each ``add()`` appends one sample to the current trial's
 dataset:
 
 .. code-block:: python
 
-   sim.tally(env.waits, wait_time)
+   env.waits.add(wait_time)
 
 At collection time, summarize that trial-local list into the outputs you care
 about:
@@ -34,12 +35,12 @@ about:
 
    @model.collect
    def collect_stats(env: Clinic):
-       env.avg_wait = sim.dataset_mean(env.waits)
-       env.p95_wait = sim.dataset_quantile(env.waits, 0.95)
+       env.avg_wait = env.waits.mean()
+       env.p95_wait = env.waits.quantile(0.95)
 
 A dataset field is created separately for every trial row. If an experiment
 uses ``replications=50``, then ``env.waits`` is 50 independent datasets, not
-one dataset shared by all replications. Each replication tallies its own
+one dataset shared by all replications. Each replication records its own
 samples. The model-level ``@model.collect`` callback, or a component-level
 ``@sim.collect`` callback, writes one output value per replication for each
 metric you choose. For example, ``exp["avg_wait"]`` contains 50
@@ -48,16 +49,15 @@ per-replication percentile estimates. Use ``exp.summary()`` or ordinary Python
 after ``exp.run()`` to summarize those output values across replications.
 
 Datasets are reset when the measurement window opens after warmup. Values
-tallied before warmup are discarded, so collectors see the samples for the
+added before warmup are discarded, so collectors see the samples for the
 measured part of that trial.
 
-``tally()``, ``dataset_count()``, ``dataset_mean()``, ``dataset_min()``,
-``dataset_max()``, ``dataset_std()``, ``dataset_median()``,
-``dataset_quantile()``, ``dataset_print()``, ``dataset_print_file()``,
-``dataset_fivenum()``, ``dataset_fivenum_file()``, ``dataset_histogram()``,
-``dataset_histogram_file()``, ``dataset_correlogram()``,
-``dataset_correlogram_file()``, ``dataset_pacf_correlogram()``,
-``dataset_pacf_correlogram_file()``.
+Datasets support method-style compiled calls: ``add()``, ``count()``,
+``mean()``, ``min()``, ``max()``, ``std()``, ``median()``, ``quantile()``,
+``print()``, ``print_file()``, ``fivenum()``, ``fivenum_file()``,
+``histogram()``, ``histogram_file()``, ``correlogram()``,
+``correlogram_file()``, ``pacf_correlogram()``, and
+``pacf_correlogram_file()``.
 
 Time series
 -----------

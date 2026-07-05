@@ -33,7 +33,7 @@ Translation notes (C -> cimba.sim):
   process handle. The server views it with Visitor(handle), adds the
   waiting and riding times to the visitor's fields, and resumes it with
   sim.SUCCESS -- the same data flow as the C server.
-* A departing visitor tallies its statistics, hands its own handle to
+* A departing visitor records its statistics, hands its own handle to
   the departures process through the `departed` store, and returns; the
   departures process sim.despawn()s it (C's visitor_terminate/_destroy).
   Early despawning just recycles memory during the day -- any spawned
@@ -298,12 +298,12 @@ class VisitorFlow(sim.Component):
                     vip.rides += 1
                     break       # yay! slightly dizzy, do it again?
 
-        # Enough for today: tally up, then hand ourselves to departures
-        sim.tally(self.d_park, sim.now() - vip.entry_park)
-        sim.tally(self.d_riding, vip.riding)
-        sim.tally(self.d_waiting, vip.waiting)
-        sim.tally(self.d_walking, vip.walking)
-        sim.tally(self.d_rides, 1.0 * vip.rides)
+        # Enough for today: record statistics, then hand ourselves to departures
+        self.d_park.add(sim.now() - vip.entry_park)
+        self.d_riding.add(vip.riding)
+        self.d_waiting.add(vip.waiting)
+        self.d_walking.add(vip.walking)
+        self.d_rides.add(1.0 * vip.rides)
         sim.store_put(self.departed, me)
 
     @sim.process
@@ -335,12 +335,12 @@ park = Park()
 
 @park.collect
 def park_stats(env: Park):
-    env.avg_rides = sim.dataset_mean(env.flow.d_rides)
-    env.avg_time_in_park = sim.dataset_mean(env.flow.d_park)
-    env.avg_riding = sim.dataset_mean(env.flow.d_riding)
-    env.avg_waiting = sim.dataset_mean(env.flow.d_waiting)
-    env.avg_walking = sim.dataset_mean(env.flow.d_walking)
-    env.n_visitors = sim.dataset_count(env.flow.d_park)
+    env.avg_rides = env.flow.d_rides.mean()
+    env.avg_time_in_park = env.flow.d_park.mean()
+    env.avg_riding = env.flow.d_riding.mean()
+    env.avg_waiting = env.flow.d_waiting.mean()
+    env.avg_walking = env.flow.d_walking.mean()
+    env.n_visitors = env.flow.d_park.count()
     env.n_balks = env.flow.balks
     env.n_jockeys = env.flow.jockeys
     env.n_reneges = env.flow.reneges

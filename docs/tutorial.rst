@@ -486,14 +486,14 @@ customer's time in system:
 
     @model.process
     def observer(env: Waits):
-        sim.tally(env.waits, 2.5)
-        sim.tally(env.waits, 3.0)
+        env.waits.add(2.5)
+        env.waits.add(3.0)
         sim.suspend()
 
     @model.collect
     def collect(env: Waits):
-        env.wait_mean = sim.dataset_mean(env.waits)
-        env.wait_std = sim.dataset_std(env.waits)
+        env.wait_mean = env.waits.mean()
+        env.wait_std = env.waits.std()
 
 Datasets also provide count, minimum, and maximum. They are useful for
 per-agent outcomes; time-weighted summaries are useful for states that persist
@@ -503,18 +503,18 @@ between event times. Datasets also have the same text-reporting style:
 
     @model.collect
     def collect(env: Waits):
-        env.wait_mean = sim.dataset_mean(env.waits)
-        env.wait_std = sim.dataset_std(env.waits)
+        env.wait_mean = env.waits.mean()
+        env.wait_std = env.waits.std()
 
-        sim.dataset_fivenum(env.waits)
-        sim.dataset_histogram(env.waits, bins=20)
-        sim.dataset_correlogram(env.waits, lags=20)
-        sim.dataset_pacf_correlogram(env.waits, lags=20)
+        env.waits.fivenum()
+        env.waits.histogram(bins=20)
+        env.waits.correlogram(lags=20)
+        env.waits.pacf_correlogram(lags=20)
 
-Use ``sim.dataset_print()`` when you want the raw sample values themselves.
-Use ``sim.dataset_print_file()``, ``sim.dataset_fivenum_file()``,
-``sim.dataset_histogram_file()``, ``sim.dataset_correlogram_file()``, and
-``sim.dataset_pacf_correlogram_file()`` to write those reports to files.
+Use ``env.waits.print()`` when you want the raw sample values themselves.
+Use ``env.waits.print_file()``, ``env.waits.fivenum_file()``,
+``env.waits.histogram_file()``, ``env.waits.correlogram_file()``, and
+``env.waits.pacf_correlogram_file()`` to write those reports to files.
 
 Refactoring for parallelism
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -1467,8 +1467,8 @@ Finished dynamic processes should be reclaimed during long trials:
         @sim.process
         def visitor(self, env, vip: Visitor):
             # ... after the visitor decides to leave ...
-            sim.tally(self.d_park, sim.now() - vip.entry_park)
-            sim.tally(self.d_rides, 1.0 * vip.rides)
+            self.d_park.add(sim.now() - vip.entry_park)
+            self.d_rides.add(1.0 * vip.rides)
             sim.store_put(self.departed, sim.current())
 
 The model can then report average time in park, rides per visitor, waiting
@@ -1790,9 +1790,9 @@ process.
             sim.signal(env.facilities.harbormaster)
 
             if shp.size == LARGE:
-                sim.tally(self.time_large, sim.now() - shp.arrival)
+                self.time_large.add(sim.now() - shp.arrival)
             else:
-                sim.tally(self.time_small, sim.now() - shp.arrival)
+                self.time_small.add(sim.now() - shp.arrival)
             sim.store_put(self.departed, me)
 
 There are two important modeling habits here. First, release resources as soon
@@ -1811,12 +1811,12 @@ can also print the same text reports we used earlier:
 
     @harbor.collect
     def harbor_stats(env: Harbor):
-        env.avg_time_small = sim.dataset_mean(env.traffic.time_small)
-        env.avg_time_large = sim.dataset_mean(env.traffic.time_large)
+        env.avg_time_small = env.traffic.time_small.mean()
+        env.avg_time_large = env.traffic.time_large.mean()
         env.tug_util = sim.pool_mean_in_use(env.facilities.tugs)
 
-        sim.dataset_fivenum(env.traffic.time_small)
-        sim.dataset_histogram(env.traffic.time_small, bins=20)
+        env.traffic.time_small.fivenum()
+        env.traffic.time_small.histogram(bins=20)
         sim.pool_report(env.facilities.tugs)
 
 This gives us scalar outputs for the experiment table, plus readable diagnostic
@@ -1863,12 +1863,12 @@ collector:
 
     @harbor.collect
     def harbor_stats(env: Harbor):
-        env.avg_time_small = sim.dataset_mean(env.traffic.time_small)
-        env.avg_time_large = sim.dataset_mean(env.traffic.time_large)
+        env.avg_time_small = env.traffic.time_small.mean()
+        env.avg_time_large = env.traffic.time_large.mean()
         env.tug_util = sim.pool_mean_in_use(env.facilities.tugs)
 
-        sim.dataset_fivenum(env.traffic.time_large)
-        sim.dataset_histogram(env.traffic.time_large, bins=20)
+        env.traffic.time_large.fivenum()
+        env.traffic.time_large.histogram(bins=20)
         sim.pool_report(env.facilities.tugs)
         sim.pool_report(env.facilities.berths_small)
         sim.pool_report(env.facilities.berths_large)
@@ -1972,6 +1972,23 @@ Running ``tutorial/tut_5_1.py`` currently reports the feature status directly:
 
     $ .venv/bin/python tutorial/tut_5_1.py
     CUDA/GPU simulation hooks are not exposed in cimba Python yet.
+
+Additional manufacturing-line tutorial
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The repository also includes ``tutorial/assembly_line.py``, a standalone
+three-station manufacturing-line model. It shows parts moving through station
+inboxes, acquiring each station's processing resource, and leaving through a
+finished-parts sink while the model records cycle times, wait times,
+utilization, throughput, and the number of parts in the system.
+
+Run it from the repository root with plotting dependencies installed:
+
+.. code-block:: bash
+
+    uv run --extra plot python tutorial/assembly_line.py
+
+The script writes a process graph to ``tutorial/assembly_line_plots/``.
 
 The key lesson is the same as in every earlier chapter: active entities are
 processes, passive constraints are model fields, randomness comes from

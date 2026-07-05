@@ -53,6 +53,12 @@ from typing import Any, TypeVar, get_args, get_origin, get_type_hints, overload
 
 import numpy as np
 
+from ._dataset.methods import (
+    DATASET_METHOD_NAMES,
+    dataset_lowering_namespace,
+    lower_dataset_method_call,
+    lower_env_dataset_method_calls,
+)
 from ._declarations import (_DECL_KINDS, _MISSING, _check_name,
                             _Declarations, _field_declarations, _FieldDecl)
 
@@ -1457,6 +1463,18 @@ class _ComponentPathLowerer(ast.NodeTransformer):
                     f"{self._callback_label()} uses dynamic "
                     f"getattr({target.text}, ...), which is not supported")
         if isinstance(node.func, ast.Attribute):
+            access = self._field_ref(node.func.value)
+            if access is not None:
+                if access.decl.decls.kind_of(access.field) == "dataset":
+                    return lower_dataset_method_call(
+                        node,
+                        self._field_target(access, ast.Load()),
+                        visit=self.visit,
+                        label=self._callback_label(),
+                    )
+                raise ValueError(
+                    f"{self._callback_label()} cannot call "
+                    f"{access.text}.{node.func.attr}() inside compiled code")
             target = (self._namespace_ref(node.func.value)
                       or self._collection_ref(node.func.value)
                       or self._ref_table_ref(node.func.value))
@@ -1613,6 +1631,12 @@ class _ModelComponentRefLowerer(_ComponentPathLowerer):
     def _callback_label(self) -> str:
         return f"model '{self.model_name}' callback '{self.fn_name}'"
 
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        lowered = super().visit_Call(node)
+        if lowered is not node:
+            self.changed = True
+        return lowered
+
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
         lowered = super().visit_Subscript(node)
         if lowered is not node:
@@ -1713,6 +1737,7 @@ def _lower_component_method(
     struct_view: type | None = None,
     prologue: Sequence[ast.stmt] = (),
     extra_namespace: Mapping[str, Any] | None = None,
+    model_dataset_fields: Iterable[str] = (),
 ) -> Callable[..., Any]:
     """Shared tail of process/collect lowering: drop `self`, rewrite the
     body against the flattened env, and compile the result."""
@@ -1747,6 +1772,13 @@ def _lower_component_method(
     lowered = lowerer.visit(node)
     if not isinstance(lowered, ast.FunctionDef):
         raise TypeError(f"component {kind} lowering produced a non-function")
+    if model_dataset_fields:
+        lowered, _ = lower_env_dataset_method_calls(
+            lowered,
+            env_name=env_name,
+            dataset_fields=model_dataset_fields,
+            label=f"component {kind} '{component_name}.{method_name}'",
+        )
     lowered.body[:0] = list(prologue)
 
     namespace = _closure_namespace(method)
@@ -1754,6 +1786,7 @@ def _lower_component_method(
         namespace["_CIMBA_STRUCT_VIEW"] = struct_view
     if extra_namespace:
         namespace.update(extra_namespace)
+    namespace.update(dataset_lowering_namespace())
     namespace.update(_lowering_namespace((component_decl,)))
     return _compile_lowered(
         lowered,
@@ -1874,6 +1907,7 @@ def _lower_component_process(
     *,
     instance_index: int | None = None,
     copies_per_instance: tuple[int, ...] | None = None,
+    model_dataset_fields: Iterable[str] = (),
 ) -> Callable[..., Any]:
     """Lower a component process method into a flat process function.
 
@@ -1901,7 +1935,8 @@ def _lower_component_process(
         node, kind="process", component_name=component_name,
         component_decl=component_decl, instance_index=index_expr,
         method_name=method_name, method=method, struct_view=struct_view,
-        prologue=prologue, extra_namespace=tables)
+        prologue=prologue, extra_namespace=tables,
+        model_dataset_fields=model_dataset_fields)
 
 
 def _lower_component_collect(
@@ -1912,6 +1947,7 @@ def _lower_component_collect(
     *,
     instance_index: int | None = None,
     per_class: bool = False,
+    model_dataset_fields: Iterable[str] = (),
 ) -> Callable[..., Any]:
     """Lower a component collect method; with ``per_class``, one function
     covers every instance and takes the instance index as its second
@@ -1931,7 +1967,8 @@ def _lower_component_collect(
     return _lower_component_method(
         node, kind="collect", component_name=component_name,
         component_decl=component_decl, instance_index=index_expr,
-        method_name=method_name, method=method)
+        method_name=method_name, method=method,
+        model_dataset_fields=model_dataset_fields)
 
 
 def _lower_model_component_refs(
@@ -1977,7 +2014,61 @@ def _lower_model_component_refs(
         arg.type_comment = None
 
     namespace = _closure_namespace(fn)
+    namespace.update(dataset_lowering_namespace())
     namespace.update(_lowering_namespace(component_roots.values()))
+    return _compile_lowered(
+        lowered,
+        filename=f"<cimba model callback '{model_name}.{fn.__name__}'>",
+        fn_name=fn.__name__,
+        qualname=fn.__qualname__,
+        namespace=namespace,
+        like=fn,
+    )
+
+
+def _lower_dataset_methods(
+    fn: Callable[..., Any],
+    *,
+    model_name: str,
+    dataset_fields: Iterable[str],
+) -> Callable[..., Any]:
+    """Rewrite ``env.<dataset>.method(...)`` to native dataset helper calls."""
+    fields = set(dataset_fields)
+    if not fields:
+        return fn
+    names = set(fn.__code__.co_names)
+    if not (names.intersection(fields)
+            and names.intersection(DATASET_METHOD_NAMES)):
+        return fn
+    try:
+        node = copy.deepcopy(_function_def_from_source(fn))
+    except (OSError, TypeError) as exc:
+        raise ValueError(
+            f"model '{model_name}' callback '{fn.__qualname__}' needs "
+            "inspectable source to use Dataset methods"
+        ) from exc
+    if not node.args.args:
+        return fn
+
+    env_name = node.args.args[0].arg
+    lowered, changed = lower_env_dataset_method_calls(
+        node,
+        env_name=env_name,
+        dataset_fields=fields,
+        label=f"model '{model_name}' callback '{fn.__name__}'",
+    )
+    if not changed:
+        return fn
+
+    lowered.decorator_list = []
+    lowered.returns = None
+    lowered.type_comment = None
+    for arg in lowered.args.args:
+        arg.annotation = None
+        arg.type_comment = None
+
+    namespace = _closure_namespace(fn)
+    namespace.update(dataset_lowering_namespace())
     return _compile_lowered(
         lowered,
         filename=f"<cimba model callback '{model_name}.{fn.__name__}'>",

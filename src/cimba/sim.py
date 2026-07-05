@@ -53,8 +53,8 @@ Concept translation (cimba -> sim API):
                       _reschedule()/_reprioritize()/_scheduled()/
                       _time()/_priority(), sim.current_event(),
                       sim.event_count(), sim.clear_events()
-    cmb_dataset       sim.Dataset, sim.tally(), sim.dataset_mean()/
-                      _count()/_min()/_max()/_std()/_median()/_quantile()
+    cmb_dataset       sim.Dataset, env.waits.add(), env.waits.mean()/
+                      count()/min()/max()/std()/median()/quantile()
     statistics        recorded over the measurement window (after warmup,
                       datasets are reset when it opens): sim.mean_level(),
                       sim.mean_in_use(), sim.pool_mean_in_use(),
@@ -163,13 +163,6 @@ __all__ = [
     "store_put", "store_get", "store_take", "store_length", "store_space",
     "store_position", "store_mean_length", "store_history",
     "store_report", "store_report_file",
-    "tally", "dataset_mean", "dataset_count", "dataset_min", "dataset_max",
-    "dataset_std", "dataset_median", "dataset_quantile",
-    "dataset_print", "dataset_print_file",
-    "dataset_fivenum", "dataset_fivenum_file",
-    "dataset_histogram", "dataset_histogram_file",
-    "dataset_correlogram", "dataset_correlogram_file",
-    "dataset_pacf_correlogram", "dataset_pacf_correlogram_file",
     "timeseries_count", "timeseries_min", "timeseries_max",
     "timeseries_mean", "timeseries_std", "timeseries_median",
     "timeseries_print", "timeseries_print_file",
@@ -510,92 +503,6 @@ if TYPE_CHECKING:
 
     def pq_report(pqueue: Handle) -> int:
         """Print the native priority-queue text report to stdout."""
-        ...
-
-    # --- Datasets (cmb_dataset): tally statistics ------------------------------
-    def tally(dataset: Handle, value: float) -> int:
-        """Record an observation; returns the observation count."""
-        ...
-
-    def dataset_mean(dataset: Handle) -> float:
-        """Mean of the observations tallied so far."""
-        ...
-
-    def dataset_count(dataset: Handle) -> int:
-        """Number of observations tallied so far."""
-        ...
-
-    def dataset_min(dataset: Handle) -> float:
-        """Smallest observation tallied so far."""
-        ...
-
-    def dataset_max(dataset: Handle) -> float:
-        """Largest observation tallied so far."""
-        ...
-
-    def dataset_std(dataset: Handle) -> float:
-        """Sample standard deviation of the observations (0 if < 2)."""
-        ...
-
-    def dataset_median(dataset: Handle) -> float:
-        """Median of the observations tallied so far (0 if empty).
-        Sorts a copy of the data, so prefer calling it once per trial,
-        e.g. from the @model.collect callback."""
-        ...
-
-    def dataset_quantile(dataset: Handle, q: float) -> float:
-        """Quantile `q` in [0, 1] of the observations, by linear
-        interpolation over the sorted values (numpy's default method;
-        0 if empty). Sorts a copy of the data, so prefer calling it
-        once per trial, e.g. from the @model.collect callback."""
-        ...
-
-    def dataset_print_file(dataset: Handle, path: Handle,
-                           append: int = 1) -> int:
-        """Write raw dataset values to `path`."""
-        ...
-
-    def dataset_print(dataset: Handle) -> int:
-        """Print raw dataset values to stdout."""
-        ...
-
-    def dataset_fivenum_file(dataset: Handle, path: Handle,
-                             append: int = 1) -> int:
-        """Write the native dataset five-number summary to `path`."""
-        ...
-
-    def dataset_fivenum(dataset: Handle) -> int:
-        """Print the native dataset five-number summary to stdout."""
-        ...
-
-    def dataset_histogram_file(dataset: Handle, path: Handle,
-                               append: int = 1, bins: int = 20,
-                               low: float = 0.0, high: float = 0.0) -> int:
-        """Write the native dataset text histogram to `path`."""
-        ...
-
-    def dataset_histogram(dataset: Handle, bins: int = 20,
-                          low: float = 0.0, high: float = 0.0) -> int:
-        """Print the native dataset text histogram to stdout."""
-        ...
-
-    def dataset_correlogram_file(dataset: Handle, path: Handle,
-                                 append: int = 1, lags: int = 20) -> int:
-        """Write the native dataset ACF correlogram to `path`."""
-        ...
-
-    def dataset_correlogram(dataset: Handle, lags: int = 20) -> int:
-        """Print the native dataset ACF correlogram to stdout."""
-        ...
-
-    def dataset_pacf_correlogram_file(dataset: Handle, path: Handle,
-                                      append: int = 1,
-                                      lags: int = 20) -> int:
-        """Write the native dataset PACF correlogram to `path`."""
-        ...
-
-    def dataset_pacf_correlogram(dataset: Handle, lags: int = 20) -> int:
-        """Print the native dataset PACF correlogram to stdout."""
         ...
 
     # --- Timeseries histories ------------------------------------------------
@@ -1048,44 +955,6 @@ else:
     @njit
     def pq_report(pqueue):
         return pq_report_file(pqueue, 0, _np.uint64(1))
-
-    # Datasets (cmb_dataset)
-    tally = _b.dataset_add
-    dataset_mean = _b.dataset_mean
-    dataset_count = _b.dataset_count
-    dataset_min = _b.dataset_min
-    dataset_max = _b.dataset_max
-    dataset_std = _b.dataset_std
-    dataset_median = _b.dataset_median
-    dataset_quantile = _b.dataset_quantile
-    dataset_print_file = _b.dataset_print_file
-    dataset_fivenum_file = _b.dataset_fivenum_file
-    dataset_histogram_file = _b.dataset_histogram_file
-    dataset_correlogram_file = _b.dataset_correlogram_file
-    dataset_pacf_correlogram_file = _b.dataset_pacf_correlogram_file
-
-    @njit
-    def dataset_print(dataset):
-        return dataset_print_file(dataset, 0, _np.uint64(1))
-
-    @njit
-    def dataset_fivenum(dataset):
-        return dataset_fivenum_file(dataset, 0, _np.uint64(1))
-
-    @njit
-    def dataset_histogram(dataset, bins=20, low=0.0, high=0.0):
-        return dataset_histogram_file(dataset, 0, _np.uint64(1),
-                                      _np.uint64(bins), low, high)
-
-    @njit
-    def dataset_correlogram(dataset, lags=20):
-        return dataset_correlogram_file(dataset, 0, _np.uint64(1),
-                                        _np.uint64(lags))
-
-    @njit
-    def dataset_pacf_correlogram(dataset, lags=20):
-        return dataset_pacf_correlogram_file(dataset, 0, _np.uint64(1),
-                                             _np.uint64(lags))
 
     # Timeseries histories
     timeseries_count = _b.timeseries_count

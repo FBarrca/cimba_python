@@ -88,6 +88,13 @@ py.install_sources(
 )
 
 py.install_sources(
+    'src/cimba/_dataset/__init__.py',
+    'src/cimba/_dataset/helpers.py',
+    'src/cimba/_dataset/methods.py',
+    subdir: 'cimba/_dataset',
+)
+
+py.install_sources(
     'src/cimba/bootstrap/__init__.py',
     'src/cimba/bootstrap/_common.py',
     'src/cimba/bootstrap/_decompose.py',

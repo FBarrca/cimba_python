@@ -38,6 +38,7 @@ from ._components import (
     _component_process_methods,
     _lower_component_collect,
     _lower_component_process,
+    _lower_dataset_methods,
     _lower_model_component_refs,
 )
 from ._declarations import (
@@ -673,7 +674,8 @@ class Model:
             def lower_instance(index: int) -> Any:
                 return _lower_component_process(
                     decl.process_names[index], decl, method_name, method,
-                    _is_struct_class, instance_index=index)
+                    _is_struct_class, instance_index=index,
+                    model_dataset_fields=self.datasets)
 
             if field_kind == "spawnable":
                 spawn_field = decl.direct_field_map[method_name]
@@ -690,7 +692,8 @@ class Model:
                 decl,
                 lambda: _lower_component_process(
                     decl.name, decl, method_name, method, _is_struct_class,
-                    copies_per_instance=counts),
+                    copies_per_instance=counts,
+                    model_dataset_fields=self.datasets),
                 lower_instance)
             for fn, index in lowered:
                 if index is None:
@@ -707,10 +710,12 @@ class Model:
             lowered = self._lower_shared_or_per_instance(
                 decl,
                 lambda: _lower_component_collect(
-                    decl.name, decl, method_name, method, per_class=True),
+                    decl.name, decl, method_name, method, per_class=True,
+                    model_dataset_fields=self.datasets),
                 lambda index: _lower_component_collect(
                     decl.process_names[index], decl, method_name, method,
-                    instance_index=index))
+                    instance_index=index,
+                    model_dataset_fields=self.datasets))
             for fn, index in lowered:
                 self._component_collects.append(
                     (fn, decl.count if index is None else 1))
@@ -725,6 +730,13 @@ class Model:
         return _lower_model_component_refs(
             fn, model_name=self.name,
             component_roots=self._component_roots,
+        )
+
+    def _lower_dataset_methods(self, fn: _F) -> _F:
+        return _lower_dataset_methods(
+            fn,
+            model_name=self.name,
+            dataset_fields=self.datasets,
         )
 
     def _process_dag_blocks(
@@ -885,6 +897,7 @@ class Model:
                 raise ValueError(f"spawnable process '{name}' takes (env) "
                                  "or (env, view), not a copy index")
         fn = self._lower_component_refs(fn)
+        fn = self._lower_dataset_methods(fn)
         self._processes.append(_ProcDecl(name, fn, copies, priority,
                                          indexed, struct, injected,
                                          spawnable, spawn_field,
@@ -958,6 +971,7 @@ class Model:
             self._register_name(name, "predicate")
             field = f"_pred_{name}"
         fn = self._lower_component_refs(fn)
+        fn = self._lower_dataset_methods(fn)
         self._predicates.append((name, fn, field))
         return fn
 
@@ -982,6 +996,7 @@ class Model:
             self._register_name(name, "event")
             field = f"_ev_{name}"
         fn = self._lower_component_refs(fn)
+        fn = self._lower_dataset_methods(fn)
         self._events.append((name, fn, field, nargs == 2))
         return fn
 
@@ -994,6 +1009,7 @@ class Model:
         if self._compiled is not None:
             raise RuntimeError("model is already compiled")
         fn = self._lower_component_refs(fn)
+        fn = self._lower_dataset_methods(fn)
         self._collect = fn
         return fn
 

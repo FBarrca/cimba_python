@@ -1,4 +1,5 @@
 import cimba
+import pytest
 
 
 def test_data_summary_dataset_and_timeseries_match_native_semantics():
@@ -84,3 +85,26 @@ def test_data_helpers_copy_merge_reset_sort_and_correlations():
     assert len(series.pacf(1)) == 2
     series.reset()
     assert series.count == 0
+
+
+def test_dataset_dot_notation_metrics_and_report_files(tmp_path):
+    dataset = cimba.Dataset()
+    for value in (1.0, 2.0, 3.0, 4.0):
+        dataset.add(value)
+
+    assert dataset.count == 4
+    assert dataset.mean == 2.5
+    assert dataset.min == 1.0
+    assert dataset.max == 4.0
+    assert dataset.std == pytest.approx(1.2909944487358056)
+    assert dataset.stddev == pytest.approx(dataset.std)
+    assert dataset.median == 2.5
+    assert dataset.quantile(0.25) == pytest.approx(1.75)
+
+    report = tmp_path / "dataset.txt"
+    assert dataset.print_file(report, append=False) == 1
+    assert dataset.fivenum_file(report) == 1
+    assert dataset.histogram_file(report, bins=4, low=0.0, high=0.0) == 1
+    text = report.read_text()
+    assert "1" in text
+    assert "#" in text

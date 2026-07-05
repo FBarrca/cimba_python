@@ -109,7 +109,7 @@ A dataset collects samples:
 .. code-block:: python
 
    service_time = sim.exponential(env.mean_service)
-   sim.tally(env.service_times, service_time)
+   env.service_times.add(service_time)
    sim.hold(service_time)
 
 Use entity summaries, such as ``sim.mean_level(env.waiting_room)``, for

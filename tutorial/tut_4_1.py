@@ -22,7 +22,7 @@ Translation notes (C -> cimba.sim):
   process allocation -- the Python form of the C tutorial deriving struct
   ship from cmb_process -- and the process sees them through its
   annotated `shp: Ship` parameter.
-* A departing ship tallies its time in system, hands its own process
+* A departing ship records its time in system, hands its own process
   handle to the departures process through the `departed` store, and
   returns; the departures process sim.despawn()s it, corresponding to
   the C davyjones/departed-ships recycling path. Spawned leftovers are
@@ -37,10 +37,11 @@ Translation notes (C -> cimba.sim):
   harbormaster wake-up predicate and the ship rechecks its own docking
   test in a loop, catching the same race as the C code (another ship
   grabbing the tugs between wakeup and resumption).
-* Text reports, histograms, and time-series histories are exposed through
-  sim.dataset_*(), sim.timeseries_*(), and sim.*_report() helpers. This
-  runnable script keeps the console report compact over replicated trials;
-  the docs tutorial shows the fuller single-trial report style.
+* Dataset reports and histograms are exposed as dataset methods; time-series
+  histories and entity reports still use sim.timeseries_*() and
+  sim.*_report() helpers. This runnable script keeps the console report
+  compact over replicated trials; the docs tutorial shows the fuller
+  single-trial report style.
 
 Usage: uv run python tutorial/tut_4_1.py
 """
@@ -195,9 +196,9 @@ class ShipTraffic(sim.Component):
         # Datasets are reset when the measurement window opens, which
         # replaces the C version's explicit warmup-time check.
         if shp.size == LARGE:
-            sim.tally(self.time_large, sim.now() - shp.arrival)
+            self.time_large.add(sim.now() - shp.arrival)
         else:
-            sim.tally(self.time_small, sim.now() - shp.arrival)
+            self.time_small.add(sim.now() - shp.arrival)
         sim.store_put(self.departed, me)
 
     @sim.process
@@ -243,10 +244,10 @@ def harbormaster_called(env: Harbor) -> bool:
 
 @harbor.collect
 def harbor_stats(env: Harbor):
-    env.avg_time_small = sim.dataset_mean(env.traffic.time_small)
-    env.avg_time_large = sim.dataset_mean(env.traffic.time_large)
-    env.n_small = sim.dataset_count(env.traffic.time_small)
-    env.n_large = sim.dataset_count(env.traffic.time_large)
+    env.avg_time_small = env.traffic.time_small.mean()
+    env.avg_time_large = env.traffic.time_large.mean()
+    env.n_small = env.traffic.time_small.count()
+    env.n_large = env.traffic.time_large.count()
     env.tug_util = sim.pool_mean_in_use(env.facilities.tugs)
     env.berth_small_util = sim.pool_mean_in_use(env.facilities.berths_small)
     env.berth_large_util = sim.pool_mean_in_use(env.facilities.berths_large)

@@ -267,7 +267,7 @@ def test_bounded_queue_and_dataset_stats():
                 env.max_level = lvl
             if sim.space(env.q) + lvl != 5:
                 env.space_ok = 0.0
-            sim.tally(env.d, 1.0 * lvl)
+            env.d.add(1.0 * lvl)
             sim.hold(0.5)
 
     @model.process
@@ -278,9 +278,9 @@ def test_bounded_queue_and_dataset_stats():
 
     @model.collect
     def stats(env: Bounded):
-        env.d_min = sim.dataset_min(env.d)
-        env.d_max = sim.dataset_max(env.d)
-        env.d_std = sim.dataset_std(env.d)
+        env.d_min = env.d.min()
+        env.d_max = env.d.max()
+        env.d_std = env.d.std()
 
     exp = model.experiment(replications=1, duration=100.0, warmup=10.0,
                            seed=1)
@@ -307,16 +307,16 @@ def test_dataset_median_and_quantile():
     def feed(env: Quant):
         sim.hold(2.0)           # tally inside the measurement window
         for i in range(1, 7):
-            sim.tally(env.d, 1.0 * i)
+            env.d.add(1.0 * i)
         sim.suspend()
 
     @model.collect
     def stats(env: Quant):
-        env.med = sim.dataset_median(env.d)
-        env.q0 = sim.dataset_quantile(env.d, 0.0)
-        env.q25 = sim.dataset_quantile(env.d, 0.25)
-        env.q100 = sim.dataset_quantile(env.d, 1.0)
-        env.med_empty = sim.dataset_median(env.d_empty)
+        env.med = env.d.median()
+        env.q0 = env.d.quantile(0.0)
+        env.q25 = env.d.quantile(0.25)
+        env.q100 = env.d.quantile(1.0)
+        env.med_empty = env.d_empty.median()
 
     exp = model.experiment(replications=1, duration=10.0, warmup=1.0,
                            seed=1)
@@ -1056,7 +1056,7 @@ def test_native_timeseries_and_text_reports(tmp_path):
     @model.process
     def driver(env: Reports):
         for i in range(30):
-            sim.tally(env.d, float(i % 7))
+            env.d.add(float(i % 7))
             sim.put(env.q, 1)
             sim.hold(0.5)
             sim.get(env.q, 1)
@@ -1071,8 +1071,8 @@ def test_native_timeseries_and_text_reports(tmp_path):
         ok = sim.queue_report_file(env.q, report_handle, 0)
         ok += sim.timeseries_histogram_file(ts, report_handle, 1, 5, 0.0, 5.0)
         ok += sim.timeseries_pacf_correlogram_file(ts, report_handle, 1, 3)
-        ok += sim.dataset_histogram_file(env.d, report_handle, 1, 5, 0.0, 0.0)
-        ok += sim.dataset_pacf_correlogram_file(env.d, report_handle, 1, 3)
+        ok += env.d.histogram_file(report_handle, 1, 5, 0.0, 0.0)
+        ok += env.d.pacf_correlogram_file(report_handle, 1, 3)
         env.ok = float(ok)
 
     exp = model.experiment(replications=1, duration=40.0, warmup=0.0,
@@ -1099,7 +1099,7 @@ def test_native_reports_print_to_stdout():
     @model.process
     def driver(env: ConsoleReports):
         for i in range(12):
-            sim.tally(env.d, float(i % 3))
+            env.d.add(float(i % 3))
             sim.put(env.q, 1)
             sim.hold(0.25)
             sim.get(env.q, 1)
@@ -1111,7 +1111,7 @@ def test_native_reports_print_to_stdout():
         ts = sim.queue_history(env.q)
         ok = sim.queue_report(env.q)
         ok += sim.timeseries_histogram(ts, 3, 0.0, 3.0)
-        ok += sim.dataset_histogram(env.d, 3, 0.0, 0.0)
+        ok += env.d.histogram(bins=3, low=0.0, high=0.0)
         env.ok = float(ok)
 
     exp = model.experiment(replications=1, duration=10.0, warmup=0.0,

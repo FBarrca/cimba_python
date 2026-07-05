@@ -31,6 +31,7 @@ from libc.stdint cimport (
     INT64_MIN,
     UINT64_MAX,
     int64_t,
+    intptr_t,
     uint16_t,
     uint32_t,
     uint64_t,
@@ -57,6 +58,42 @@ cdef extern from "cmi_hashheap.h":
         const void *val2,
         const void *val3,
         const void *val4,
+    )
+
+
+cdef extern from "nbshim.h":
+    double cpy_dataset_mean(const void *dsp)
+    double cpy_dataset_stddev(const void *dsp)
+    double cpy_dataset_quantile(const void *dsp, double q)
+    uint64_t cpy_dataset_print_file(
+        const void *dsp,
+        intptr_t path,
+        uint64_t append,
+    )
+    uint64_t cpy_dataset_fivenum_file(
+        const void *dsp,
+        intptr_t path,
+        uint64_t append,
+    )
+    uint64_t cpy_dataset_histogram_file(
+        const void *dsp,
+        intptr_t path,
+        uint64_t append,
+        uint64_t num_bins,
+        double low_lim,
+        double high_lim,
+    )
+    uint64_t cpy_dataset_correlogram_file(
+        const void *dsp,
+        intptr_t path,
+        uint64_t append,
+        uint64_t n,
+    )
+    uint64_t cpy_dataset_pacf_correlogram_file(
+        const void *dsp,
+        intptr_t path,
+        uint64_t append,
+        uint64_t n,
     )
 
 

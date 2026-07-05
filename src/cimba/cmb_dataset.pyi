@@ -1,7 +1,12 @@
 """Typed surface for Cimba's cmb_dataset module."""
 
+from os import PathLike
+
 from ._types import _Count
 from .cmb_datasummary import DataSummary
+
+_Path = str | bytes | PathLike[str] | PathLike[bytes]
+
 
 class Dataset:
     """Resizable collection of unweighted float samples."""
@@ -62,8 +67,71 @@ class Dataset:
         ...
 
     @property
+    def mean(self) -> float:
+        """Mean of the stored samples."""
+        ...
+
+    @property
+    def std(self) -> float:
+        """Sample standard deviation of the stored samples."""
+        ...
+
+    @property
+    def stddev(self) -> float:
+        """Sample standard deviation of the stored samples."""
+        ...
+
+    @property
     def median(self) -> float:
         """Median of the stored samples."""
+        ...
+
+    def quantile(self, q: float) -> float:
+        """Return quantile q in [0, 1] using linear interpolation."""
+        ...
+
+    def print(self) -> int:
+        """Print raw dataset values to stdout."""
+        ...
+
+    def print_file(self, path: _Path, append: bool = True) -> int:
+        """Write raw dataset values to path."""
+        ...
+
+    def fivenum(self) -> int:
+        """Print the native five-number summary to stdout."""
+        ...
+
+    def fivenum_file(self, path: _Path, append: bool = True) -> int:
+        """Write the native five-number summary to path."""
+        ...
+
+    def histogram(self, bins: int = 20, low: float = 0.0,
+                  high: float = 0.0) -> int:
+        """Print the native text histogram to stdout."""
+        ...
+
+    def histogram_file(self, path: _Path, append: bool = True, bins: int = 20,
+                       low: float = 0.0, high: float = 0.0) -> int:
+        """Write the native text histogram to path."""
+        ...
+
+    def correlogram(self, lags: int = 20) -> int:
+        """Print the native ACF correlogram to stdout."""
+        ...
+
+    def correlogram_file(self, path: _Path, append: bool = True,
+                         lags: int = 20) -> int:
+        """Write the native ACF correlogram to path."""
+        ...
+
+    def pacf_correlogram(self, lags: int = 20) -> int:
+        """Print the native PACF correlogram to stdout."""
+        ...
+
+    def pacf_correlogram_file(self, path: _Path, append: bool = True,
+                              lags: int = 20) -> int:
+        """Write the native PACF correlogram to path."""
         ...
 
     def close(self) -> None:
