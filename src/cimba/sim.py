@@ -122,18 +122,21 @@ from numba import types as _nbtypes
 from . import _bindings as _b
 from ._intrinsics import ptr_caster as _ptr_caster
 from ._intrinsics import record_addr as _record_addr
-from ._model import (Component, Condition, Dataset, Env, Event, Experiment,
-                     FloatState, Handle, Model, Output, Param, Pool, PQueues,
-                     Predicate, ProcessDAG, ProcessDAGBlock, ProcessDAGEdge,
-                     ProcessDAGNode, Processes, Queue, Ref, Refs, Resource,
-                     Spawnable, State, Store, Struct, Trace, capacity,
-                     collect, count, process, trace_rng)
+from ._components import Component, collect, process
+from ._declarations import (Condition, Const, Dataset, Env, Event, FloatState,
+                            Handle, Output, Param, Pool, PQueues, Predicate,
+                            Processes, Queue, Ref, Refs, Resource, Spawnable,
+                            State, Store, Trace, capacity, count)
+from ._graph import (ProcessDAG, ProcessDAGBlock, ProcessDAGEdge,
+                     ProcessDAGNode)
+from ._model import Experiment, Model, Struct, trace_rng
 
 __all__ = [
     "Model", "Component", "Experiment", "Env", "Handle",
     "Param", "Output", "State", "FloatState", "Queue", "Resource", "Pool",
     "Store", "Dataset", "Condition", "Predicate", "Event", "Processes",
-    "PQueues", "Ref", "Refs", "Spawnable", "Struct", "Trace", "capacity",
+    "PQueues", "Ref", "Refs", "Const", "Spawnable", "Struct", "Trace",
+    "capacity",
     "collect", "count", "process", "trace_rng",
     "ProcessDAG", "ProcessDAGBlock", "ProcessDAGNode", "ProcessDAGEdge",
     "SUCCESS", "PREEMPTED", "INTERRUPTED", "STOPPED", "CANCELLED", "TIMEOUT",

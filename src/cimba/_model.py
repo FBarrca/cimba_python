@@ -39,40 +39,16 @@ from ._components import (
     _lower_component_collect,
     _lower_component_process,
     _lower_model_component_refs,
-    collect,
-    process,
 )
 from ._declarations import (
-    Condition,
-    Dataset,
-    Env,
-    Event,
-    FloatState,
     Handle,
-    Output,
-    Param,
-    Pool,
-    PQueues,
-    Predicate,
-    Processes,
-    Queue,
-    Ref,
-    Refs,
-    Resource,
-    Spawnable,
-    State,
-    Store,
-    Trace,
     _Capacities,
     _check_name,
     _FIELD_KINDS,
     _FieldDecl,
     _STANDARD_FIELDS,
-    capacity,
-    count,
 )
-from ._graph import (ProcessDAG, ProcessDAGBlock, ProcessDAGEdge,
-                     ProcessDAGNode, infer_process_dag)
+from ._graph import ProcessDAG, ProcessDAGBlock, infer_process_dag
 from ._intrinsics import addressof, ptr_caster
 
 _F = TypeVar("_F", bound=Callable[..., Any])
@@ -577,7 +553,9 @@ class Model:
         # (name, fn, env field holding the compiled address, takes_data)
         self._events: list[tuple[str, Callable[..., Any], str, bool]] = []
         self._collect: Callable[..., Any] | None = None
-        self._component_collects: list[Callable[..., Any]] = []
+        # (lowered collect, instance count); count > 1 collects take the
+        # instance index as their second argument
+        self._component_collects: list[tuple[Callable[..., Any], int]] = []
         self._compiled: _Compiled | None = None
         self._bind_components()
         self._register_component_processes()
@@ -660,40 +638,82 @@ class Model:
             for decl in root.walk():
                 self._register_component_decl_processes(decl)
 
+    @staticmethod
+    def _lower_shared_or_per_instance(
+        decl: _ComponentDecl,
+        lower_shared: Callable[[], Any],
+        lower_instance: Callable[[int], Any],
+    ) -> list[tuple[Any, int | None]]:
+        """Compile a component method once for the whole decl, taking the
+        copy index at runtime; index is None in the returned pairs. When
+        the shared lowering fails -- per-instance Ref targets that cannot
+        share one body -- fall back to one specialized function per
+        instance (which either succeeds or reproduces the real error)."""
+        if decl.count > 1:
+            try:
+                return [(lower_shared(), None)]
+            except ValueError:
+                pass
+        return [(lower_instance(index), index) for index in range(decl.count)]
+
     def _register_component_decl_processes(
         self, decl: _ComponentDecl,
     ) -> None:
+        """Lower and register one decl's process and collect methods.
+        Spawnable methods are always per-instance -- the spawn descriptor
+        is what identifies the instance at runtime."""
         components = self._component_bindings[decl.name]
-        for index, component in enumerate(components):
-            component_name = decl.process_names[index]
-            for method_name, method, spec in _component_process_methods(
-                    decl.cls):
-                copies = spec.resolve_copies(
-                    component, f"{component_name}.{method_name}")
-                field_kind = decl.decls.kind_of(method_name)
-                spawn_field = None
-                spawn_index = None
-                if field_kind == "spawnable":
-                    spawn_field = decl.direct_field_map[method_name]
-                    if decl.count > 1:
-                        spawn_index = index
-                process_field = None
-                process_offset = 0
-                if field_kind == "processes":
-                    process_field = decl.direct_field_map[method_name]
-                    process_offset = decl.process_offsets[method_name][index]
-                lowered = _lower_component_process(
-                    component_name, decl, index, method_name,
-                    method, _is_struct_class)
-                self.process(lowered, copies=copies,
-                             priority=spec.priority,
-                             _spawn_field=spawn_field,
-                             _spawn_index=spawn_index,
+        for method_name, method, spec in _component_process_methods(decl.cls):
+            counts = tuple(
+                spec.resolve_copies(
+                    component, f"{decl.process_names[index]}.{method_name}")
+                for index, component in enumerate(components))
+            field_kind = decl.decls.kind_of(method_name)
+
+            def lower_instance(index: int) -> Any:
+                return _lower_component_process(
+                    decl.process_names[index], decl, method_name, method,
+                    _is_struct_class, instance_index=index)
+
+            if field_kind == "spawnable":
+                spawn_field = decl.direct_field_map[method_name]
+                for index in range(decl.count):
+                    self.process(
+                        lower_instance(index), copies=counts[index],
+                        priority=spec.priority, _spawn_field=spawn_field,
+                        _spawn_index=index if decl.count > 1 else None)
+                continue
+
+            process_field = (decl.direct_field_map[method_name]
+                             if field_kind == "processes" else None)
+            lowered = self._lower_shared_or_per_instance(
+                decl,
+                lambda: _lower_component_process(
+                    decl.name, decl, method_name, method, _is_struct_class,
+                    copies_per_instance=counts),
+                lower_instance)
+            for fn, index in lowered:
+                if index is None:
+                    copies, offset = sum(counts), 0
+                else:
+                    copies = counts[index]
+                    offset = (decl.process_offsets[method_name][index]
+                              if process_field is not None else 0)
+                self.process(fn, copies=copies, priority=spec.priority,
                              _process_field=process_field,
-                             _process_offset=process_offset)
-            for method_name, method in _component_collect_methods(decl.cls):
-                self._component_collects.append(_lower_component_collect(
-                    component_name, decl, index, method_name, method))
+                             _process_offset=offset)
+
+        for method_name, method in _component_collect_methods(decl.cls):
+            lowered = self._lower_shared_or_per_instance(
+                decl,
+                lambda: _lower_component_collect(
+                    decl.name, decl, method_name, method, per_class=True),
+                lambda index: _lower_component_collect(
+                    decl.process_names[index], decl, method_name, method,
+                    instance_index=index))
+            for fn, index in lowered:
+                self._component_collects.append(
+                    (fn, decl.count if index is None else 1))
 
     @property
     def _component_roots(self) -> dict[str, _ComponentDecl]:
@@ -978,12 +998,14 @@ class Model:
         return fn
 
     @property
-    def _collects(self) -> list[Callable[..., Any]]:
-        """All end-of-trial collect functions in execution order:
-        component-owned collects first, the model-level one last."""
+    def _collects(self) -> list[tuple[Callable[..., Any], int]]:
+        """All end-of-trial collect functions in execution order --
+        component-owned collects first, the model-level one last -- each
+        with the number of instances it is called for (multi-instance
+        collects take the instance index as their second argument)."""
         fns = list(self._component_collects)
         if self._collect is not None:
-            fns.append(self._collect)
+            fns.append((self._collect, 1))
         return fns
 
     def _register_name(self, name: str, kind: str) -> None:
@@ -1164,7 +1186,7 @@ class Model:
                        for _n, fn, field in self._predicates}
         event_cfuncs = {field: make_event(njit(fn), takes_data)
                         for _n, fn, field, takes_data in self._events}
-        collect_inners = [njit(fn) for fn in self._collects]
+        collect_inners = [njit(fn) for fn, _count in self._collects]
         return proc_cfuncs, pred_cfuncs, event_cfuncs, collect_inners
 
     def _codegen_namespace(self, proc_cfuncs: dict[str, Any],
@@ -1300,7 +1322,12 @@ class Model:
                         "    process_start(p)",
                         f"    {self._handle_expr(p, i)} = p"]
         src += ["    event_queue_execute()"]
-        src += [f"    COLLECT_{i}(env)" for i in range(len(self._collects))]
+        for k, (_fn, instances) in enumerate(self._collects):
+            if instances == 1:
+                src += [f"    COLLECT_{k}(env)"]
+            else:
+                src += [f"    COLLECT_{k}(env, {i})"
+                        for i in range(instances)]
         for h in handles:
             src += [f"    process_terminate({h})",
                     f"    process_destroy({h})"]

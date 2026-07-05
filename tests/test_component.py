@@ -153,7 +153,7 @@ def test_component_collect_assigns_own_outputs():
         station: Station = Station()
 
     model = Network()
-    (lowered,) = model._component_collects
+    ((lowered, _instances),) = model._component_collects
     assert "env.station__queue" in lowered.__cimba_source__
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
                            seed=21)
@@ -773,6 +773,8 @@ def test_component_collection_trace_callable_returns_component_rows():
 
 def test_component_collection_processes_run_per_item_with_symbolic_copies():
     class Attraction(sim.Component):
+        queue_count: sim.Const[int]
+        server_count: sim.Const[int]
         done: sim.State
         lanes: sim.PQueues = sim.count("queue_count")
 
@@ -796,10 +798,15 @@ def test_component_collection_processes_run_per_item_with_symbolic_copies():
         ]
 
     model = Park()
-    assert [(p.name, p.copies, p.priority) for p in model._processes] == [
-        ("attractions__0__server", 1, 6),
-        ("attractions__1__server", 2, 6),
+    # The collection's copies are compiled into one indexed process; the
+    # per-item copy counts sum, and the copy index is mapped back to the
+    # owning item at runtime through a generated table.
+    assert [(p.name, p.copies, p.priority, p.indexed)
+            for p in model._processes] == [
+        ("attractions__server", 3, 6, True),
     ]
+    assert "_CIMBA_PROCINST_attractions__server" in \
+        model._processes[0].fn.__cimba_source__
 
     @model.collect
     def collect_stats(env: Park):
@@ -854,8 +861,7 @@ def test_component_collection_process_dag_uses_lowered_source():
     assert block.name == "attractions"
     assert block.kind == "component_collection"
     assert set(block.members) >= {
-        "process:attractions__0__server",
-        "process:attractions__1__server",
+        "process:attractions__server",
         "pqueues:attractions__lanes",
         "state:attractions__visits",
     }
@@ -935,9 +941,9 @@ def test_component_collection_can_own_nested_component_processes():
         ]
 
     model = Park()
-    assert [(p.name, p.copies, p.priority) for p in model._processes] == [
-        ("attractions__0__servers__server", 1, 3),
-        ("attractions__1__servers__server", 2, 3),
+    assert [(p.name, p.copies, p.priority, p.indexed)
+            for p in model._processes] == [
+        ("attractions__servers__server", 3, 3, True),
     ]
     assert model.dtype["attractions__servers__done"].shape == (2,)
     assert isinstance(model.attractions[0].servers, Servers)
@@ -1156,6 +1162,8 @@ def test_scalar_component_can_own_process_handles():
 
 def test_component_collection_can_own_ragged_process_handles():
     class Team(sim.Component):
+        worker_count: sim.Const[int]
+        base: sim.Const[int]
         total: sim.State
         worker: sim.Processes
 
@@ -1193,14 +1201,11 @@ def test_component_collection_can_own_ragged_process_handles():
     assert "env.teams__worker[3]" in model._processes[-1].fn.__cimba_source__
 
     graph = model.process_dag()
+    # Both instances' workers share one compiled process; the supervisor's
+    # interrupts of specific handles map to that single graph node.
     assert sim.ProcessDAGEdge(
         "process:supervisor",
-        "process:teams__0__worker",
-        "interrupt",
-    ) in graph.edges
-    assert sim.ProcessDAGEdge(
-        "process:supervisor",
-        "process:teams__1__worker",
+        "process:teams__worker",
         "interrupt",
     ) in graph.edges
 
@@ -1359,12 +1364,12 @@ def test_component_owned_spawnable_process_dag_edges():
 
     graph = Network().process_dag()
     edges = {(edge.source, edge.target, edge.label) for edge in graph.edges}
-    assert ("process:flows__0__launch", "process:flows__0__worker",
-            "spawn") in edges
-    assert ("process:flows__1__launch", "process:flows__1__worker",
-            "spawn") in edges
-    assert ("process:flows__0__launch", "process:flows__1__worker",
-            "spawn") not in edges
+    # The launcher is compiled once for the collection and spawns whichever
+    # item's worker its runtime instance selects, so it reaches both.
+    assert {
+        ("process:flows__launch", "process:flows__0__worker", "spawn"),
+        ("process:flows__launch", "process:flows__1__worker", "spawn"),
+    } <= edges
 
 
 def test_component_spawnable_declaration_errors_are_rejected():
@@ -1535,6 +1540,27 @@ def test_component_collection_declaration_errors_are_rejected():
     with pytest.raises(ValueError, match="same-named @sim.process"):
         MissingWorkerModel()
 
+    class MissingConst(sim.Component):
+        count: sim.Const[int]
+
+    class MissingConstModel(sim.Model):
+        items: list[MissingConst] = [MissingConst()]
+
+    with pytest.raises(ValueError, match="constant 'count'"):
+        MissingConstModel()
+
+    class BadConst(sim.Component):
+        count: sim.Const[int]
+
+        def __init__(self):
+            self.count = 1.5
+
+    class BadConstModel(sim.Model):
+        item: BadConst = BadConst()
+
+    with pytest.raises(ValueError, match="constant 'count' must be int"):
+        BadConstModel()
+
 
 def test_component_collection_namespace_errors_are_rejected():
     class Item(sim.Component):
@@ -1686,13 +1712,12 @@ def test_component_wiring_declaration_errors_are_rejected():
 
         KindMismatch()
 
-    stray = Stage()
+    orphan = Stage()
     with pytest.raises(ValueError, match="not declared on the model"):
-        class ForwardRef(sim.Model):
-            a: Stage = Stage(inbox=stray.outbox)
-            b: Stage = stray
+        class OrphanTarget(sim.Model):
+            a: Stage = Stage(inbox=orphan.outbox)
 
-        ForwardRef()
+        OrphanTarget()
 
     with pytest.raises(ValueError,
                        match="not supported for collections"):
@@ -1717,6 +1742,45 @@ def test_component_wiring_declaration_errors_are_rejected():
             c: Stage = Stage(inbox=shared.outbox)
 
         Ambiguous()
+
+
+def test_component_wiring_allows_forward_targets_and_chains():
+    # Wiring is resolved after the whole tree is built, so a field may be
+    # wired to a target declared later on the model.
+    first_stage = Stage()
+    second_stage = Stage(inbox=first_stage.outbox)
+    third_stage = Stage(inbox=second_stage.inbox)
+
+    class Line(sim.Model):
+        third: Stage = third_stage
+        second: Stage = second_stage
+        first: Stage = first_stage
+
+    model = Line()
+    decls = {decl.name: decl for decl in model._component_decls}
+    assert decls["second"].direct_field_map["inbox"] == "first__outbox"
+    assert decls["third"].direct_field_map["inbox"] == "first__outbox"
+    assert decls["second"].aliased_fields == ("inbox",)
+    # Wired fields declare no entity of their own.
+    assert "second__inbox" not in model.dtype.fields
+    assert "third__inbox" not in model.dtype.fields
+
+
+def test_component_wiring_cycle_is_rejected():
+    left_stage, right_stage = Stage(), Stage()
+    # Capture the field references before assigning, so each stage's inbox
+    # names the other's inbox -- a cycle with no backing entity.
+    left_inbox = left_stage.inbox
+    right_inbox = right_stage.inbox
+    left_stage.inbox = right_inbox
+    right_stage.inbox = left_inbox
+
+    class Cycle(sim.Model):
+        left: Stage = left_stage
+        right: Stage = right_stage
+
+    with pytest.raises(ValueError, match="wiring cycle"):
+        Cycle()
 
 
 def test_component_field_access_outside_model_returns_wiring_ref():

@@ -8,8 +8,8 @@ Use :mod:`cimba.sim` for modeling. A model is a :class:`~cimba.sim.Model`
 subclass whose annotated fields are typed by their simulation role:
 
 ``Model``, ``Component``, ``Experiment``, ``Env``, ``Handle``, ``Param``,
-``Output``, ``State``, ``FloatState``, ``Queue``, ``Resource``, ``Pool``,
-``Store``, ``Dataset``, ``Condition``, ``Predicate``, ``Event``,
+``Output``, ``State``, ``FloatState``, ``Const``, ``Queue``, ``Resource``,
+``Pool``, ``Store``, ``Dataset``, ``Condition``, ``Predicate``, ``Event``,
 ``Processes``, ``PQueues``, ``Ref``, ``Refs``, ``Spawnable``, ``Struct``,
 ``Trace``, ``capacity()``, ``count()``, ``process()``, ``collect()``.
 

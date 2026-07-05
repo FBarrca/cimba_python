@@ -19,9 +19,6 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, get_type_hints
 
-import numpy as np
-from numpy.typing import NDArray
-
 from numba import carray, types
 from numba.extending import overload as _nb_overload
 
@@ -132,6 +129,8 @@ class _Declarations:
         #: Ref / Refs annotations (Component classes only): name -> target
         self.refs: dict[str, Any] = {}
         self.ref_tables: dict[str, Any] = {}
+        #: Const annotations (Component classes only): name -> declared type
+        self.consts: dict[str, type] = {}
         #: component tree roots (Model classes only)
         self.components: list[Any] = []
         self.component_collections: list[Any] = []
@@ -160,6 +159,9 @@ class _Declarations:
 if TYPE_CHECKING:
     from typing import Union
 
+    import numpy as np
+    from numpy.typing import NDArray
+
     Param = float        #: swept input, set by experiment()
     Output = float       #: result, written by the model
     State = int          #: mutable per-trial counter
@@ -184,10 +186,16 @@ if TYPE_CHECKING:
     #: indexable table of component references; Refs[Station][i]
     #: type-checks as Station
     Refs = Sequence
+    #: per-instance constant read inside component code; Const[int]
+    #: type-checks as int
+    Const = Union
 
     class _RefHint:
         target: Any
         table: bool
+
+    class _ConstHint:
+        type: Any
 
     class Trace:
         """Per-trial replay array, fed to experiment(); inside model code
@@ -256,6 +264,25 @@ else:
         def __class_getitem__(cls, target):
             return _RefHint(target, table=True)
 
+    class _ConstHint:
+        """Annotation marker produced by ``Const[type]``."""
+
+        __slots__ = ("type",)
+
+        def __init__(self, type_):
+            self.type = type_
+
+    class Const:
+        """A per-instance constant read inside component code, e.g.
+        ``rate: sim.Const[int]``. The value is set on the instance
+        (usually in ``__init__``) and baked into the compiled model --
+        specialized to a literal when one instance is compiled, or read
+        from a per-instance table when a collection shares one compiled
+        body."""
+
+        def __class_getitem__(cls, type_):
+            return _ConstHint(type_)
+
     class _Capacity:
         def __init__(self, cap):
             self.cap = cap
@@ -323,6 +350,14 @@ def _field_declarations(
             _check_name(fname, "ref")
             (decls.ref_tables if hint.table else decls.refs)[fname] = \
                 hint.target
+            continue
+        if isinstance(hint, _ConstHint):
+            if not allow_refs:
+                raise ValueError(
+                    f"field '{fname}': Const declarations are only "
+                    "supported on Component classes")
+            _check_name(fname, "const")
+            decls.consts[fname] = hint.type
             continue
         try:
             kind = _DECL_KINDS.get(hint)

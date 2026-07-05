@@ -1279,10 +1279,9 @@ per-attraction primitive constants captured from ``__init__``.
 The top-level model is now mostly composition:
 
 The list annotation below creates a component collection. Cimba instantiates one
-lowered process namespace per item, so the nine attraction templates become
-processes such as ``attractions__0__server`` and ``attractions__8__server``.
-Their queue arrays are stored together, but source code can still index them by
-attraction.
+lowered process namespace for the collection, so the nine attraction templates
+share an indexed process such as ``attractions__server``. Their queue arrays are
+stored together, and source code can still index them by attraction.
 
 .. code-block:: python
 

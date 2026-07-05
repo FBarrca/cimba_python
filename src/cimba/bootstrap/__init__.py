@@ -58,5 +58,6 @@ from .demand import intermittent
 from .model import residual, sieve, wild
 from .panel import joint
 
-__all__ = ["iid", "moving_block", "circular_block", "stationary",
-           "residual", "wild", "sieve", "intermittent", "joint"]
+__all__ = ["TraceGenerator", "iid", "moving_block", "circular_block",
+           "stationary", "residual", "wild", "sieve", "intermittent",
+           "joint"]

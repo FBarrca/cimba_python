@@ -31,6 +31,23 @@ constructed, Cimba Python lowers those methods into ordinary model processes.
 Inside the method, ``self.waiting`` and ``self.completed`` refer to the
 component-owned fields for this trial.
 
+Primitive per-instance settings can be marked explicitly with ``sim.Const``.
+Constants are captured from each component instance at model construction time
+and lowered as compile-time values or small lookup tables:
+
+.. code-block:: python
+
+   class Desk(sim.Component):
+       server_count: sim.Const[int]
+       waiting: sim.Queue
+
+       def __init__(self, server_count: int):
+           self.server_count = server_count
+
+       @sim.process(copies="server_count")
+       def clerk(self, env, idx):
+           ...
+
 Component-owned statistics
 --------------------------
 
@@ -159,10 +176,11 @@ from it, so parts flow down the line without hand-written routing processes.
 Unwired fields (the first inbox, the last outbox) stay ordinary stores that
 model-level processes can feed and drain.
 
-Wiring targets must be declared on the model before the component that
-references them, both fields must have the same kind, and wired fields do not
-appear in the trial table (use the target's flattened name, e.g.
-``station_1__outbox``). Component collections cannot be wired yet.
+Wiring targets must be declared somewhere on the model, both fields must have
+the same kind, and wired fields do not appear in the trial table (use the
+target's flattened name, e.g. ``station_1__outbox``). Wiring chains are resolved
+to the final target after the component tree is built. Component collections
+cannot be wired yet.
 
 Routing with component references
 ---------------------------------
@@ -226,7 +244,8 @@ indexing:
 Model callbacks can follow references too (``env.dispatch.routes[1].inbox``,
 ``env.stations[j].downstream.inbox``). A fixed ``sim.Ref`` may target any
 declared component; following a reference under a *dynamic* collection index
-additionally requires every item to reference the same component declaration.
+requires every item to reference the same component declaration. Component
+methods that need mixed per-instance targets are lowered per instance instead.
 
 Prefer wiring for fixed linear flows (one shared entity, no extra hop) and
 references when the model routes items among alternatives at runtime.
