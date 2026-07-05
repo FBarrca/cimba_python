@@ -76,6 +76,13 @@ py.install_sources(
 )
 
 py.install_sources(
+    'src/cimba/_timeseries/__init__.py',
+    'src/cimba/_timeseries/helpers.py',
+    'src/cimba/_timeseries/methods.py',
+    subdir: 'cimba/_timeseries',
+)
+
+py.install_sources(
     'src/cimba/bootstrap/__init__.py',
     'src/cimba/bootstrap/_common.py',
     'src/cimba/bootstrap/_decompose.py',

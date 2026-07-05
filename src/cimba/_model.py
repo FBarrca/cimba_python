@@ -39,6 +39,7 @@ from ._components import (
     _lower_component_collect,
     _lower_component_process,
     _lower_dataset_methods,
+    _lower_history_methods,
     _lower_model_component_refs,
 )
 from ._declarations import (
@@ -511,6 +512,12 @@ class Model:
         self.traces: list[str] = decls.names("trace")
         self.pqueues: dict[str, int] = {
             f.name: f.count for f in decls.by_kind("pqueues")}
+        #: declared entity field name -> native binding prefix, for fields
+        #: whose ``.history`` compiles to a native timeseries lookup.
+        self.history_fields: dict[str, str] = {
+            f.name: f.kind.binding
+            for f in decls.by_kind("queue", "resource", "pool", "store",
+                                   "pqueues")}
         self._predicate_fields: list[str] = decls.names("predicate")
         self._event_fields: list[str] = decls.names("event")
         self._process_fields: list[str] = decls.names("processes")
@@ -676,7 +683,8 @@ class Model:
                 return _lower_component_process(
                     decl.process_names[index], decl, method_name, method,
                     _is_struct_class, instance_index=index,
-                    model_dataset_fields=self.datasets)
+                    model_dataset_fields=self.datasets,
+                    model_history_fields=self.history_fields)
 
             if field_kind == "spawnable":
                 spawn_field = decl.direct_field_map[method_name]
@@ -694,7 +702,8 @@ class Model:
                 lambda: _lower_component_process(
                     decl.name, decl, method_name, method, _is_struct_class,
                     copies_per_instance=counts,
-                    model_dataset_fields=self.datasets),
+                    model_dataset_fields=self.datasets,
+                    model_history_fields=self.history_fields),
                 lower_instance)
             for fn, index in lowered:
                 if index is None:
@@ -712,11 +721,13 @@ class Model:
                 decl,
                 lambda: _lower_component_collect(
                     decl.name, decl, method_name, method, per_class=True,
-                    model_dataset_fields=self.datasets),
+                    model_dataset_fields=self.datasets,
+                    model_history_fields=self.history_fields),
                 lambda index: _lower_component_collect(
                     decl.process_names[index], decl, method_name, method,
                     instance_index=index,
-                    model_dataset_fields=self.datasets))
+                    model_dataset_fields=self.datasets,
+                    model_history_fields=self.history_fields))
             for fn, index in lowered:
                 self._component_collects.append(
                     (fn, decl.count if index is None else 1))
@@ -738,6 +749,13 @@ class Model:
             fn,
             model_name=self.name,
             dataset_fields=self.datasets,
+        )
+
+    def _lower_history_methods(self, fn: _F) -> _F:
+        return _lower_history_methods(
+            fn,
+            model_name=self.name,
+            history_fields=self.history_fields,
         )
 
     def _lower_random_calls(self, fn: _F) -> _F:
@@ -905,6 +923,7 @@ class Model:
                                  "or (env, view), not a copy index")
         fn = self._lower_component_refs(fn)
         fn = self._lower_dataset_methods(fn)
+        fn = self._lower_history_methods(fn)
         fn = self._lower_random_calls(fn)
         self._processes.append(_ProcDecl(name, fn, copies, priority,
                                          indexed, struct, injected,
@@ -980,6 +999,7 @@ class Model:
             field = f"_pred_{name}"
         fn = self._lower_component_refs(fn)
         fn = self._lower_dataset_methods(fn)
+        fn = self._lower_history_methods(fn)
         fn = self._lower_random_calls(fn)
         self._predicates.append((name, fn, field))
         return fn
@@ -1006,6 +1026,7 @@ class Model:
             field = f"_ev_{name}"
         fn = self._lower_component_refs(fn)
         fn = self._lower_dataset_methods(fn)
+        fn = self._lower_history_methods(fn)
         fn = self._lower_random_calls(fn)
         self._events.append((name, fn, field, nargs == 2))
         return fn
@@ -1020,6 +1041,7 @@ class Model:
             raise RuntimeError("model is already compiled")
         fn = self._lower_component_refs(fn)
         fn = self._lower_dataset_methods(fn)
+        fn = self._lower_history_methods(fn)
         fn = self._lower_random_calls(fn)
         self._collect = fn
         return fn

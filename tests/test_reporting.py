@@ -125,19 +125,18 @@ def test_native_text_report_file_variants_cover_dataset_methods(tmp_path):
 
     @model.collect
     def collect(env: ReportingModel):
-        ts = sim.queue_history(env.q)
-        env.n = float(sim.timeseries_count(ts))
+        env.n = float(env.q.history().count())
         ok = sim.queue_report_file(env.q, report_handle, 0)
         ok += sim.resource_report_file(env.resource, report_handle, 1)
         ok += sim.pool_report_file(env.pool, report_handle, 1)
         ok += sim.store_report_file(env.store, report_handle, 1)
         ok += sim.pq_report_file(env.pqs[0], report_handle, 1)
-        ok += sim.timeseries_print_file(ts, report_handle, 1)
-        ok += sim.timeseries_fivenum_file(ts, report_handle, 1)
-        ok += sim.timeseries_histogram_file(ts, report_handle, 1,
-                                            4, 0.0, 4.0)
-        ok += sim.timeseries_correlogram_file(ts, report_handle, 1, 2)
-        ok += sim.timeseries_pacf_correlogram_file(ts, report_handle, 1, 2)
+        ok += env.q.history().print_file(report_handle, 1)
+        ok += env.q.history().fivenum_file(report_handle, 1)
+        ok += env.q.history().histogram_file(report_handle, 1,
+                                             4, 0.0, 4.0)
+        ok += env.q.history().correlogram_file(report_handle, 1, 2)
+        ok += env.q.history().pacf_correlogram_file(report_handle, 1, 2)
         ok += env.d.print_file(report_handle, 1)
         ok += env.d.fivenum_file(report_handle, 1)
         ok += env.d.histogram_file(report_handle, 1, 4, 0.0, 0.0)
@@ -160,18 +159,67 @@ def test_native_text_report_file_variants_cover_dataset_methods(tmp_path):
     assert "-1.0" in text and "1.0" in text
 
 
+def test_timeseries_history_method_compiles_in_model_callbacks():
+    model = build_reporting_model()
+
+    @model.collect
+    def collect(env: ReportingModel):
+        env.n = float(env.q.history().count())
+        env.ok = env.q.history().mean() + env.pqs[0].history().mean()
+
+    exp = model.experiment(replications=1, duration=5.0, warmup=0.0, seed=17)
+    assert exp.run() == 0
+    assert exp["n"][0] >= 3.0
+    assert exp["ok"][0] > 0.0
+
+
+def test_timeseries_history_method_compiles_in_components():
+    class Station(sim.Component):
+        q: sim.Queue = sim.capacity(5)
+        resource: sim.Resource
+        mean_qlen: sim.Output
+        qcount: sim.Output
+        mean_in_use: sim.Output
+
+        @sim.process
+        def driver(self, env):
+            sim.put(self.q, 2)
+            sim.acquire(self.resource)
+            sim.hold(1.0)
+            sim.get(self.q, 1)
+            sim.release(self.resource)
+            sim.hold(1.0)
+            sim.get(self.q, 1)
+            sim.suspend()
+
+        @sim.collect
+        def collect(self, env):
+            self.mean_qlen = self.q.history().mean()
+            self.qcount = float(self.q.history().count())
+            self.mean_in_use = self.resource.history().mean()
+
+    class Clinic(sim.Model):
+        station: Station = Station()
+
+    model = Clinic()
+    exp = model.experiment(replications=1, duration=5.0, warmup=0.0, seed=17)
+    assert exp.run() == 0
+    assert exp["station__qcount"][0] == 5.0
+    assert exp["station__mean_qlen"][0] > 0.0
+    assert exp["station__mean_in_use"][0] > 0.0
+
+
 def test_native_text_report_stdout_variants_print_to_console():
     model = build_reporting_model()
 
     @model.collect
     def collect(env: ReportingModel):
-        ts = sim.queue_history(env.q)
         ok = sim.queue_report(env.q)
         ok += sim.resource_report(env.resource)
         ok += sim.pool_report(env.pool)
         ok += sim.store_report(env.store)
         ok += sim.pq_report(env.pqs[0])
-        ok += sim.timeseries_histogram(ts, 4, 0.0, 4.0)
+        ok += env.q.history().histogram(4, 0.0, 4.0)
         ok += env.d.histogram(4, 0.0, 0.0)
         env.ok = float(ok)
 

@@ -1098,12 +1098,11 @@ def test_native_timeseries_and_text_reports(tmp_path):
 
     @model.collect
     def collect(env: Reports):
-        ts = sim.queue_history(env.q)
-        env.n = float(sim.timeseries_count(ts))
-        env.mean = sim.timeseries_mean(ts)
+        env.n = float(env.q.history().count())
+        env.mean = env.q.history().mean()
         ok = sim.queue_report_file(env.q, report_handle, 0)
-        ok += sim.timeseries_histogram_file(ts, report_handle, 1, 5, 0.0, 5.0)
-        ok += sim.timeseries_pacf_correlogram_file(ts, report_handle, 1, 3)
+        ok += env.q.history().histogram_file(report_handle, 1, 5, 0.0, 5.0)
+        ok += env.q.history().pacf_correlogram_file(report_handle, 1, 3)
         ok += env.d.histogram_file(report_handle, 1, 5, 0.0, 0.0)
         ok += env.d.pacf_correlogram_file(report_handle, 1, 3)
         env.ok = float(ok)
@@ -1141,9 +1140,8 @@ def test_native_reports_print_to_stdout():
 
     @model.collect
     def collect(env: ConsoleReports):
-        ts = sim.queue_history(env.q)
         ok = sim.queue_report(env.q)
-        ok += sim.timeseries_histogram(ts, 3, 0.0, 3.0)
+        ok += env.q.history().histogram(3, 0.0, 3.0)
         ok += env.d.histogram(bins=3, low=0.0, high=0.0)
         env.ok = float(ok)
 

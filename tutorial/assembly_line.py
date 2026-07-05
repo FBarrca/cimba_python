@@ -166,16 +166,14 @@ def build_model(raw_dir: Path) -> AssemblyLine:
         env.max_cycle_time = env.cycle_time.max()
         env.throughput_rate = completed / env.duration_s
         env.avg_number_in_system = sim.mean_level(env.system)
-        env.max_number_in_system = sim.timeseries_max(
-            sim.queue_history(env.system)
-        )
+        env.max_number_in_system = env.system.history().max()
         env.final_number_in_system = sim.level(env.system)
 
         env.cycle_time.print_file(cycle_file, 0)
         env.station_1.wait_time.print_file(wait_files[0], 0)
         env.station_2.wait_time.print_file(wait_files[1], 0)
         env.station_3.wait_time.print_file(wait_files[2], 0)
-        sim.timeseries_print_file(sim.queue_history(env.system), system_file, 0)
+        env.system.history().print_file(system_file, 0)
 
     return model
 

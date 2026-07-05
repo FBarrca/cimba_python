@@ -380,8 +380,7 @@ For example, the following two assignments are equivalent:
     def collect_stats(env: MM1):
         env.avg_queue_length = sim.mean_level(env.queue)
 
-        queue_ts = sim.queue_history(env.queue)
-        env.avg_queue_length = sim.timeseries_mean(queue_ts)
+        env.avg_queue_length = env.queue.history().mean()
 
 The explicit history form also gives access to text reports and diagnostic
 plots. During a single-trial debugging run, print the queue report and a partial
@@ -391,10 +390,9 @@ autocorrelation correlogram directly from the collector:
 
     @model.collect
     def collect_stats(env: MM1):
-        history = sim.queue_history(env.queue)
-        env.avg_queue_length = sim.timeseries_mean(history)
+        env.avg_queue_length = env.queue.history().mean()
         sim.queue_report(env.queue)
-        sim.timeseries_pacf_correlogram(history, lags=20)
+        env.queue.history().pacf_correlogram(lags=20)
 
 Very shortly thereafter, output appears. This block is from an actual run of
 ``.venv/bin/python tutorial/tut_1_4.py``:
@@ -1878,9 +1876,8 @@ collector:
         sim.pool_report(env.facilities.berths_large)
         sim.resource_report(env.facilities.comms)
 
-        tug_history = sim.pool_history(env.facilities.tugs)
-        sim.timeseries_fivenum(tug_history)
-        sim.timeseries_histogram(tug_history, bins=20)
+        env.facilities.tugs.history().fivenum()
+        env.facilities.tugs.history().histogram(bins=20)
 
 Output from a single report-oriented run will contain sections like:
 

@@ -152,26 +152,18 @@ __all__ = [
     "event_priority", "current_event", "event_count", "clear_events",
     "held", "pool_held",
     "pq_put", "pq_get", "pq_take", "pq_length", "pq_space", "pq_position",
-    "pq_reprioritize", "pq_cancel", "pq_mean_length", "pq_history",
+    "pq_reprioritize", "pq_cancel", "pq_mean_length",
     "pq_report", "pq_report_file",
-    "put", "get", "level", "space", "mean_level", "queue_history",
+    "put", "get", "level", "space", "mean_level",
     "queue_report", "queue_report_file",
     "acquire", "release", "preempt", "available", "in_use", "mean_in_use",
-    "resource_history", "resource_report", "resource_report_file",
+    "resource_report", "resource_report_file",
     "pool_acquire", "pool_release", "pool_preempt", "pool_available",
-    "pool_in_use", "pool_mean_in_use", "pool_history", "pool_report",
+    "pool_in_use", "pool_mean_in_use", "pool_report",
     "pool_report_file",
     "store_put", "store_get", "store_take", "store_length", "store_space",
-    "store_position", "store_mean_length", "store_history",
+    "store_position", "store_mean_length",
     "store_report", "store_report_file",
-    "timeseries_count", "timeseries_min", "timeseries_max",
-    "timeseries_mean", "timeseries_std", "timeseries_median",
-    "timeseries_print", "timeseries_print_file",
-    "timeseries_fivenum", "timeseries_fivenum_file",
-    "timeseries_histogram", "timeseries_histogram_file",
-    "timeseries_correlogram", "timeseries_correlogram_file",
-    "timeseries_pacf_correlogram",
-    "timeseries_pacf_correlogram_file",
     "wait_for", "signal",
     "log_text", "log_user", "log_user_i64", "log_user_f64",
     "f2i", "i2f",
@@ -486,10 +478,6 @@ if TYPE_CHECKING:
         """Time-weighted mean queue length over the recording window."""
         ...
 
-    def pq_history(pqueue: Handle) -> Handle:
-        """Native timeseries history for a priority queue."""
-        ...
-
     def pq_report_file(pqueue: Handle, path: Handle,
                        append: int = 1) -> int:
         """Write the native priority-queue text report to `path`."""
@@ -497,97 +485,6 @@ if TYPE_CHECKING:
 
     def pq_report(pqueue: Handle) -> int:
         """Print the native priority-queue text report to stdout."""
-        ...
-
-    # --- Timeseries histories ------------------------------------------------
-    def queue_history(queue: Handle) -> Handle:
-        """Native timeseries history for a queue."""
-        ...
-
-    def resource_history(resource: Handle) -> Handle:
-        """Native timeseries history for a resource."""
-        ...
-
-    def pool_history(pool: Handle) -> Handle:
-        """Native timeseries history for a resource pool."""
-        ...
-
-    def store_history(store: Handle) -> Handle:
-        """Native timeseries history for a store/object queue."""
-        ...
-
-    def timeseries_count(timeseries: Handle) -> int:
-        """Number of native timeseries samples."""
-        ...
-
-    def timeseries_min(timeseries: Handle) -> float:
-        """Minimum native timeseries sample value."""
-        ...
-
-    def timeseries_max(timeseries: Handle) -> float:
-        """Maximum native timeseries sample value."""
-        ...
-
-    def timeseries_mean(timeseries: Handle) -> float:
-        """Time-weighted native timeseries mean."""
-        ...
-
-    def timeseries_std(timeseries: Handle) -> float:
-        """Time-weighted native timeseries sample standard deviation."""
-        ...
-
-    def timeseries_median(timeseries: Handle) -> float:
-        """Time-weighted native timeseries median."""
-        ...
-
-    def timeseries_print_file(timeseries: Handle, path: Handle,
-                              append: int = 1) -> int:
-        """Write raw native timeseries rows to `path`."""
-        ...
-
-    def timeseries_print(timeseries: Handle) -> int:
-        """Print raw native timeseries rows to stdout."""
-        ...
-
-    def timeseries_fivenum_file(timeseries: Handle, path: Handle,
-                                append: int = 1) -> int:
-        """Write the native weighted five-number summary to `path`."""
-        ...
-
-    def timeseries_fivenum(timeseries: Handle) -> int:
-        """Print the native weighted five-number summary to stdout."""
-        ...
-
-    def timeseries_histogram_file(timeseries: Handle, path: Handle,
-                                  append: int = 1, bins: int = 20,
-                                  low: float = 0.0,
-                                  high: float = 0.0) -> int:
-        """Write the native weighted text histogram to `path`."""
-        ...
-
-    def timeseries_histogram(timeseries: Handle, bins: int = 20,
-                             low: float = 0.0, high: float = 0.0) -> int:
-        """Print the native weighted text histogram to stdout."""
-        ...
-
-    def timeseries_correlogram_file(timeseries: Handle, path: Handle,
-                                    append: int = 1, lags: int = 20) -> int:
-        """Write the native timeseries ACF correlogram to `path`."""
-        ...
-
-    def timeseries_correlogram(timeseries: Handle, lags: int = 20) -> int:
-        """Print the native timeseries ACF correlogram to stdout."""
-        ...
-
-    def timeseries_pacf_correlogram_file(timeseries: Handle, path: Handle,
-                                         append: int = 1,
-                                         lags: int = 20) -> int:
-        """Write the native timeseries PACF correlogram to `path`."""
-        ...
-
-    def timeseries_pacf_correlogram(timeseries: Handle,
-                                    lags: int = 20) -> int:
-        """Print the native timeseries PACF correlogram to stdout."""
         ...
 
     def queue_report_file(queue: Handle, path: Handle,
@@ -736,7 +633,6 @@ else:
     level = _b.buffer_level
     space = _b.buffer_space
     mean_level = _b.buffer_mean_level
-    queue_history = _b.buffer_history
     queue_report_file = _b.buffer_report_file
 
     @njit
@@ -751,7 +647,6 @@ else:
     in_use = _b.resource_in_use
     held = _b.resource_held
     mean_in_use = _b.resource_mean_in_use
-    resource_history = _b.resource_history
     resource_report_file = _b.resource_report_file
 
     @njit
@@ -766,7 +661,6 @@ else:
     pool_held = _b.resourcepool_held
     pool_in_use = _b.resourcepool_in_use
     pool_mean_in_use = _b.resourcepool_mean_in_use
-    pool_history = _b.resourcepool_history
     pool_report_file = _b.resourcepool_report_file
 
     @njit
@@ -780,7 +674,6 @@ else:
     store_space = _b.objectqueue_space
     store_position = _b.objectqueue_position
     store_mean_length = _b.objectqueue_mean_length
-    store_history = _b.objectqueue_history
     store_report_file = _b.objectqueue_report_file
 
     @njit
@@ -796,48 +689,11 @@ else:
     pq_reprioritize = _b.priorityqueue_reprioritize
     pq_cancel = _b.priorityqueue_cancel
     pq_mean_length = _b.priorityqueue_mean_length
-    pq_history = _b.priorityqueue_history
     pq_report_file = _b.priorityqueue_report_file
 
     @njit
     def pq_report(pqueue):
         return pq_report_file(pqueue, 0, _np.uint64(1))
-
-    # Timeseries histories
-    timeseries_count = _b.timeseries_count
-    timeseries_min = _b.timeseries_min
-    timeseries_max = _b.timeseries_max
-    timeseries_mean = _b.timeseries_mean
-    timeseries_std = _b.timeseries_std
-    timeseries_median = _b.timeseries_median
-    timeseries_print_file = _b.timeseries_print_file
-    timeseries_fivenum_file = _b.timeseries_fivenum_file
-    timeseries_histogram_file = _b.timeseries_histogram_file
-    timeseries_correlogram_file = _b.timeseries_correlogram_file
-    timeseries_pacf_correlogram_file = _b.timeseries_pacf_correlogram_file
-
-    @njit
-    def timeseries_print(timeseries):
-        return timeseries_print_file(timeseries, 0, _np.uint64(1))
-
-    @njit
-    def timeseries_fivenum(timeseries):
-        return timeseries_fivenum_file(timeseries, 0, _np.uint64(1))
-
-    @njit
-    def timeseries_histogram(timeseries, bins=20, low=0.0, high=0.0):
-        return timeseries_histogram_file(timeseries, 0, _np.uint64(1),
-                                         _np.uint64(bins), low, high)
-
-    @njit
-    def timeseries_correlogram(timeseries, lags=20):
-        return timeseries_correlogram_file(timeseries, 0, _np.uint64(1),
-                                           _np.uint64(lags))
-
-    @njit
-    def timeseries_pacf_correlogram(timeseries, lags=20):
-        return timeseries_pacf_correlogram_file(timeseries, 0, _np.uint64(1),
-                                                _np.uint64(lags))
 
     # Conditions (cmb_condition)
     signal = _b.condition_signal

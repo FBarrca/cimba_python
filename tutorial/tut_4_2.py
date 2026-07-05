@@ -38,7 +38,8 @@ Translation notes (C -> cimba.sim):
   test in a loop, catching the same race as the C code (another ship
   grabbing the tugs between wakeup and resumption).
 * Dataset reports and histograms are exposed as dataset methods; time-series
-  histories and entity reports still use sim.timeseries_*() and
+  histories are exposed the same way through <entity>.history() (e.g.
+  env.queue.history().mean()), and entity reports still use the
   sim.*_report() helpers. This runnable script keeps the console report
   compact over replicated trials; the docs tutorial shows the fuller
   single-trial report style.

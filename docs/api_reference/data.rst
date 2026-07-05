@@ -6,8 +6,8 @@ observation with ``env.waits.add(value)`` each time the measured event happens.
 At collection time, call methods such as ``env.waits.mean()`` or
 ``env.waits.quantile(0.95)`` to turn that list into the metric you want to
 report for the current replication. Time-weighted histories are attached to
-simulation entities and read back through the ``*_history()`` accessors as
-time-series handles.
+simulation entities automatically and read back with ``env.<entity>.history()``,
+which returns a time-series handle for the same method-style summary calls.
 
 Datasets
 --------
@@ -62,26 +62,56 @@ Datasets support method-style compiled calls: ``add()``, ``count()``,
 Time series
 -----------
 
-Entity histories come from ``queue_history()``, ``resource_history()``,
-``pool_history()``, ``store_history()``, and ``pq_history()``. The returned
-handles are summarized and reported with:
+Unlike datasets, a time series is not something you populate yourself. Every
+stateful native entity -- ``sim.Queue``, ``sim.Resource``, ``sim.Pool``,
+``sim.Store``, and each priority queue in ``sim.PQueues`` -- has its value
+(queue length, resource holders, pool holders, store length) recorded by the
+engine automatically for as long as the trial runs. Calling ``.history()`` on the entity itself hands back that recording
+as a time-series handle:
 
-``timeseries_count()``, ``timeseries_min()``, ``timeseries_max()``,
-``timeseries_mean()``, ``timeseries_std()``, ``timeseries_median()``,
-``timeseries_print()``, ``timeseries_print_file()``, ``timeseries_fivenum()``,
-``timeseries_fivenum_file()``, ``timeseries_histogram()``,
-``timeseries_histogram_file()``, ``timeseries_correlogram()``,
-``timeseries_correlogram_file()``, ``timeseries_pacf_correlogram()``,
-``timeseries_pacf_correlogram_file()``.
+.. code-block:: python
 
-For text reports and text-mode plots, the no-suffix helpers print to stdout for
-console and notebook use; the ``*_file()`` variants write to a path handle
-created with ``sim.log_text()``. A dataset report is produced from the current
-trial's dataset. In multi-replication experiments, writing every replication to
-the same path can interleave or overwrite raw samples depending on the append
-flag and parallel execution. These helpers are most useful in single-trial
-debugging; scalar ``sim.Output`` fields are usually better for large parallel
-experiments.
+   class Clinic(sim.Model):
+       waiting_room: sim.Queue
+       nurse: sim.Resource
+       mean_queue_len: sim.Output
+
+   @model.collect
+   def collect_stats(env: Clinic):
+       env.mean_queue_len = env.waiting_room.history().mean()
+
+``.history()`` is available on every field kind that records one:
+``sim.Queue``, ``sim.Resource``, ``sim.Pool``, ``sim.Store``, and indexed
+elements of ``sim.PQueues`` (``env.pqs[i].history()``). It works the same way
+inside component methods (``self.waiting_room.history().mean()``).
+
+The handle returned by ``.history()`` summarizes and reports
+**time-weighted** statistics: a value the queue held for a long stretch
+counts more than one held only briefly, which is why these are separate
+``.history()...`` methods rather than reusing the dataset methods above
+(whose statistics are unweighted, one sample = one vote). The supported
+chained methods are:
+
+``count()``, ``min()``, ``max()``, ``mean()``, ``std()``, ``median()``,
+``print()``, ``print_file()``, ``fivenum()``, ``fivenum_file()``,
+``histogram()``, ``histogram_file()``, ``correlogram()``,
+``correlogram_file()``, ``pacf_correlogram()``, ``pacf_correlogram_file()``.
+
+There is no free-function form: ``.history()`` is the only way to reach an
+entity's recorded time series. Report several statistics off the same entity
+by chaining ``.history()`` again for each one (``env.q.history().mean()``,
+``env.q.history().std()``, ...) -- each call is a cheap native lookup, not a
+new recording.
+
+For text reports and text-mode plots, the no-suffix methods above (both
+dataset and ``.history()`` methods) print to stdout for console and notebook
+use; the ``*_file()`` variants write to a path handle created with
+``sim.log_text()`` instead. A dataset report is produced from the current
+trial's dataset. In multi-replication experiments, writing every replication
+to the same path can interleave or overwrite raw samples depending on the
+append flag and parallel execution. These methods are most useful in
+single-trial debugging; scalar ``sim.Output`` fields are usually better for
+large parallel experiments.
 
 ``Model.experiment(..., warmup=..., duration=...)`` controls the measurement
 window: warmup lets the model reach a representative state before summaries are

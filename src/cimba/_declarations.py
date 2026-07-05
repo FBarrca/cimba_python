@@ -166,10 +166,55 @@ if TYPE_CHECKING:
     Output = float       #: result, written by the model
     State = int          #: mutable per-trial counter
     FloatState = float   #: mutable per-trial real-valued state
-    Queue = Handle       #: cmb_buffer; default declares capacity
-    Resource = Handle    #: cmb_resource, single holder
-    Pool = Handle        #: cmb_resourcepool; default declares capacity
-    Store = Handle       #: cmb_objectqueue; default declares capacity
+
+    class Timeseries(int):
+        """Native timeseries handle returned by ``<entity>.history()``;
+        summarizes the entity's recorded value over the trial, time-weighted
+        (a value held for longer counts more than one held briefly)."""
+
+        def count(self) -> int: ...
+        def mean(self) -> float: ...
+        def min(self) -> float: ...
+        def max(self) -> float: ...
+        def std(self) -> float: ...
+        def stddev(self) -> float: ...
+        def median(self) -> float: ...
+        def print(self) -> int: ...
+        def print_file(self, path: Handle, append: int = 1) -> int: ...
+        def fivenum(self) -> int: ...
+        def fivenum_file(self, path: Handle, append: int = 1) -> int: ...
+        def histogram(self, bins: int = 20, low: float = 0.0,
+                      high: float = 0.0) -> int: ...
+        def histogram_file(self, path: Handle, append: int = 1,
+                           bins: int = 20, low: float = 0.0,
+                           high: float = 0.0) -> int: ...
+        def correlogram(self, lags: int = 20) -> int: ...
+        def correlogram_file(self, path: Handle, append: int = 1,
+                             lags: int = 20) -> int: ...
+        def pacf_correlogram(self, lags: int = 20) -> int: ...
+        def pacf_correlogram_file(self, path: Handle, append: int = 1,
+                                  lags: int = 20) -> int: ...
+
+    class Queue(int):
+        """cmb_buffer; default declares capacity."""
+
+        def history(self) -> Timeseries: ...
+
+    class Resource(int):
+        """cmb_resource, single holder."""
+
+        def history(self) -> Timeseries: ...
+
+    class Pool(int):
+        """cmb_resourcepool; default declares capacity."""
+
+        def history(self) -> Timeseries: ...
+
+    class Store(int):
+        """cmb_objectqueue; default declares capacity."""
+
+        def history(self) -> Timeseries: ...
+
     class Dataset(int):
         """cmb_dataset tally statistics handle inside compiled model code."""
 
@@ -203,8 +248,15 @@ if TYPE_CHECKING:
     Event = int          #: address of the matching @model.event callback
     #: handles of the same-named @model.process's copies, indexable
     Processes = Sequence[Handle]
+
+    class _PQueueHandle(int):
+        """cmb_priorityqueue handle, one element of a ``sim.PQueues``
+        field."""
+
+        def history(self) -> Timeseries: ...
+
     #: indexable array of priority queues; default declares the count
-    PQueues = Sequence[Handle]
+    PQueues = Sequence[_PQueueHandle]
     #: the same-named @model.process, created at runtime by sim.spawn()
     Spawnable = int
     #: reference to another declared component instance; Ref[Station]

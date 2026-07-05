@@ -61,6 +61,13 @@ from ._dataset.methods import (
 )
 from ._declarations import (_DECL_KINDS, _MISSING, _check_name,
                             _Declarations, _field_declarations, _FieldDecl)
+from ._timeseries.methods import (
+    HISTORY_GETTER_NAMES,
+    lower_env_history_method_calls,
+    lower_history_getter_call,
+    lower_timeseries_method_call,
+    timeseries_lowering_namespace,
+)
 from .random._lowering import (
     lower_random_calls_in_node,
     random_lowering_namespace,
@@ -78,6 +85,18 @@ _COMPONENT_PROCESS_ATTR = "__cimba_component_process__"
 _COMPONENT_COLLECT_ATTR = "__cimba_component_collect__"
 
 _wirable_fields_cache: dict[type, dict[str, str]] = {}
+
+#: declared field kind -> ``_FieldKind.binding``, for the scalar entity
+#: kinds whose ``self.<field>.history.method()`` sugar is lowered directly
+#: inside component methods. Priority queues are indexed (``self.pq[i]``)
+#: before ``.history`` can apply, so they are lowered by the later
+#: env-based pass (``lower_env_history_method_calls``) instead.
+_COMPONENT_HISTORY_BINDINGS = {
+    "queue": "buffer",
+    "resource": "resource",
+    "pool": "resourcepool",
+    "store": "objectqueue",
+}
 
 
 def _wirable_fields(cls: type) -> dict[str, str]:
@@ -1467,6 +1486,39 @@ class _ComponentPathLowerer(ast.NodeTransformer):
                     f"{self._callback_label()} uses dynamic "
                     f"getattr({target.text}, ...), which is not supported")
         if isinstance(node.func, ast.Attribute):
+            # self.<field>.history().method(...)
+            history_call = node.func.value
+            if (isinstance(history_call, ast.Call)
+                    and isinstance(history_call.func, ast.Attribute)
+                    and history_call.func.attr == "history"
+                    and not history_call.args and not history_call.keywords):
+                access = self._field_ref(history_call.func.value)
+                if access is not None:
+                    binding = _COMPONENT_HISTORY_BINDINGS.get(
+                        access.decl.decls.kind_of(access.field))
+                    if binding is not None:
+                        return lower_timeseries_method_call(
+                            node,
+                            self._field_target(access, ast.Load()),
+                            binding=binding,
+                            visit=self.visit,
+                            label=self._callback_label(),
+                        )
+        # bare self.<field>.history()
+        if (isinstance(node.func, ast.Attribute) and node.func.attr == "history"
+                and not node.args and not node.keywords):
+            access = self._field_ref(node.func.value)
+            if access is not None:
+                binding = _COMPONENT_HISTORY_BINDINGS.get(
+                    access.decl.decls.kind_of(access.field))
+                if binding is not None:
+                    return lower_history_getter_call(
+                        node,
+                        self._field_target(access, ast.Load()),
+                        binding=binding,
+                        label=self._callback_label(),
+                    )
+        if isinstance(node.func, ast.Attribute):
             access = self._field_ref(node.func.value)
             if access is not None:
                 if access.decl.decls.kind_of(access.field) == "dataset":
@@ -1742,6 +1794,7 @@ def _lower_component_method(
     prologue: Sequence[ast.stmt] = (),
     extra_namespace: Mapping[str, Any] | None = None,
     model_dataset_fields: Iterable[str] = (),
+    model_history_fields: Mapping[str, str] = {},
 ) -> Callable[..., Any]:
     """Shared tail of process/collect lowering: drop `self`, rewrite the
     body against the flattened env, and compile the result."""
@@ -1783,6 +1836,13 @@ def _lower_component_method(
             dataset_fields=model_dataset_fields,
             label=f"component {kind} '{component_name}.{method_name}'",
         )
+    if model_history_fields:
+        lowered, _ = lower_env_history_method_calls(
+            lowered,
+            env_name=env_name,
+            history_fields=model_history_fields,
+            label=f"component {kind} '{component_name}.{method_name}'",
+        )
     lowered.body[:0] = list(prologue)
 
     namespace = _closure_namespace(method)
@@ -1796,6 +1856,7 @@ def _lower_component_method(
     if extra_namespace:
         namespace.update(extra_namespace)
     namespace.update(dataset_lowering_namespace())
+    namespace.update(timeseries_lowering_namespace())
     if random_changed:
         namespace.update(random_lowering_namespace())
     namespace.update(_lowering_namespace((component_decl,)))
@@ -1919,6 +1980,7 @@ def _lower_component_process(
     instance_index: int | None = None,
     copies_per_instance: tuple[int, ...] | None = None,
     model_dataset_fields: Iterable[str] = (),
+    model_history_fields: Mapping[str, str] = {},
 ) -> Callable[..., Any]:
     """Lower a component process method into a flat process function.
 
@@ -1947,7 +2009,8 @@ def _lower_component_process(
         component_decl=component_decl, instance_index=index_expr,
         method_name=method_name, method=method, struct_view=struct_view,
         prologue=prologue, extra_namespace=tables,
-        model_dataset_fields=model_dataset_fields)
+        model_dataset_fields=model_dataset_fields,
+        model_history_fields=model_history_fields)
 
 
 def _lower_component_collect(
@@ -1959,6 +2022,7 @@ def _lower_component_collect(
     instance_index: int | None = None,
     per_class: bool = False,
     model_dataset_fields: Iterable[str] = (),
+    model_history_fields: Mapping[str, str] = {},
 ) -> Callable[..., Any]:
     """Lower a component collect method; with ``per_class``, one function
     covers every instance and takes the instance index as its second
@@ -1979,7 +2043,8 @@ def _lower_component_collect(
         node, kind="collect", component_name=component_name,
         component_decl=component_decl, instance_index=index_expr,
         method_name=method_name, method=method,
-        model_dataset_fields=model_dataset_fields)
+        model_dataset_fields=model_dataset_fields,
+        model_history_fields=model_history_fields)
 
 
 def _lower_model_component_refs(
@@ -2080,6 +2145,59 @@ def _lower_dataset_methods(
 
     namespace = _closure_namespace(fn)
     namespace.update(dataset_lowering_namespace())
+    return _compile_lowered(
+        lowered,
+        filename=f"<cimba model callback '{model_name}.{fn.__name__}'>",
+        fn_name=fn.__name__,
+        qualname=fn.__qualname__,
+        namespace=namespace,
+        like=fn,
+    )
+
+
+def _lower_history_methods(
+    fn: Callable[..., Any],
+    *,
+    model_name: str,
+    history_fields: Mapping[str, str],
+) -> Callable[..., Any]:
+    """Rewrite ``env.<entity>.history.method(...)`` (and the indexed
+    ``env.<entity>[i].history.method(...)`` form) to native timeseries
+    helper calls."""
+    if not history_fields:
+        return fn
+    names = set(fn.__code__.co_names)
+    if "history" not in names or not names.intersection(history_fields):
+        return fn
+    try:
+        node = copy.deepcopy(_function_def_from_source(fn))
+    except (OSError, TypeError) as exc:
+        raise ValueError(
+            f"model '{model_name}' callback '{fn.__qualname__}' needs "
+            "inspectable source to use timeseries history methods"
+        ) from exc
+    if not node.args.args:
+        return fn
+
+    env_name = node.args.args[0].arg
+    lowered, changed = lower_env_history_method_calls(
+        node,
+        env_name=env_name,
+        history_fields=history_fields,
+        label=f"model '{model_name}' callback '{fn.__name__}'",
+    )
+    if not changed:
+        return fn
+
+    lowered.decorator_list = []
+    lowered.returns = None
+    lowered.type_comment = None
+    for arg in lowered.args.args:
+        arg.annotation = None
+        arg.type_comment = None
+
+    namespace = _closure_namespace(fn)
+    namespace.update(timeseries_lowering_namespace())
     return _compile_lowered(
         lowered,
         filename=f"<cimba model callback '{model_name}.{fn.__name__}'>",
