@@ -125,3 +125,8 @@ If a model-level collector declares ``env.<entity>.history().capture()``,
 a NumPy array with columns ``time``, ``value``, and ``duration``.
 ``exp.histories("field")`` returns one such array per trial, aligned with the
 experiment row order.
+
+If a model-level collector declares ``env.<dataset>.capture()``,
+``exp.dataset("field", trial=i)`` returns that trial's raw dataset samples as a
+one-dimensional NumPy array. ``exp.datasets("field")`` returns one array per
+trial, also aligned with the experiment row order.

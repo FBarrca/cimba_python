@@ -1543,6 +1543,31 @@ class _ComponentPathLowerer(ast.NodeTransformer):
                             ),
                             node,
                         )
+                access = self._field_ref(node.func.value)
+                if (access is not None
+                        and access.decl.decls.kind_of(access.field)
+                        == "dataset"):
+                    args = [self.visit(arg) for arg in node.args]
+                    keywords = [
+                        ast.keyword(
+                            arg=kw.arg,
+                            value=self.visit(kw.value),
+                        )
+                        for kw in node.keywords
+                    ]
+                    self.changed = True
+                    return ast.copy_location(
+                        ast.Call(
+                            func=ast.Attribute(
+                                value=self._field_target(access, ast.Load()),
+                                attr="capture",
+                                ctx=ast.Load(),
+                            ),
+                            args=args,
+                            keywords=keywords,
+                        ),
+                        node,
+                    )
             # self.<field>.history().method(...)
             history_call = node.func.value
             if (isinstance(history_call, ast.Call)

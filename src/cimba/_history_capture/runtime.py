@@ -1,4 +1,4 @@
-"""Runtime helpers for captured native history arrays."""
+"""Runtime helpers for collect-declared native capture arrays."""
 
 from __future__ import annotations
 
@@ -18,12 +18,13 @@ class HistoryCaptureSpec:
     name: str
     binding: str
     slot: int
+    columns: int = 3
 
 
 def create_capture_store(num_trials: int, num_slots: int) -> Any:
     store = lib.cpy_history_capture_store_create(num_trials, num_slots)
     if store == ffi.NULL:
-        raise MemoryError("could not allocate history capture store")
+        raise MemoryError("could not allocate capture store")
     return store
 
 
@@ -35,23 +36,26 @@ def copy_capture_store(
     store: Any,
     *,
     num_trials: int,
-    names: tuple[str, ...],
+    specs: tuple[HistoryCaptureSpec, ...],
 ) -> dict[str, tuple[np.ndarray, ...]]:
     captured: dict[str, tuple[np.ndarray, ...]] = {}
     itemsize = np.dtype(np.float64).itemsize
-    for slot, name in enumerate(names):
+    for spec in specs:
         rows: list[np.ndarray] = []
         for trial in range(num_trials):
             count = int(lib.cpy_history_capture_store_count(
-                store, trial, slot))
-            data = lib.cpy_history_capture_store_data(store, trial, slot)
+                store, trial, spec.slot))
+            data = lib.cpy_history_capture_store_data(store, trial, spec.slot)
             if count == 0:
-                rows.append(np.empty((0, 3), dtype=np.float64))
+                shape = (0,) if spec.columns == 1 else (0, spec.columns)
+                rows.append(np.empty(shape, dtype=np.float64))
                 continue
             if data == ffi.NULL:
-                raise MemoryError("history capture data is missing")
-            view = ffi.buffer(data, count * 3 * itemsize)
+                raise MemoryError("capture data is missing")
+            view = ffi.buffer(data, count * spec.columns * itemsize)
             arr = np.frombuffer(view, dtype=np.float64).copy()
-            rows.append(arr.reshape(count, 3))
-        captured[name] = tuple(rows)
+            if spec.columns != 1:
+                arr = arr.reshape(count, spec.columns)
+            rows.append(arr)
+        captured[spec.name] = tuple(rows)
     return captured

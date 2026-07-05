@@ -428,6 +428,40 @@ uint64_t cpy_history_capture_store_capture(void *storep,
     return n;
 }
 
+uint64_t cpy_dataset_capture_store_capture(void *storep,
+                                           const uint64_t trial,
+                                           const uint64_t slot,
+                                           const void *dsp)
+{
+    struct cpy_history_capture_store *store = storep;
+    struct cpy_history_capture_slot *target =
+        history_capture_slot(store, trial, slot);
+    if (target == NULL || dsp == NULL) {
+        return 0u;
+    }
+
+    const struct cmb_dataset *ds = dsp;
+    const uint64_t n = cmb_dataset_count(ds);
+    double *rows = NULL;
+    if (n > 0u) {
+        if (n > UINT64_MAX / sizeof *rows) {
+            return 0u;
+        }
+        rows = malloc((size_t)(n * sizeof *rows));
+        if (rows == NULL) {
+            return 0u;
+        }
+        for (uint64_t i = 0u; i < n; i++) {
+            rows[i] = ds->xa[i];
+        }
+    }
+
+    free(target->rows);
+    target->rows = rows;
+    target->count = n;
+    return n;
+}
+
 uint64_t cpy_history_capture_store_count(const void *storep,
                                          const uint64_t trial,
                                          const uint64_t slot)

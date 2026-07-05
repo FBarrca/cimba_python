@@ -1,6 +1,6 @@
-"""Private support for collect-declared history capture."""
+"""Private support for collect-declared in-memory capture."""
 
-from .lowering import lower_history_capture_methods
+from .lowering import lower_dataset_capture_methods, lower_history_capture_methods
 from .runtime import (
     HISTORY_CAPTURE_STORE_FIELD,
     HISTORY_CAPTURE_TRIAL_FIELD,
@@ -17,5 +17,6 @@ __all__ = [
     "copy_capture_store",
     "create_capture_store",
     "destroy_capture_store",
+    "lower_dataset_capture_methods",
     "lower_history_capture_methods",
 ]

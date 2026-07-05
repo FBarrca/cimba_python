@@ -16,7 +16,9 @@ _NON_INTERACTIVE_BACKENDS = frozenset(
 class MM1(sim.Model):
     utilization: sim.Param
     avg_queue_length: sim.Output
+    avg_interarrival_time: sim.Output
     queue: sim.Queue
+    interarrival_times: sim.Dataset
 
 
 model = MM1("MM1")
@@ -26,6 +28,7 @@ model = MM1("MM1")
 def arrival(env: MM1):
     while True:
         t_ia = random.exponential(1.0 / env.utilization)
+        env.interarrival_times.add(t_ia)
         sim.hold(t_ia)
         env.queue.put(1)
 
@@ -41,7 +44,9 @@ def service(env: MM1):
 @model.collect
 def collect_stats(env: MM1):
     env.avg_queue_length = env.queue.history().mean()
+    env.avg_interarrival_time = env.interarrival_times.mean()
     env.queue.history().capture()
+    env.interarrival_times.capture()
 
 
 def main() -> None:
@@ -57,10 +62,15 @@ def main() -> None:
     if failures:
         raise RuntimeError(f"{failures} trial(s) failed")
     avg = float(exp["avg_queue_length"][0])
+    avg_interarrival = float(exp["avg_interarrival_time"][0])
     queue_history = exp.history("queue")
+    interarrivals = exp.dataset("interarrival_times")
     print(f"Simulation stopped at t=10.0, average queue length: {avg:.6f}")
+    print(f"Average sampled interarrival time: {avg_interarrival:.6f}")
     print("First queue history rows: time, level, duration")
     print(queue_history.shape)
+    print("Captured interarrival samples")
+    print(interarrivals.shape)
 
 
 if __name__ == "__main__":

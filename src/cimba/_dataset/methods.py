@@ -121,7 +121,7 @@ _METHOD_SPECS = {
     ),
 }
 
-DATASET_METHOD_NAMES = frozenset(_METHOD_SPECS)
+DATASET_METHOD_NAMES = frozenset((*_METHOD_SPECS, "capture"))
 
 
 def dataset_lowering_namespace() -> dict[str, Any]:

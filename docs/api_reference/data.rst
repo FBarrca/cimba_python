@@ -54,10 +54,34 @@ measured part of that trial.
 
 Datasets support method-style compiled calls: ``add()``, ``count()``,
 ``mean()``, ``min()``, ``max()``, ``std()``, ``median()``, ``quantile()``,
-``print()``, ``print_file()``, ``fivenum()``, ``fivenum_file()``,
+``capture()``, ``print()``, ``print_file()``, ``fivenum()``, ``fivenum_file()``,
 ``histogram()``, ``histogram_file()``, ``correlogram()``,
 ``correlogram_file()``, ``pacf_correlogram()``, and
 ``pacf_correlogram_file()``.
+
+Use ``capture()`` when you need the raw per-replication samples in Python
+without writing a file. Declare it in the model-level collector next to the
+ordinary scalar outputs:
+
+.. code-block:: python
+
+   @model.collect
+   def collect_stats(env: Clinic):
+       env.avg_wait = env.waits.mean()
+       env.waits.capture()
+
+After ``exp.run()``, read the captured sample arrays from the experiment:
+
+.. code-block:: python
+
+   waits0 = exp.dataset("waits", trial=0)
+   waits_by_trial = exp.datasets("waits")
+
+Each returned dataset array is one-dimensional ``float64``. Captured names use
+the flattened field path, such as ``"waits"`` or ``"station__waits"``. The
+arrays are trial-local and aligned with the experiment row order. Component
+fields can be captured from the model-level collector with paths such as
+``env.station.waits.capture()``.
 
 Time series
 -----------

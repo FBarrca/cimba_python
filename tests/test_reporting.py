@@ -121,6 +121,103 @@ def test_sim_dataset_methods_compile_in_model_callbacks(tmp_path):
     assert "#" in report.read_text()
 
 
+def test_dataset_capture_returns_per_trial_arrays():
+    class Samples(sim.Model):
+        avg: sim.Output
+        n: sim.Output
+        d: sim.Dataset
+
+    model = Samples()
+
+    @model.process
+    def driver(env: Samples):
+        for i in range(4):
+            env.d.add(float(i + 1))
+
+    @model.collect
+    def collect(env: Samples):
+        env.avg = env.d.mean()
+        env.n = float(env.d.count())
+        env.d.capture()
+
+    exp = model.experiment(replications=3, duration=1.0, warmup=0.0,
+                           seed=41)
+    with pytest.raises(RuntimeError, match="run\\(\\) the experiment"):
+        exp.dataset("d")
+    assert exp.run() == 0
+
+    datasets = exp.datasets("d")
+    assert len(datasets) == len(exp)
+    for i, values in enumerate(datasets):
+        assert values.dtype == np.float64
+        assert values.ndim == 1
+        assert values.tolist() == [1.0, 2.0, 3.0, 4.0]
+        assert values.size == int(exp["n"][i])
+        assert float(values.mean()) == pytest.approx(exp["avg"][i])
+
+    first = exp.dataset("d", trial=0)
+    first[:] = -1.0
+    assert exp.run() == 0
+    assert exp.dataset("d", trial=0).tolist() == [1.0, 2.0, 3.0, 4.0]
+
+
+def test_dataset_capture_model_collect_uses_component_path():
+    class Station(sim.Component):
+        samples: sim.Dataset
+
+        @sim.process
+        def driver(self, env):
+            self.samples.add(2.0)
+            self.samples.add(5.0)
+
+    class Clinic(sim.Model):
+        station: Station = Station()
+
+    model = Clinic()
+
+    @model.collect
+    def collect(env: Clinic):
+        env.station.samples.capture()
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
+                           seed=19)
+    assert exp.run() == 0
+    assert exp.dataset("station__samples").tolist() == [2.0, 5.0]
+
+
+def test_dataset_capture_rejects_invalid_targets():
+    class Samples(sim.Model):
+        d: sim.Dataset
+
+    model = Samples()
+
+    @model.process
+    def driver(env: Samples):
+        env.d.add(1.0)
+
+    with pytest.raises(ValueError, match="dataset capture\\(\\) takes no"):
+        @model.collect
+        def collect_with_args(env: Samples):
+            env.d.capture(1)
+
+    class ComponentSamples(sim.Component):
+        d: sim.Dataset
+
+        @sim.process
+        def driver(self, env):
+            self.d.add(1.0)
+
+        @sim.collect
+        def collect(self, env):
+            self.d.capture()
+
+    with pytest.raises(ValueError, match="unsupported dataset method"):
+        class Clinic(sim.Model):
+            station: ComponentSamples = ComponentSamples()
+
+        Clinic()
+
+
 def test_native_text_report_file_variants_cover_dataset_methods(tmp_path):
     report = tmp_path / "native_reports.txt"
     report_handle = sim.log_text(str(report))

@@ -92,6 +92,10 @@ CIMBA_PY_EXPORT uint64_t cpy_history_capture_store_capture(void *store,
                                                            uint64_t trial,
                                                            uint64_t slot,
                                                            const void *tsp);
+CIMBA_PY_EXPORT uint64_t cpy_dataset_capture_store_capture(void *store,
+                                                           uint64_t trial,
+                                                           uint64_t slot,
+                                                           const void *dsp);
 CIMBA_PY_EXPORT uint64_t cpy_history_capture_store_count(const void *store,
                                                          uint64_t trial,
                                                          uint64_t slot);

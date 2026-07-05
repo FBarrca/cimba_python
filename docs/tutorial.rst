@@ -387,22 +387,45 @@ two assignments are equivalent:
 
 When you want the raw path of a single run rather than only a scalar summary,
 declare a capture in the collector and read it from the experiment after
-``run()``. Tutorial 1.2 uses this to inspect how the queue grows and shrinks:
+``run()``. Tutorial 1.2 uses this to inspect how the queue grows and shrinks,
+and also records sampled interarrival times in a dataset:
+
+.. code-block:: python
+
+    class MM1(sim.Model):
+        utilization: sim.Param
+        avg_queue_length: sim.Output
+        avg_interarrival_time: sim.Output
+        queue: sim.Queue
+        interarrival_times: sim.Dataset
+
+    @model.process
+    def arrival(env: MM1):
+        while True:
+            t_ia = random.exponential(1.0 / env.utilization)
+            env.interarrival_times.add(t_ia)
+            sim.hold(t_ia)
+            env.queue.put(1)
 
 .. code-block:: python
 
     @model.collect
     def collect_stats(env: MM1):
         env.avg_queue_length = env.queue.history().mean()
+        env.avg_interarrival_time = env.interarrival_times.mean()
         env.queue.history().capture()
+        env.interarrival_times.capture()
 
     exp.run()
     queue_history = exp.history("queue")
+    interarrivals = exp.dataset("interarrival_times")
 
 ``queue_history`` is a NumPy array with three columns: simulation time, queue
 level, and the duration for which that level held. With multiple replications,
 ``exp.histories("queue")`` returns one array per trial, in experiment row
-order.
+order. ``interarrivals`` is a one-dimensional NumPy array containing the raw
+samples added to that trial's dataset. With multiple replications,
+``exp.datasets("interarrival_times")`` returns one sample array per trial.
 
 The explicit history form also gives access to text reports and diagnostic
 plots. During a single-trial debugging run, print the queue report and a partial
@@ -516,10 +539,14 @@ customer's time in system:
     def collect(env: Waits):
         env.wait_mean = env.waits.mean()
         env.wait_std = env.waits.std()
+        env.waits.capture()
 
-Datasets also provide count, minimum, and maximum. They are useful for
-per-agent outcomes; time-weighted summaries are useful for states that persist
-between event times. Datasets also have the same text-reporting style:
+After ``exp.run()``, ``exp.dataset("waits", trial=0)`` returns that trial's
+raw samples as a one-dimensional NumPy array. ``exp.datasets("waits")`` returns
+one array per trial. Datasets also provide count, minimum, and maximum. They
+are useful for per-agent outcomes; time-weighted summaries are useful for
+states that persist between event times. Datasets also have the same
+text-reporting style:
 
 .. code-block:: python
 
