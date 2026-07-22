@@ -22,14 +22,14 @@ if get_option('cimba_debug_logs') and get_option('buildtype') == 'release'
     )
 endif
 
-cimba_proj = subproject(
-    'cimba',
-    default_options: [
-        'default_library=static',
-        'enable_docs=false',
-        'warning_level=1',
-    ],
-)
+cimba_default_options = [
+    'default_library=static',
+    'enable_docs=false',
+    'warning_level=1',
+    'external_context_switch_wrapper=true',
+]
+
+cimba_proj = subproject('cimba', default_options: cimba_default_options)
 cimba_lib = cimba_proj.get_variable('cimba_lib')
 # inc_api alone is not enough: upstream's public cmb_process.h includes the
 # internal cmi_coroutine.h, which lives in src/ (inc_int).
@@ -108,7 +108,6 @@ cimba_native_ext = py.extension_module(
     'src/cimba/native/nbshim.c',
     include_directories: [inc_api, inc_int, 'src/cimba/native'],
     dependencies: [m_dep, thread_dep],
-    link_args: ['-Wl,--wrap=cmi_coroutine_context_switch'],
     link_whole: cimba_lib,
     install: true,
     subdir: 'cimba',

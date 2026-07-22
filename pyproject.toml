@@ -17,6 +17,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: C",
     "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
     "Topic :: Scientific/Engineering",
     "Typing :: Typed",
 ]
@@ -65,8 +66,8 @@ compile = ["cimba_ext"]
 install = ["--skip-subprojects"]
 
 [tool.cibuildwheel]
-# The vendored Cimba C library currently ships x86-64 assembly ports, so we
-# publish Linux x86_64 wheels for CPython 3.13 and 3.14.
+# Native macOS source builds are supported; binary wheel publication remains
+# limited to Linux x86_64 for CPython 3.13 and 3.14 for now.
 build = "cp313-manylinux_x86_64 cp314-manylinux_x86_64"
 test-requires = "pytest>=8"
 test-command = "pytest {project}/tests"
