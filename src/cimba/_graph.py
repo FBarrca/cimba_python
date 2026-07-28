@@ -314,6 +314,8 @@ def infer_process_dag(
         tuple[str, int], Iterable[str]] | None = None,
     event_callbacks: Iterable[tuple[str, Callable[..., Any]]] = (),
     blocks: Iterable[ProcessDAGBlock] = (),
+    extra_nodes: Iterable[ProcessDAGNode] = (),
+    extra_edges: Iterable[ProcessDAGEdge] = (),
 ) -> ProcessDAG:
     """Infer a model-field-aware process graph from registered process bodies."""
     process_list = tuple(processes)
@@ -348,7 +350,11 @@ def infer_process_dag(
         )
         for p in process_list
     ]
-    edges: list[ProcessDAGEdge] = []
+    for node in extra_nodes:
+        if node.key not in {existing.key for existing in nodes}:
+            nodes.append(node)
+    known_node_keys = {node.key for node in nodes}
+    edges: list[ProcessDAGEdge] = list(dict.fromkeys(extra_edges))
     resource_nodes: dict[str, ProcessDAGNode] = {}
 
     context = _InferenceContext(
@@ -375,7 +381,8 @@ def infer_process_dag(
                 edges.append(edge)
             for key in (edge.source, edge.target):
                 ref = _ref_from_key(key)
-                if ref.kind != "process" and key not in resource_nodes:
+                if (ref.kind != "process" and key not in resource_nodes
+                        and key not in known_node_keys):
                     resource_nodes[key] = ProcessDAGNode(ref.name, ref.kind)
 
     for event_name, event_fn in event_callbacks:
@@ -393,7 +400,8 @@ def infer_process_dag(
                 edges.append(edge)
             for key in (edge.source, edge.target):
                 ref = _ref_from_key(key)
-                if ref.kind != "process" and key not in resource_nodes:
+                if (ref.kind != "process" and key not in resource_nodes
+                        and key not in known_node_keys):
                     resource_nodes[key] = ProcessDAGNode(ref.name, ref.kind)
 
     nodes.extend(resource_nodes.values())
@@ -775,6 +783,8 @@ def _mermaid_node_line(node: ProcessDAGNode, indent: str) -> str:
     label = _escape_mermaid(node.name)
     if node.kind == "process":
         return f"{indent}{node_id}[\"{label}\"]"
+    if node.kind == "function":
+        return f"{indent}{node_id}[[\"{label}\"]]"
     return f"{indent}{node_id}[(\"{label}\")]"
 
 
@@ -787,7 +797,10 @@ def _dot_cluster_id(key: str) -> str:
 
 
 def _dot_node_line(node: ProcessDAGNode, indent: str) -> str:
-    shape = "box" if node.kind == "process" else "ellipse"
+    shape = {
+        "process": "box",
+        "function": "component",
+    }.get(node.kind, "ellipse")
     return (
         f"{indent}{_dot_quote(node.key)} "
         f"[label={_dot_quote(node.name)}, shape={shape}];"

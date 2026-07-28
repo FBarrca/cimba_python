@@ -4,6 +4,444 @@ import pytest
 import cimba.sim as sim
 
 
+def test_component_function_reads_params_and_returns_value():
+    class Policy(sim.Component):
+        threshold: sim.Param
+        target: sim.Param
+
+        @sim.function
+        def decide(self, level: float) -> float:
+            return self.target - level if level < self.threshold else 0.0
+
+    class System(sim.Model):
+        policy: Policy = Policy()
+        level: sim.Param
+        order: sim.Output
+
+    model = System()
+
+    @model.process
+    def run(env: System):
+        env.order = env.policy.decide(env.level)
+
+    source = model._processes[0].fn.__cimba_source__
+    assert "_CIMBA_FUNCTION_Policy_decide_" in source
+    assert "env.policy__threshold" in source
+    assert "env.policy__target" in source
+    (spec,) = model._component_functions.values()
+    assert spec.helper.nopython_signatures
+    assert "__cimba_dep_0" in spec.helper.__cimba_source__
+    graph = model.process_dag()
+    assert {node.key for node in graph.nodes} >= {
+        "process:run",
+        "function:policy__decide",
+        "param:policy__threshold",
+        "param:policy__target",
+    }
+    assert {
+        (edge.source, edge.target, edge.label) for edge in graph.edges
+    } >= {
+        ("process:run", "function:policy__decide", "call"),
+        ("param:policy__threshold", "function:policy__decide", "read"),
+        ("param:policy__target", "function:policy__decide", "read"),
+    }
+    (block,) = graph.blocks
+    assert "function:policy__decide" in block.members
+    assert "param:policy__threshold" in block.members
+    assert 'n_function_policy__decide[["policy__decide"]]' \
+        in graph.to_mermaid()
+    assert ('"function:policy__decide" '
+            '[label="policy__decide", shape=component];') in graph.to_dot()
+
+    exp = model.experiment(
+        policy__threshold=30.0,
+        policy__target=80.0,
+        level=20.0,
+        replications=1,
+        duration=1.0,
+    )
+    assert exp.run() == 0
+    assert exp["order"][0] == 60.0
+
+
+def test_component_function_can_be_called_from_component_process():
+    class Policy(sim.Component):
+        scale: sim.Param
+        result: sim.Output
+
+        @sim.function
+        def apply(self, value: float) -> float:
+            return self.scale * value
+
+        @sim.process
+        def run(self, env):
+            self.result = self.apply(4.0)
+
+    class System(sim.Model):
+        policy: Policy = Policy()
+
+    model = System()
+    edges = {
+        (edge.source, edge.target, edge.label)
+        for edge in model.process_dag().edges
+    }
+    assert (
+        "process:policy__run",
+        "function:policy__apply",
+        "call",
+    ) in edges
+    exp = model.experiment(
+        policy__scale=2.5, replications=1, duration=1.0)
+    assert exp.run() == 0
+    assert exp["policy__result"][0] == 10.0
+
+
+def test_component_function_collection_dynamic_index():
+    class Policy(sim.Component):
+        offset: sim.Param
+
+        @sim.function
+        def apply(self, value: float) -> float:
+            return self.offset + value
+
+    class System(sim.Model):
+        policies: list[Policy] = [Policy(), Policy()]
+        choice: sim.State
+        result: sim.Output
+
+    model = System()
+
+    @model.process
+    def run(env: System):
+        env.choice = 1
+        env.result = env.policies[env.choice].apply(3.0)
+
+    exp = model.experiment(
+        policies__offset=[[2.0, 7.0]],
+        replications=1,
+        duration=1.0,
+    )
+    assert exp.run() == 0
+    assert exp["result"][0] == 10.0
+
+
+def test_component_function_reads_state_float_state_output_and_const():
+    class Policy(sim.Component):
+        offset: sim.Const[int]
+        count: sim.State
+        level: sim.FloatState
+        prior: sim.Output
+        result: sim.Output
+
+        def __init__(self):
+            self.offset = 4
+
+        @sim.function
+        def value(self, add: int) -> float:
+            return self.count + self.level + self.prior + self.offset + add
+
+        @sim.process
+        def run(self, env):
+            self.count = 2
+            self.level = 1.5
+            self.prior = 3.0
+            self.result = self.value(5)
+
+    class System(sim.Model):
+        policy: Policy = Policy()
+
+    exp = System().experiment(replications=1, duration=1.0)
+    assert exp.run() == 0
+    assert exp["policy__result"][0] == 15.5
+
+
+def test_component_function_calls_component_function():
+    class Policy(sim.Component):
+        scale: sim.Param
+        bias: sim.Param
+
+        @sim.function
+        def scaled(self, value: float) -> float:
+            return self.scale * value
+
+        @sim.function
+        def decide(self, value: float) -> float:
+            return self.scaled(value) + self.bias
+
+    class System(sim.Model):
+        policy: Policy = Policy()
+        result: sim.Output
+
+    model = System()
+
+    @model.process
+    def run(env: System):
+        env.result = env.policy.decide(4.0)
+
+    exp = model.experiment(
+        policy__scale=2.0,
+        policy__bias=3.0,
+        replications=1,
+        duration=1.0,
+    )
+    assert exp.run() == 0
+    assert exp["result"][0] == 11.0
+    edges = {
+        (edge.source, edge.target, edge.label)
+        for edge in model.process_dag().edges
+    }
+    assert ("process:run", "function:policy__decide", "call") in edges
+    assert (
+        "function:policy__decide",
+        "function:policy__scaled",
+        "call",
+    ) in edges
+
+
+def test_component_function_nested_component_ref_and_collect():
+    class Rule(sim.Component):
+        amount: sim.Param
+
+        @sim.function
+        def value(self, scale: float) -> float:
+            return self.amount * scale
+
+    class Wrapper(sim.Component):
+        rule: Rule = Rule()
+
+        @sim.function
+        def decide(self, scale: float) -> float:
+            return self.rule.value(scale)
+
+    class Reporter(sim.Component):
+        rule: sim.Ref[Rule]
+        result: sim.Output
+
+        def __init__(self, rule):
+            self.rule = rule
+
+        @sim.collect
+        def report(self, env):
+            self.result = self.rule.value(3.0)
+
+    rule = Rule()
+
+    class System(sim.Model):
+        direct: Rule = rule
+        wrapper: Wrapper = Wrapper()
+        reporter: Reporter = Reporter(rule)
+        result: sim.Output
+        collected: sim.Output
+
+    model = System()
+
+    @model.process
+    def run(env: System):
+        env.result = env.wrapper.decide(2.0)
+
+    @model.collect
+    def collect(env: System):
+        env.collected = env.direct.value(4.0)
+
+    exp = model.experiment(
+        direct__amount=4.0,
+        wrapper__rule__amount=5.0,
+        replications=1,
+        duration=1.0,
+    )
+    assert exp.run() == 0
+    assert exp["result"][0] == 10.0
+    assert exp["reporter__result"][0] == 12.0
+    assert exp["collected"][0] == 16.0
+
+
+def test_component_function_classes_and_cache_are_independent():
+    class Add(sim.Component):
+        value: sim.Param
+
+        @sim.function
+        def decide(self, x: float) -> float:
+            return x + self.value
+
+    class Multiply(sim.Component):
+        value: sim.Param
+
+        @sim.function
+        def decide(self, x: float) -> float:
+            return x * self.value
+
+    class System(sim.Model):
+        add: Add = Add()
+        other_add: Add = Add()
+        multiply: Multiply = Multiply()
+        added: sim.Output
+        multiplied: sim.Output
+
+    model = System()
+    add_specs = [
+        spec for spec in model._component_functions.values()
+        if spec.decl.cls is Add
+    ]
+    assert len(add_specs) == 2
+    assert add_specs[0].helper is add_specs[1].helper
+
+    @model.process
+    def run(env: System):
+        env.added = env.add.decide(3.0)
+        env.multiplied = env.multiply.decide(3.0)
+
+    exp = model.experiment(
+        add__value=4.0,
+        other_add__value=9.0,
+        multiply__value=4.0,
+        replications=1,
+        duration=1.0,
+    )
+    assert exp.run() == 0
+    assert exp["added"][0] == 7.0
+    assert exp["multiplied"][0] == 12.0
+
+
+def test_component_function_rejects_invalid_signatures_and_calls():
+    class MissingAnnotation(sim.Component):
+        @sim.function
+        def bad(self, value) -> float:
+            return value
+
+    class MissingReturn(sim.Component):
+        @sim.function
+        def bad(self, value: float):
+            return value
+
+    class Unsupported(sim.Component):
+        @sim.function
+        def bad(self, value: list) -> float:
+            return 0.0
+
+    for component, match in (
+        (MissingAnnotation(), "argument 'value' needs"),
+        (MissingReturn(), "return type annotation"),
+        (Unsupported(), "unsupported type annotation"),
+    ):
+        class System(sim.Model):
+            item: type(component) = component
+
+        with pytest.raises(TypeError, match=match):
+            System()
+
+    class Valid(sim.Component):
+        @sim.function
+        def apply(self, value: float) -> float:
+            return value
+
+    class ValidSystem(sim.Model):
+        item: Valid = Valid()
+
+    model = ValidSystem()
+    with pytest.raises(ValueError, match="must use positional arguments"):
+        @model.process
+        def run(env: ValidSystem):
+            env.item.apply(value=1.0)
+
+    class BadBody(sim.Component):
+        @sim.function
+        def bad(self, value: float) -> float:
+            return "not a scalar"
+
+    class BadBodySystem(sim.Model):
+        item: BadBody = BadBody()
+
+    with pytest.raises(TypeError, match="failed Numba nopython compilation"):
+        BadBodySystem()
+
+
+def test_component_function_rejects_mutation_scheduling_and_entity_calls():
+    class Mutating(sim.Component):
+        value: sim.State
+
+        @sim.function
+        def bad(self, amount: int) -> int:
+            self.value += amount
+            return self.value
+
+    class Scheduling(sim.Component):
+        @sim.function
+        def bad(self, delay: float) -> float:
+            sim.hold(delay)
+            return delay
+
+    class EntityCall(sim.Component):
+        queue: sim.Queue
+
+        @sim.function
+        def bad(self, amount: int) -> int:
+            return self.queue.level() + amount
+
+    for component, match in (
+        (Mutating(), "cannot mutate component field"),
+        (Scheduling(), "cannot call scheduling/process operation"),
+        (EntityCall(), "cannot call component field operation"),
+    ):
+        class System(sim.Model):
+            item: type(component) = component
+
+        with pytest.raises(ValueError, match=match):
+            System()
+
+
+def test_component_function_rejects_recursive_calls_and_marker_conflicts():
+    class Recursive(sim.Component):
+        @sim.function
+        def first(self, value: float) -> float:
+            return self.second(value)
+
+        @sim.function
+        def second(self, value: float) -> float:
+            return self.first(value)
+
+    class System(sim.Model):
+        item: Recursive = Recursive()
+
+    with pytest.raises(ValueError, match="recursive component function call"):
+        System()
+
+    def process_then_function(self, env):
+        pass
+
+    with pytest.raises(ValueError, match="component function"):
+        sim.function(sim.process(process_then_function))
+
+    def function_then_process(self, env):
+        pass
+
+    with pytest.raises(ValueError, match="component function"):
+        sim.process(sim.function(function_then_process))
+
+    def collect_then_function(self, env):
+        pass
+
+    with pytest.raises(ValueError, match="component function"):
+        sim.function(sim.collect(collect_then_function))
+
+    def function_then_collect(self, env):
+        pass
+
+    with pytest.raises(ValueError, match="component function"):
+        sim.collect(sim.function(function_then_collect))
+
+    class Callable(sim.Component):
+        @sim.function
+        def value(self, amount: float) -> float:
+            return amount
+
+    class CallableSystem(sim.Model):
+        item: Callable = Callable()
+
+    model = CallableSystem()
+    with pytest.raises(ValueError, match="cannot be registered"):
+        model.process(model.item.value)
+
+
 class Warehouse(sim.Component):
     on_hand: sim.State
     ordered: sim.Output

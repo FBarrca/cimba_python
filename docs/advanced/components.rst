@@ -50,6 +50,51 @@ and lowered as compile-time values or small lookup tables:
        def clerk(self, env, idx):
            ...
 
+Synchronous component functions
+-------------------------------
+
+Use ``@sim.function`` for immediate, value-returning component behavior such
+as routing, replenishment, pricing, or admission rules:
+
+.. code-block:: python
+
+   class OrderPolicy(sim.Component):
+       reorder_point: sim.Param
+       target_level: sim.Param
+
+       @sim.function
+       def decide(self, inventory: float) -> float:
+           if inventory < self.reorder_point:
+               return self.target_level - inventory
+           return 0.0
+
+
+   class Inventory(sim.Model):
+       policy: OrderPolicy = OrderPolicy()
+       inventory: sim.Param
+       order: sim.Output
+
+
+   model = Inventory()
+
+   @model.process
+   def replenish(env: Inventory):
+       env.order = env.policy.decide(env.inventory)
+
+Function arguments and the return value require explicit ``bool``, ``int``
+(``sim.Handle``), or ``float`` annotations and calls use positional arguments.
+Functions may read ``Param``, ``Output``, ``State``, ``FloatState``, and scalar
+``Const`` fields. They can call other ``@sim.function`` methods and follow
+nested component, ``Ref``, ``Refs``, and indexed component-collection paths.
+The same function on a collection item is called as
+``env.policies[i].decide(value)``.
+
+Component functions are read-only: assigning through ``self``, using queue or
+resource operations, controlling processes, scheduling events, or recursively
+calling component functions is rejected when the model is constructed. The
+generated helper runs in Numba nopython mode, while experiment parameters keep
+their normal flattened names such as ``policy__reorder_point``.
+
 Component-owned statistics
 --------------------------
 

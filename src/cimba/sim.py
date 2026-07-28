@@ -99,7 +99,12 @@ once per instance at the end of each trial (before the model-level
 ``@model.collect``, which can then aggregate), typically assigning the
 component's own Output fields from ``self``. Model callbacks can use ``env.retailer.orders``; trial-table
 fields remain flattened with names such as ``retailer__orders``. Components
-may contain nested components; paths such as ``env.attraction.queues.line``
+can also expose explicitly typed, read-only synchronous methods with
+``@sim.function``; calls such as ``env.policy.decide(level)`` compile to
+nopython helpers whose component field reads are passed as flattened scalar
+arguments.
+Components may contain nested components; paths such as
+``env.attraction.queues.line``
 flatten to names such as ``attraction__queues__line``. A component-owned
 ``sim.Spawnable`` field binds to the same-named component process method and
 can be spawned with paths such as ``sim.spawn(self.visitor, env)`` or
@@ -130,7 +135,7 @@ from numba import types as _nbtypes
 from . import _bindings as _b
 from ._intrinsics import ptr_caster as _ptr_caster
 from ._intrinsics import record_addr as _record_addr
-from ._components import Component, collect, process
+from ._components import Component, collect, function, process
 from ._declarations import (Condition, Const, Dataset, Env, Event, FloatState,
                             Handle, Output, Param, Pool, PQueues, Predicate,
                             Processes, Queue, Ref, Refs, Resource, Spawnable,
@@ -145,7 +150,7 @@ __all__ = [
     "Store", "Dataset", "Condition", "Predicate", "Event", "Processes",
     "PQueues", "Ref", "Refs", "Const", "Spawnable", "Struct", "Trace",
     "capacity",
-    "collect", "count", "process", "trace_rng",
+    "collect", "count", "function", "process", "trace_rng",
     "ProcessDAG", "ProcessDAGBlock", "ProcessDAGNode", "ProcessDAGEdge",
     "SUCCESS", "PREEMPTED", "INTERRUPTED", "STOPPED", "CANCELLED", "TIMEOUT",
     "LOGGER_FATAL", "LOGGER_ERROR", "LOGGER_WARNING", "LOGGER_INFO",

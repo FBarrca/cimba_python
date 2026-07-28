@@ -11,7 +11,8 @@ subclass whose annotated fields are typed by their simulation role:
 ``Output``, ``State``, ``FloatState``, ``Const``, ``Queue``, ``Resource``,
 ``Pool``, ``Store``, ``Dataset``, ``Condition``, ``Predicate``, ``Event``,
 ``Processes``, ``PQueues``, ``Ref``, ``Refs``, ``Spawnable``, ``Struct``,
-``Trace``, ``capacity()``, ``count()``, ``process()``, ``collect()``.
+``Trace``, ``capacity()``, ``count()``, ``process()``, ``collect()``,
+``function()``.
 
 ``sim.Param`` values are expanded into parameter combinations, ``sim.Output``
 values are collected after each trial, ``sim.State`` and ``sim.FloatState`` hold
@@ -43,6 +44,15 @@ flattened names such as ``retailer__orders``. Methods decorated with
 top-level ``@sim.collect`` run once per instance at the end of each trial,
 before the model-level ``@model.collect`` callback, typically assigning the
 component's ``sim.Output`` fields.
+
+Read-only synchronous behavior is declared with top-level ``@sim.function``.
+Its non-``self`` parameters and return value must be explicitly annotated as
+``bool``, ``int``/``sim.Handle``, or ``float``. A process or collector can call
+``env.policy.decide(level)``, and another method on the same component can call
+``self.decide(level)``. The helper may read scalar component parameters,
+outputs, state, and explicitly declared ``sim.Const`` values, including through
+nested components and ``Ref``/``Refs`` paths, but cannot mutate fields or call
+scheduling and entity operations.
 
 Components may contain other components, and flattened names follow the same
 recursive convention, for example ``env.attraction.queues.line`` becomes
@@ -89,7 +99,10 @@ process bodies. The returned ``ProcessDAG`` contains ``ProcessDAGNode`` and
 ``ProcessDAGEdge`` records for processes and model fields, and can render
 Mermaid or Graphviz DOT text. The inference follows direct ``sim`` calls,
 simple aliases, helper functions called with ``env``, spawnables, stores,
-priority queues, conditions, events, mutable state, and shared resources:
+priority queues, conditions, events, mutable state, and shared resources.
+Synchronous component methods appear as ``function:`` nodes, with ``read``
+edges from referenced parameters/state and ``call`` edges from processes or
+other functions:
 
 .. code-block:: python
 

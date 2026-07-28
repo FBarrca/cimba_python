@@ -32,9 +32,13 @@ component declares is lowered before compilation:
   (``env.zones[i].gates[j].queue``) are rewritten the same way, with
   generated numpy tables backing dynamic item indices, per-item
   constants, and Ref/Refs dereferences.
+* read-only ``@sim.function`` methods become explicitly typed Numba helpers.
+  Calls keep their component syntax in user code, while lowering passes the
+  ordinary arguments followed by the scalar component values the helper reads.
 
 The module is organized in five parts, in order: the authoring API
-(``Component``, the ``@sim.process``/``@sim.collect`` method markers,
+(``Component``, the ``@sim.process``/``@sim.collect``/``@sim.function``
+method markers,
 and the wiring/Ref metadata captured from instance defaults);
 declaration metadata (``_ComponentDecl``, one per component tree node);
 declaration building (``_class_declarations`` and ``_DeclBuilder``);
@@ -47,12 +51,13 @@ import copy
 import inspect
 import linecache
 import textwrap
+import weakref
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, TypeVar, get_args, get_origin, get_type_hints, overload
 
 import numpy as np
-from numba import njit
+from numba import njit, types
 
 from ._dataset.methods import (
     DATASET_METHOD_NAMES,
@@ -90,6 +95,7 @@ _F = TypeVar("_F", bound=Callable[..., Any])
 
 _COMPONENT_PROCESS_ATTR = "__cimba_component_process__"
 _COMPONENT_COLLECT_ATTR = "__cimba_component_collect__"
+_COMPONENT_FUNCTION_ATTR = "__cimba_component_function__"
 
 _wirable_fields_cache: dict[type, dict[str, str]] = {}
 
@@ -139,6 +145,9 @@ class Component:
     decorated with :func:`process` are lowered into ordinary model processes.
     Methods decorated with :func:`collect` run once per instance at the end of
     each trial, before the model-level ``@model.collect`` callback.
+    Read-only methods decorated with :func:`function` are lowered into
+    explicitly typed synchronous Numba helpers callable from compiled model
+    and component callbacks.
 
     Accessing a declared Queue/Resource/Pool/Store/Condition field on an
     instance yields a wiring reference: passing it as another instance's
@@ -241,6 +250,10 @@ def process(fn=None, *, copies: int | str = 1, priority: int = 0):
             raise ValueError(
                 f"'{f.__qualname__}' cannot be both a component process "
                 "and a component collect method")
+        if getattr(f, _COMPONENT_FUNCTION_ATTR, False):
+            raise ValueError(
+                f"'{f.__qualname__}' cannot be both a component process "
+                "and a component function")
         setattr(f, _COMPONENT_PROCESS_ATTR,
                 _ComponentProcessSpec(copies, priority))
         return f
@@ -260,7 +273,30 @@ def collect(fn: _F) -> _F:
         raise ValueError(
             f"'{fn.__qualname__}' cannot be both a component process "
             "and a component collect method")
+    if getattr(fn, _COMPONENT_FUNCTION_ATTR, False):
+        raise ValueError(
+            f"'{fn.__qualname__}' cannot be both a component collect method "
+            "and a component function")
     setattr(fn, _COMPONENT_COLLECT_ATTR, True)
+    return fn
+
+
+def function(fn: _F) -> _F:
+    """Mark a read-only, synchronously callable ``Component`` method.
+
+    Component functions take ``self`` followed by explicitly annotated scalar
+    arguments and return an explicitly annotated scalar. They are lowered and
+    Numba-compiled when a model containing the component is constructed.
+    """
+    if getattr(fn, _COMPONENT_PROCESS_ATTR, None) is not None:
+        raise ValueError(
+            f"'{fn.__qualname__}' cannot be both a component function "
+            "and a component process")
+    if getattr(fn, _COMPONENT_COLLECT_ATTR, False):
+        raise ValueError(
+            f"'{fn.__qualname__}' cannot be both a component function "
+            "and a component collect method")
+    setattr(fn, _COMPONENT_FUNCTION_ATTR, True)
     return fn
 
 
@@ -297,6 +333,14 @@ def _component_collect_methods(
 ) -> list[tuple[str, Callable[..., Any]]]:
     return [(name, fn) for name, (fn, _marker)
             in _marked_methods(cls, _COMPONENT_COLLECT_ATTR, "collect").items()]
+
+
+def _component_function_methods(
+    cls: type[Component],
+) -> list[tuple[str, Callable[..., Any]]]:
+    return [(name, fn) for name, (fn, _marker)
+            in _marked_methods(cls, _COMPONENT_FUNCTION_ATTR,
+                               "function").items()]
 
 
 # --- Declaration metadata ---------------------------------------------------
@@ -1152,6 +1196,32 @@ class _ComponentFieldAccess:
     text: str
 
 
+@dataclass
+class _ComponentFunctionDependency:
+    """One scalar component value threaded into a compiled function helper."""
+
+    access: _ComponentFieldAccess
+    parameter: str
+    direct: bool = True
+
+
+@dataclass
+class _ComponentFunctionSpec:
+    """Lowered helper and dependency metadata for one component declaration."""
+
+    decl: _ComponentDecl
+    name: str
+    method: Callable[..., Any]
+    graph_name: str
+    symbol: str
+    parameter_names: tuple[str, ...]
+    argument_types: tuple[Any, ...]
+    return_type: Any
+    dependencies: tuple[_ComponentFunctionDependency, ...]
+    helper: Any
+    callees: tuple[str, ...] = ()
+
+
 @dataclass(frozen=True)
 class _RefTableAccess:
     """A resolved path to a Refs table, before indexing."""
@@ -1168,8 +1238,15 @@ class _ComponentPathLowerer(ast.NodeTransformer):
     #: lengths, so constant indices stay bounds-checkable.
     strict_ref_tables = False
 
-    def __init__(self, *, env_name: str):
+    def __init__(
+        self,
+        *,
+        env_name: str,
+        component_functions: Mapping[str, _ComponentFunctionSpec] | None = None,
+    ):
         self.env_name = env_name
+        self.component_functions = component_functions or {}
+        self.called_functions: set[str] = set()
 
     # -- path roots, defined by the subclasses -------------------------------
 
@@ -1489,6 +1566,85 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             f"{self._callback_label()} references unknown {kind} "
             f"{namespace.text}.{field_name}")
 
+    def _function_spec(
+        self,
+        namespace: _ComponentAccess,
+        method_name: str,
+    ) -> _ComponentFunctionSpec | None:
+        return self.component_functions.get(
+            f"{namespace.decl.name}__{method_name}")
+
+    @staticmethod
+    def _substitute_expr(
+        expression: ast.expr | None,
+        replacements: Mapping[str, ast.expr],
+    ) -> ast.expr | None:
+        if expression is None:
+            return None
+
+        class Substitute(ast.NodeTransformer):
+            def visit_Name(self, node: ast.Name) -> ast.AST:
+                replacement = replacements.get(node.id)
+                if replacement is None:
+                    return node
+                return ast.copy_location(copy.deepcopy(replacement), node)
+
+        result = Substitute().visit(copy.deepcopy(expression))
+        if not isinstance(result, ast.expr):
+            raise TypeError("component function dependency did not lower "
+                            "to an expression")
+        return result
+
+    def _lower_component_function_call(
+        self,
+        node: ast.Call,
+        receiver: _ComponentAccess,
+        spec: _ComponentFunctionSpec,
+    ) -> ast.Call:
+        if node.keywords:
+            raise ValueError(
+                f"{self._callback_label()} call to component function "
+                f"'{spec.graph_name}' must use positional arguments")
+        if len(node.args) != len(spec.parameter_names):
+            raise ValueError(
+                f"{self._callback_label()} call to component function "
+                f"'{spec.graph_name}' takes {len(spec.parameter_names)} "
+                f"argument(s), got {len(node.args)}")
+
+        arguments = [self.visit(copy.deepcopy(arg)) for arg in node.args]
+        replacements = {
+            name: arg
+            for name, arg in zip(spec.parameter_names, arguments)
+        }
+        if receiver.index is not None:
+            replacements["__cimba_receiver_index"] = receiver.index
+
+        dependency_args: list[ast.expr] = []
+        for dependency in spec.dependencies:
+            access = dependency.access
+            bound = _ComponentFieldAccess(
+                access.decl,
+                self._substitute_expr(access.index, replacements),
+                access.field,
+                access.text,
+            )
+            if bound.field in bound.decl.constants:
+                value = self._constant_expr(bound)
+            else:
+                value = self._field_target(bound, ast.Load())
+            dependency_args.append(value)
+            replacements[dependency.parameter] = value
+
+        self.called_functions.add(spec.graph_name)
+        return ast.copy_location(
+            ast.Call(
+                func=ast.Name(id=spec.symbol, ctx=ast.Load()),
+                args=[*arguments, *dependency_args],
+                keywords=[],
+            ),
+            node,
+        )
+
     # -- node visitors -----------------------------------------------------------
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
@@ -1502,6 +1658,12 @@ class _ComponentPathLowerer(ast.NodeTransformer):
                     f"{self._callback_label()} uses dynamic "
                     f"getattr({target.text}, ...), which is not supported")
         if isinstance(node.func, ast.Attribute):
+            receiver = self._namespace_ref(node.func.value)
+            if receiver is not None:
+                spec = self._function_spec(receiver, node.func.attr)
+                if spec is not None:
+                    return self._lower_component_function_call(
+                        node, receiver, spec)
             # Leave ``.history().capture()`` as a history call after lowering
             # the component path; Model.collect handles capture registration.
             if node.func.attr == "capture":
@@ -1706,8 +1868,11 @@ class _ComponentMethodLowerer(_ComponentPathLowerer):
         component_decl: _ComponentDecl,
         instance_index: ast.expr,
         kind: str = "process",
+        component_functions: Mapping[
+            str, _ComponentFunctionSpec] | None = None,
     ):
-        super().__init__(env_name=env_name)
+        super().__init__(
+            env_name=env_name, component_functions=component_functions)
         self.component_name = component_name
         self.receiver_name = receiver_name
         self.component_decl = component_decl
@@ -1748,8 +1913,11 @@ class _ModelComponentRefLowerer(_ComponentPathLowerer):
     root; `changed` records whether anything was rewritten."""
 
     def __init__(self, *, model_name: str, fn_name: str, env_name: str,
-                 component_roots: Mapping[str, _ComponentDecl]):
-        super().__init__(env_name=env_name)
+                 component_roots: Mapping[str, _ComponentDecl],
+                 component_functions: Mapping[
+                     str, _ComponentFunctionSpec] | None = None):
+        super().__init__(
+            env_name=env_name, component_functions=component_functions)
         self.model_name = model_name
         self.fn_name = fn_name
         self.component_roots = component_roots
@@ -1831,12 +1999,12 @@ def _function_def_from_source(fn: Callable[..., Any]) -> ast.FunctionDef:
 def _component_method_source(fn: Callable[..., Any],
                              kind: str) -> ast.FunctionDef:
     try:
-        source = inspect.getsource(fn)
+        source = _function_source(fn)
     except (OSError, TypeError) as exc:
         raise ValueError(
             f"component {kind} '{fn.__qualname__}' needs inspectable source"
         ) from exc
-    tree = ast.parse(textwrap.dedent(source))
+    tree = ast.parse(source)
     for node in tree.body:
         if isinstance(node, ast.FunctionDef):
             return node
@@ -1870,7 +2038,477 @@ def _compile_lowered(
     generated.__module__ = like.__module__
     generated.__qualname__ = qualname
     generated.__cimba_source__ = source
+    if hasattr(like, "__cimba_function_calls__"):
+        generated.__cimba_function_calls__ = \
+            like.__cimba_function_calls__
     return generated
+
+
+_FUNCTION_SCALAR_TYPES = {
+    bool: types.boolean,
+    int: types.int64,
+    float: types.float64,
+}
+
+_FORBIDDEN_FUNCTION_SIM_CALLS = frozenset({
+    "hold", "interrupt", "stop", "wait_process", "wait_event", "resume",
+    "spawn", "despawn", "suspend", "set_priority", "timer_set",
+    "timer_add", "timer_cancel", "timers_clear", "clear_events",
+})
+
+_COMPONENT_FUNCTION_CACHE: weakref.WeakValueDictionary[
+    tuple[Any, ...], Any] = weakref.WeakValueDictionary()
+
+
+def _function_scalar_type(annotation: Any, label: str) -> Any:
+    numba_type = next(
+        (candidate for scalar, candidate in _FUNCTION_SCALAR_TYPES.items()
+         if annotation is scalar),
+        None,
+    )
+    if numba_type is None:
+        name = getattr(annotation, "__name__", repr(annotation))
+        raise TypeError(
+            f"{label} has unsupported type annotation {name}; expected "
+            "bool, int/sim.Handle, or float")
+    return numba_type
+
+
+def _component_function_signature(
+    node: ast.FunctionDef,
+    method: Callable[..., Any],
+    label: str,
+) -> tuple[tuple[str, ...], tuple[Any, ...], Any]:
+    args = node.args
+    signature = (
+        f"{label} must take self followed by explicitly annotated "
+        "positional scalar arguments, without defaults or variadics, and "
+        "declare a scalar return annotation")
+    if (args.posonlyargs or args.vararg or args.kwonlyargs or args.kwarg
+            or args.defaults or args.kw_defaults or not args.args):
+        raise ValueError(signature)
+    try:
+        hints = get_type_hints(method)
+    except Exception as exc:
+        raise TypeError(f"{label} annotations could not be resolved") from exc
+
+    parameter_names = tuple(arg.arg for arg in args.args[1:])
+    argument_types = []
+    for name in parameter_names:
+        if name not in hints:
+            raise TypeError(f"{label} argument '{name}' needs a type "
+                            "annotation")
+        argument_types.append(
+            _function_scalar_type(hints[name], f"{label} argument '{name}'"))
+    if "return" not in hints:
+        raise TypeError(f"{label} needs a return type annotation")
+    return_type = _function_scalar_type(
+        hints["return"], f"{label} return value")
+
+    returns = [item for item in ast.walk(node) if isinstance(item, ast.Return)]
+    if not returns or any(item.value is None for item in returns):
+        raise ValueError(f"{label} must return a scalar value")
+    return parameter_names, tuple(argument_types), return_type
+
+
+def _rooted_at_name(node: ast.AST, name: str) -> bool:
+    while isinstance(node, (ast.Attribute, ast.Subscript)):
+        node = node.value
+    return isinstance(node, ast.Name) and node.id == name
+
+
+class _ComponentFunctionValidator(ast.NodeVisitor):
+    """Reject side effects that must never enter a synchronous helper."""
+
+    def __init__(self, *, receiver_name: str, method: Callable[..., Any],
+                 label: str):
+        self.receiver_name = receiver_name
+        self.namespace = _closure_namespace(method)
+        self.label = label
+
+    def _check_target(self, node: ast.AST) -> None:
+        if _rooted_at_name(node, self.receiver_name):
+            raise ValueError(
+                f"{self.label} cannot mutate component field "
+                f"{ast.unparse(node)}")
+        if isinstance(node, (ast.Tuple, ast.List)):
+            for item in node.elts:
+                self._check_target(item)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        for target in node.targets:
+            self._check_target(target)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self._check_target(node.target)
+        self.generic_visit(node)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        self._check_target(node.target)
+        self.generic_visit(node)
+
+    def visit_Delete(self, node: ast.Delete) -> None:
+        for target in node.targets:
+            self._check_target(target)
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        forbidden: str | None = None
+        if (isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.attr in _FORBIDDEN_FUNCTION_SIM_CALLS):
+            module = self.namespace.get(node.func.value.id)
+            if getattr(module, "__name__", None) == "cimba.sim":
+                forbidden = node.func.attr
+        elif isinstance(node.func, ast.Name):
+            obj = self.namespace.get(node.func.id)
+            obj_name = getattr(obj, "__name__", node.func.id)
+            if obj_name in _FORBIDDEN_FUNCTION_SIM_CALLS:
+                module_name = getattr(obj, "__module__", "")
+                if (module_name.startswith("cimba.")
+                        or node.func.id in _FORBIDDEN_FUNCTION_SIM_CALLS):
+                    forbidden = obj_name
+        if forbidden is not None:
+            raise ValueError(
+                f"{self.label} cannot call scheduling/process operation "
+                f"sim.{forbidden}()")
+        self.generic_visit(node)
+
+
+class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
+    """Turn a component function body into a scalar-only helper body."""
+
+    def __init__(
+        self,
+        *,
+        builder: "_ComponentFunctionBuilder",
+        decl: _ComponentDecl,
+        method_name: str,
+        receiver_name: str,
+        parameter_names: tuple[str, ...],
+    ):
+        super().__init__(env_name="__cimba_no_env")
+        self.builder = builder
+        self.decl = decl
+        self.method_name = method_name
+        self.receiver_name = receiver_name
+        self.parameter_names = parameter_names
+        self.dependencies: list[_ComponentFunctionDependency] = []
+        self._dependency_keys: dict[tuple[Any, ...], int] = {}
+        self.callees: list[str] = []
+        self.helper_namespace: dict[str, Any] = {}
+
+    def _root_namespace_ref(self, node: ast.AST) -> _ComponentAccess | None:
+        if isinstance(node, ast.Name) and node.id == self.receiver_name:
+            index = (ast.Name(id="__cimba_receiver_index", ctx=ast.Load())
+                     if self.decl.count > 1 else None)
+            return _ComponentAccess(self.decl, index, self.receiver_name)
+        return None
+
+    def _callback_label(self) -> str:
+        return (f"component function "
+                f"'{self.decl.name}.{self.method_name}'")
+
+    def _dependency(
+        self,
+        access: _ComponentFieldAccess,
+        *,
+        direct: bool,
+    ) -> ast.Name:
+        key = (
+            access.decl.name,
+            access.field,
+            None if access.index is None else ast.dump(access.index),
+        )
+        index = self._dependency_keys.get(key)
+        if index is None:
+            index = len(self.dependencies)
+            self._dependency_keys[key] = index
+            self.dependencies.append(_ComponentFunctionDependency(
+                access=copy.deepcopy(access),
+                parameter=f"__cimba_dep_{index}",
+                direct=direct,
+            ))
+        elif direct:
+            self.dependencies[index].direct = True
+        return ast.Name(
+            id=self.dependencies[index].parameter, ctx=ast.Load())
+
+    def _validate_scalar_field(self, access: _ComponentFieldAccess) -> None:
+        if access.field in access.decl.constants:
+            if access.field not in access.decl.decls.consts:
+                raise ValueError(
+                    f"{self._callback_label()} cannot read undeclared "
+                    f"constant {access.text}; declare it as sim.Const")
+            ctype = access.decl.decls.consts[access.field]
+            _function_scalar_type(
+                ctype, f"{self._callback_label()} constant '{access.field}'")
+            return
+        kind = access.decl.decls.kind_of(access.field)
+        if kind not in ("param", "output", "state", "fstate"):
+            raise ValueError(
+                f"{self._callback_label()} cannot read non-scalar component "
+                f"field {access.text} ({kind})")
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        if isinstance(node.func, ast.Attribute):
+            receiver = self._namespace_ref(node.func.value)
+            if receiver is not None:
+                method = dict(_component_function_methods(
+                    receiver.decl.cls)).get(node.func.attr)
+                if method is not None:
+                    callee = self.builder.build(
+                        receiver.decl, node.func.attr, method)
+                    if node.keywords:
+                        raise ValueError(
+                            f"{self._callback_label()} call to component "
+                            f"function '{callee.graph_name}' must use "
+                            "positional arguments")
+                    if len(node.args) != len(callee.parameter_names):
+                        raise ValueError(
+                            f"{self._callback_label()} call to component "
+                            f"function '{callee.graph_name}' takes "
+                            f"{len(callee.parameter_names)} argument(s), got "
+                            f"{len(node.args)}")
+                    arguments = [
+                        self.visit(copy.deepcopy(arg)) for arg in node.args]
+                    replacements = {
+                        name: arg for name, arg
+                        in zip(callee.parameter_names, arguments)
+                    }
+                    if receiver.index is not None:
+                        replacements["__cimba_receiver_index"] = \
+                            receiver.index
+                    dependency_args = []
+                    for dependency in callee.dependencies:
+                        access = dependency.access
+                        bound = _ComponentFieldAccess(
+                            access.decl,
+                            self._substitute_expr(
+                                access.index, replacements),
+                            access.field,
+                            access.text,
+                        )
+                        value = self._dependency(bound, direct=False)
+                        dependency_args.append(value)
+                        replacements[dependency.parameter] = value
+                    self.helper_namespace[callee.symbol] = callee.helper
+                    if callee.graph_name not in self.callees:
+                        self.callees.append(callee.graph_name)
+                    return ast.copy_location(ast.Call(
+                        func=ast.Name(id=callee.symbol, ctx=ast.Load()),
+                        args=[*arguments, *dependency_args],
+                        keywords=[],
+                    ), node)
+
+            access = self._field_ref(node.func.value)
+            if access is not None:
+                raise ValueError(
+                    f"{self._callback_label()} cannot call component field "
+                    f"operation {access.text}.{node.func.attr}()")
+            if receiver is not None:
+                raise ValueError(
+                    f"{self._callback_label()} cannot call unmarked "
+                    f"component method {receiver.text}.{node.func.attr}()")
+        return self.generic_visit(node)
+
+    def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
+        nested = self._field_ref(node.value)
+        if nested is not None:
+            raise ValueError(
+                f"{self._callback_label()} cannot access attributes below "
+                f"component field {nested.text}")
+        access = self._field_ref(node)
+        if access is not None:
+            if not isinstance(node.ctx, ast.Load):
+                raise ValueError(
+                    f"{self._callback_label()} cannot mutate component "
+                    f"field {access.text}")
+            self._validate_scalar_field(access)
+            return ast.copy_location(
+                self._dependency(access, direct=True), node)
+        namespace = self._namespace_ref(node)
+        if namespace is not None:
+            raise ValueError(
+                f"{self._callback_label()} cannot use {namespace.text} "
+                "directly; access a scalar field or marked function")
+        collection = self._collection_ref(node)
+        if collection is not None:
+            raise ValueError(
+                f"{self._callback_label()} cannot use {collection.text} "
+                "directly; index it")
+        table = self._ref_table_ref(node)
+        if table is not None:
+            raise ValueError(
+                f"{self._callback_label()} must index {table.text}")
+        return self.generic_visit(node)
+
+    def visit_Name(self, node: ast.Name) -> ast.AST:
+        if node.id == self.receiver_name:
+            raise ValueError(
+                f"{self._callback_label()} cannot use self directly")
+        return node
+
+
+class _ComponentFunctionBuilder:
+    """Validate and compile all synchronous functions for one model tree."""
+
+    def __init__(self):
+        self.specs: dict[str, _ComponentFunctionSpec] = {}
+        self._building: list[str] = []
+
+    @staticmethod
+    def _dependency_type(dependency: _ComponentFunctionDependency) -> Any:
+        access = dependency.access
+        if access.field in access.decl.constants:
+            return _function_scalar_type(
+                access.decl.decls.consts[access.field],
+                f"component function constant '{access.field}'")
+        kind = access.decl.decls.kind_of(access.field)
+        return types.int64 if kind == "state" else types.float64
+
+    def build(
+        self,
+        decl: _ComponentDecl,
+        method_name: str,
+        method: Callable[..., Any],
+    ) -> _ComponentFunctionSpec:
+        graph_name = f"{decl.name}__{method_name}"
+        existing = self.specs.get(graph_name)
+        if existing is not None:
+            return existing
+        if graph_name in self._building:
+            start = self._building.index(graph_name)
+            cycle = [*self._building[start:], graph_name]
+            raise ValueError(
+                "recursive component function call: "
+                + " -> ".join(cycle))
+
+        self._building.append(graph_name)
+        try:
+            node = copy.deepcopy(
+                _component_method_source(method, "function"))
+            label = f"component function '{decl.name}.{method_name}'"
+            parameter_names, argument_types, return_type = \
+                _component_function_signature(node, method, label)
+            receiver_name = node.args.args[0].arg
+            _ComponentFunctionValidator(
+                receiver_name=receiver_name, method=method,
+                label=label).visit(node)
+
+            symbol = (
+                f"_CIMBA_FUNCTION_{decl.cls.__name__}_{method_name}_"
+                f"{id(method):x}")
+            lowerer = _ComponentFunctionBodyLowerer(
+                builder=self,
+                decl=decl,
+                method_name=method_name,
+                receiver_name=receiver_name,
+                parameter_names=parameter_names,
+            )
+            lowered = lowerer.visit(node)
+            if not isinstance(lowered, ast.FunctionDef):
+                raise TypeError(f"{label} lowering produced a non-function")
+            lowered.name = symbol
+            lowered.decorator_list = []
+            lowered.type_comment = None
+            lowered.returns = None
+            lowered.args.args = lowered.args.args[1:]
+            for arg in lowered.args.args:
+                arg.annotation = None
+                arg.type_comment = None
+            lowered.args.args.extend(
+                ast.arg(arg=dependency.parameter)
+                for dependency in lowerer.dependencies)
+
+            namespace = _closure_namespace(method)
+            namespace.update(lowerer.helper_namespace)
+            lowered, random_changed = lower_random_calls_in_node(
+                lowered, namespace=namespace, label=label)
+            if random_changed:
+                namespace.update(random_lowering_namespace())
+            ast.fix_missing_locations(lowered)
+            source_key = ast.unparse(
+                ast.Module(body=[lowered], type_ignores=[]))
+            dependency_types = tuple(
+                self._dependency_type(dependency)
+                for dependency in lowerer.dependencies)
+            signature = return_type(
+                *argument_types, *dependency_types)
+            closure_key = tuple(
+                (name,
+                 value if _primitive_constant(value) else id(value))
+                for name, value in (
+                    (name, cell.cell_contents)
+                    for name, cell in zip(
+                        method.__code__.co_freevars,
+                        method.__closure__ or ())
+                )
+            )
+            cache_key = (
+                id(method),
+                source_key,
+                str(signature),
+                closure_key,
+                tuple(id(value)
+                      for value in lowerer.helper_namespace.values()),
+            )
+            helper = _COMPONENT_FUNCTION_CACHE.get(cache_key)
+            if helper is None:
+                plain = _compile_lowered(
+                    lowered,
+                    filename=f"<cimba component function "
+                             f"'{decl.name}.{method_name}'>",
+                    fn_name=symbol,
+                    qualname=symbol,
+                    namespace=namespace,
+                    like=method,
+                )
+                try:
+                    helper = njit(signature)(plain)
+                    helper.disable_compile()
+                except Exception as exc:
+                    raise TypeError(
+                        f"{label} failed Numba nopython compilation"
+                    ) from exc
+                helper.__cimba_source__ = plain.__cimba_source__
+                _COMPONENT_FUNCTION_CACHE[cache_key] = helper
+
+            spec = _ComponentFunctionSpec(
+                decl=decl,
+                name=method_name,
+                method=method,
+                graph_name=graph_name,
+                symbol=symbol,
+                parameter_names=parameter_names,
+                argument_types=argument_types,
+                return_type=return_type,
+                dependencies=tuple(lowerer.dependencies),
+                helper=helper,
+                callees=tuple(lowerer.callees),
+            )
+            self.specs[graph_name] = spec
+            return spec
+        finally:
+            self._building.pop()
+
+    def build_all(
+        self,
+        roots: Iterable[_ComponentDecl],
+    ) -> dict[str, _ComponentFunctionSpec]:
+        for root in roots:
+            for decl in root.walk():
+                for method_name, method in _component_function_methods(
+                        decl.cls):
+                    self.build(decl, method_name, method)
+        return self.specs
+
+
+def _build_component_functions(
+    roots: Iterable[_ComponentDecl],
+) -> dict[str, _ComponentFunctionSpec]:
+    return _ComponentFunctionBuilder().build_all(roots)
 
 
 def _lower_component_method(
@@ -1888,6 +2526,8 @@ def _lower_component_method(
     model_dataset_fields: Iterable[str] = (),
     model_history_fields: Mapping[str, str] = {},
     model_entity_fields: Mapping[str, str] = {},
+    component_functions: Mapping[
+        str, _ComponentFunctionSpec] | None = None,
 ) -> Callable[..., Any]:
     """Shared tail of process/collect lowering: drop `self`, rewrite the
     body against the flattened env, and compile the result."""
@@ -1918,6 +2558,7 @@ def _lower_component_method(
         component_decl=component_decl,
         instance_index=instance_index,
         kind=kind,
+        component_functions=component_functions,
     )
     lowered = lowerer.visit(node)
     if not isinstance(lowered, ast.FunctionDef):
@@ -1963,10 +2604,15 @@ def _lower_component_method(
     namespace.update(dataset_lowering_namespace())
     namespace.update(timeseries_lowering_namespace())
     namespace.update(entity_lowering_namespace())
+    if component_functions:
+        namespace.update({
+            spec.symbol: spec.helper
+            for spec in component_functions.values()
+        })
     if random_changed:
         namespace.update(random_lowering_namespace())
     namespace.update(_lowering_namespace((component_decl,)))
-    return _compile_lowered(
+    generated = _compile_lowered(
         lowered,
         filename=f"<cimba component '{component_name}.{method_name}'>",
         fn_name=fn_name,
@@ -1974,6 +2620,9 @@ def _lower_component_method(
         namespace=namespace,
         like=method,
     )
+    generated.__cimba_function_calls__ = tuple(
+        sorted(lowerer.called_functions))
+    return generated
 
 
 def _shared_instance_setup(
@@ -2088,6 +2737,8 @@ def _lower_component_process(
     model_dataset_fields: Iterable[str] = (),
     model_history_fields: Mapping[str, str] = {},
     model_entity_fields: Mapping[str, str] = {},
+    component_functions: Mapping[
+        str, _ComponentFunctionSpec] | None = None,
 ) -> Callable[..., Any]:
     """Lower a component process method into a flat process function.
 
@@ -2118,7 +2769,8 @@ def _lower_component_process(
         prologue=prologue, extra_namespace=tables,
         model_dataset_fields=model_dataset_fields,
         model_history_fields=model_history_fields,
-        model_entity_fields=model_entity_fields)
+        model_entity_fields=model_entity_fields,
+        component_functions=component_functions)
 
 
 def _lower_component_collect(
@@ -2132,6 +2784,8 @@ def _lower_component_collect(
     model_dataset_fields: Iterable[str] = (),
     model_history_fields: Mapping[str, str] = {},
     model_entity_fields: Mapping[str, str] = {},
+    component_functions: Mapping[
+        str, _ComponentFunctionSpec] | None = None,
 ) -> Callable[..., Any]:
     """Lower a component collect method; with ``per_class``, one function
     covers every instance and takes the instance index as its second
@@ -2154,7 +2808,8 @@ def _lower_component_collect(
         method_name=method_name, method=method,
         model_dataset_fields=model_dataset_fields,
         model_history_fields=model_history_fields,
-        model_entity_fields=model_entity_fields)
+        model_entity_fields=model_entity_fields,
+        component_functions=component_functions)
 
 
 def _lower_model_component_refs(
@@ -2162,6 +2817,8 @@ def _lower_model_component_refs(
     *,
     model_name: str,
     component_roots: Mapping[str, _ComponentDecl],
+    component_functions: Mapping[
+        str, _ComponentFunctionSpec] | None = None,
 ) -> Callable[..., Any]:
     """Rewrite a model callback's component paths against the flattened
     env; returns the callback unchanged when it uses none."""
@@ -2185,6 +2842,7 @@ def _lower_model_component_refs(
         fn_name=fn.__name__,
         env_name=env_name,
         component_roots=component_roots,
+        component_functions=component_functions,
     )
     lowered = lowerer.visit(node)
     if not isinstance(lowered, ast.FunctionDef):
@@ -2203,8 +2861,13 @@ def _lower_model_component_refs(
     namespace.update(dataset_lowering_namespace())
     namespace.update(timeseries_lowering_namespace())
     namespace.update(entity_lowering_namespace())
+    if component_functions:
+        namespace.update({
+            spec.symbol: spec.helper
+            for spec in component_functions.values()
+        })
     namespace.update(_lowering_namespace(component_roots.values()))
-    return _compile_lowered(
+    generated = _compile_lowered(
         lowered,
         filename=f"<cimba model callback '{model_name}.{fn.__name__}'>",
         fn_name=fn.__name__,
@@ -2212,6 +2875,9 @@ def _lower_model_component_refs(
         namespace=namespace,
         like=fn,
     )
+    generated.__cimba_function_calls__ = tuple(
+        sorted(lowerer.called_functions))
+    return generated
 
 
 def _lower_dataset_methods(

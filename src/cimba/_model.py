@@ -32,6 +32,7 @@ from . import _bindings as _b
 from ._cimba import ffi, lib
 from ._components import (
     Component,
+    _build_component_functions,
     _class_declarations,
     _ComponentDecl,
     _component_collect_methods,
@@ -51,7 +52,8 @@ from ._declarations import (
     _FieldDecl,
     _STANDARD_FIELDS,
 )
-from ._graph import ProcessDAG, ProcessDAGBlock, infer_process_dag
+from ._graph import (ProcessDAG, ProcessDAGBlock, ProcessDAGEdge,
+                     ProcessDAGNode, infer_process_dag)
 from ._history_capture import (
     HISTORY_CAPTURE_STORE_FIELD,
     HISTORY_CAPTURE_TRIAL_FIELD,
@@ -586,6 +588,8 @@ class Model:
         # instance index as their second argument
         self._component_collects: list[tuple[Callable[..., Any], int]] = []
         self._compiled: _Compiled | None = None
+        self._component_functions = _build_component_functions(
+            self._component_roots.values())
         self._bind_components()
         self._register_component_processes()
 
@@ -705,7 +709,8 @@ class Model:
                     _is_struct_class, instance_index=index,
                     model_dataset_fields=self.datasets,
                     model_history_fields=self.history_fields,
-                    model_entity_fields=self.entity_fields)
+                    model_entity_fields=self.entity_fields,
+                    component_functions=self._component_functions)
 
             if field_kind == "spawnable":
                 spawn_field = decl.direct_field_map[method_name]
@@ -725,7 +730,8 @@ class Model:
                     copies_per_instance=counts,
                     model_dataset_fields=self.datasets,
                     model_history_fields=self.history_fields,
-                    model_entity_fields=self.entity_fields),
+                    model_entity_fields=self.entity_fields,
+                    component_functions=self._component_functions),
                 lower_instance)
             for fn, index in lowered:
                 if index is None:
@@ -745,13 +751,15 @@ class Model:
                     decl.name, decl, method_name, method, per_class=True,
                     model_dataset_fields=self.datasets,
                     model_history_fields=self.history_fields,
-                    model_entity_fields=self.entity_fields),
+                    model_entity_fields=self.entity_fields,
+                    component_functions=self._component_functions),
                 lambda index: _lower_component_collect(
                     decl.process_names[index], decl, method_name, method,
                     instance_index=index,
                     model_dataset_fields=self.datasets,
                     model_history_fields=self.history_fields,
-                    model_entity_fields=self.entity_fields))
+                    model_entity_fields=self.entity_fields,
+                    component_functions=self._component_functions))
             for fn, index in lowered:
                 self._component_collects.append(
                     (fn, decl.count if index is None else 1))
@@ -766,6 +774,7 @@ class Model:
         return _lower_model_component_refs(
             fn, model_name=self.name,
             component_roots=self._component_roots,
+            component_functions=self._component_functions,
         )
 
     def _lower_dataset_methods(self, fn: _F) -> _F:
@@ -854,12 +863,17 @@ class Model:
     def _process_dag_blocks(
         self,
         entity_kinds: Mapping[str, str],
+        extra_members: Mapping[str, Iterable[str]] | None = None,
     ) -> tuple[ProcessDAGBlock, ...]:
         process_names = {process.name for process in self._processes}
+        extras = extra_members or {}
         return tuple(
             ProcessDAGBlock(
                 decl.display_name or decl.name,
-                decl.dag_members(process_names, entity_kinds),
+                tuple(dict.fromkeys((
+                    *decl.dag_members(process_names, entity_kinds),
+                    *extras.get(decl.name, ()),
+                ))),
                 kind=("component_collection" if decl.collection
                       else "component"),
             )
@@ -899,6 +913,10 @@ class Model:
                                           _spawn_index=_spawn_index,
                                           _process_field=_process_field,
                                           _process_offset=_process_offset)
+        if getattr(fn, "__cimba_component_function__", False):
+            raise ValueError(
+                f"component function '{fn.__qualname__}' cannot be "
+                "registered as a model process")
         if copies < 1:
             raise ValueError("copies must be >= 1")
         if struct is not None and not _is_struct_class(struct):
@@ -1056,6 +1074,53 @@ class Model:
                         (process.process_field, slot),
                         [],
                     ).append(process.name)
+
+        function_nodes: dict[str, ProcessDAGNode] = {}
+        function_edges: list[ProcessDAGEdge] = []
+        function_members: dict[str, list[str]] = {}
+
+        def add_function_member(decl_name: str, key: str) -> None:
+            members = function_members.setdefault(decl_name, [])
+            if key not in members:
+                members.append(key)
+
+        for spec in self._component_functions.values():
+            function_node = ProcessDAGNode(spec.graph_name, "function")
+            function_nodes[function_node.key] = function_node
+            add_function_member(spec.decl.name, function_node.key)
+            for dependency in spec.dependencies:
+                if not dependency.direct:
+                    continue
+                access = dependency.access
+                if access.field in access.decl.constants:
+                    continue
+                field_kind = access.decl.decls.kind_of(access.field)
+                if field_kind not in ("param", "output", "state", "fstate"):
+                    continue
+                flat_name = access.decl.direct_field_map[access.field]
+                field_node = ProcessDAGNode(flat_name, field_kind)
+                function_nodes[field_node.key] = field_node
+                add_function_member(access.decl.name, field_node.key)
+                edge = ProcessDAGEdge(
+                    field_node.key, function_node.key, "read")
+                if edge not in function_edges:
+                    function_edges.append(edge)
+            for callee in spec.callees:
+                edge = ProcessDAGEdge(
+                    function_node.key, f"function:{callee}", "call")
+                if edge not in function_edges:
+                    function_edges.append(edge)
+
+        for process in self._processes:
+            for called in getattr(
+                    process.fn, "__cimba_function_calls__", ()):
+                edge = ProcessDAGEdge(
+                    f"process:{process.name}",
+                    f"function:{called}",
+                    "call",
+                )
+                if edge not in function_edges:
+                    function_edges.append(edge)
         return infer_process_dag(
             self._processes,
             entity_kinds=entity_kinds,
@@ -1066,7 +1131,10 @@ class Model:
             process_field_processes=process_field_processes,
             process_index_processes=process_index_processes,
             event_callbacks=((field, fn) for _n, fn, field, _d in self._events),
-            blocks=self._process_dag_blocks(entity_kinds),
+            blocks=self._process_dag_blocks(
+                entity_kinds, function_members),
+            extra_nodes=function_nodes.values(),
+            extra_edges=function_edges,
         )
 
     def predicate(self, fn: _F) -> _F:
@@ -1323,10 +1391,22 @@ class Model:
 
         proc_cfuncs = {}
         for p in self._processes:
-            inner = njit(p.fn)
-            view = p.struct if p.injected else None
-            proc_cfuncs[p.name] = (make_proc_indexed(inner, view)
-                                   if p.indexed else make_proc(inner, view))
+            try:
+                inner = njit(p.fn)
+                view = p.struct if p.injected else None
+                proc_cfuncs[p.name] = (
+                    make_proc_indexed(inner, view)
+                    if p.indexed else make_proc(inner, view))
+            except Exception as exc:
+                calls = getattr(
+                    p.fn, "__cimba_function_calls__", ())
+                if calls:
+                    raise TypeError(
+                        f"process '{p.name}' has an invalid call to "
+                        "component function(s): "
+                        + ", ".join(calls)
+                    ) from exc
+                raise
         # Predicates and events keyed by the env field that publishes
         # their compiled address
         pred_cfuncs = {field: make_pred(njit(fn))
