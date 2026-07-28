@@ -225,6 +225,58 @@ def test_class_declarations():
     assert model.dtype.fields["level"][0] == np.dtype("<f8")
 
 
+def test_param_defaults_are_optional_visible_and_overridable():
+    class Base(sim.Model):
+        rate: sim.Param = 2.5
+
+    class Defaults(Base):
+        required: sim.Param
+        scale: sim.Param = 4
+        result: sim.Output
+
+    model = Defaults()
+    assert model.params == ["rate", "required", "scale"]
+    assert model.param_defaults == {"rate": 2.5, "scale": 4.0}
+
+    @model.process
+    def run(env: Defaults):
+        env.result = env.rate * env.required * env.scale
+
+    defaulted = model.experiment(
+        required=3.0, replications=1, duration=1.0)
+    assert defaulted.run() == 0
+    assert defaulted["result"][0] == 30.0
+    assert defaulted["rate"][0] == 2.5
+    assert defaulted["scale"][0] == 4.0
+
+    swept = model.experiment(
+        required=3.0,
+        rate=[1.0, 2.0],
+        scale=5.0,
+        replications=1,
+        duration=1.0,
+    )
+    assert swept.run() == 0
+    assert swept["result"].tolist() == [15.0, 30.0]
+    assert model.trial_seeds(
+        seed=7, required=3.0, replications=2).shape == (2,)
+
+    with pytest.raises(ValueError, match="missing parameter.*required"):
+        model.experiment(replications=1, duration=1.0)
+
+
+def test_param_defaults_reject_non_scalar_values():
+    class BadString(sim.Model):
+        value: sim.Param = "fast"
+
+    class BadBool(sim.Model):
+        value: sim.Param = True
+
+    for cls in (BadString, BadBool):
+        with pytest.raises(TypeError, match="default must be a real scalar"):
+            cls()
+
+
 def test_unbound_predicate_field_rejected():
     class Gate(sim.Model):
         x: sim.Param

@@ -17,6 +17,7 @@ model they collect into:
 import keyword
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from numbers import Real
 from typing import TYPE_CHECKING, Any, get_type_hints
 
 from numba import carray, types
@@ -118,6 +119,8 @@ class _FieldDecl:
     count: int | str | None = None
     #: element count of flattened multi-instance fields, None for scalars
     shape: tuple[int, ...] | None = None
+    #: optional scalar/shaped Param value used when experiment() omits it
+    default: Any = _MISSING
 
 
 class _Declarations:
@@ -162,7 +165,7 @@ if TYPE_CHECKING:
     import numpy as np
     from numpy.typing import NDArray
 
-    Param = float        #: swept input, set by experiment()
+    Param = float        #: swept input, optionally defaulted in its declaration
     Output = float       #: result, written by the model
     State = int          #: mutable per-trial counter
     FloatState = float   #: mutable per-trial real-valued state
@@ -484,6 +487,15 @@ def _check_name(name: str, kind: str) -> None:
         raise ValueError(f"{kind} name '{name}' is reserved")
 
 
+def _param_default(value: Any, label: str) -> float:
+    """Validate and normalize one declared Param default."""
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise TypeError(
+            f"{label} default must be a real scalar, got "
+            f"{type(value).__name__}")
+    return float(value)
+
+
 def _field_declarations(
     cls: type,
     *,
@@ -516,8 +528,10 @@ def _field_declarations(
             kind = None
         if kind is None:
             continue
-        default = getattr(cls, fname, None)
+        default = getattr(cls, fname, _MISSING)
         if kind.capacitated:
+            if default is _MISSING:
+                default = None
             if isinstance(default, _Capacity):
                 default = default.cap
             decls.add(_FieldDecl(fname, kind, capacity=default))
@@ -532,15 +546,22 @@ def _field_declarations(
                     f"field '{fname}': a PQueues declaration needs a "
                     "positive count default, e.g. "
                     "'qs: sim.PQueues = sim.count(4)'")
+        elif kind.name == "param":
+            param_default = (
+                _MISSING if default is _MISSING
+                else _param_default(default, f"Param field '{fname}'")
+            )
+            decls.add(_FieldDecl(fname, kind, default=param_default))
         else:
             method_binding = (
                 kind.name in ("processes", "spawnable")
                 and getattr(default, "__cimba_component_process__", None)
                 is not None
             )
-            if default is not None and not method_binding:
+            if (default is not _MISSING and default is not None
+                    and not method_binding):
                 raise ValueError(
                     f"field '{fname}': only Queue/Pool/Store declarations "
-                    "may carry a capacity default")
+                    "and Param declarations may carry a default")
             decls.add(_FieldDecl(fname, kind))
     return decls

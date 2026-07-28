@@ -46,6 +46,7 @@ from ._components import (
 )
 from ._declarations import (
     Handle,
+    _MISSING,
     _Capacities,
     _check_name,
     _FIELD_KINDS,
@@ -513,6 +514,11 @@ class Model:
 
         # Backwards-compatible views of the declarations, by kind
         self.params = decls.names("param")
+        self.param_defaults: dict[str, Any] = {
+            field.name: field.default
+            for field in decls.by_kind("param")
+            if field.default is not _MISSING
+        }
         self.outputs = decls.names("output")
         self.queues = {f.name: f.capacity for f in decls.by_kind("queue")}
         self.resources = decls.names("resource")
@@ -1257,6 +1263,22 @@ class Model:
             for p in self.params
         ]
 
+    def _resolve_param_values(
+        self,
+        param_values: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Fill omitted Params from declared defaults and validate names."""
+        resolved = dict(param_values)
+        for name, default in self.param_defaults.items():
+            resolved.setdefault(name, default)
+        missing = set(self.params) - set(resolved)
+        if missing:
+            raise ValueError(f"missing parameter values: {sorted(missing)}")
+        unknown = set(param_values) - set(self.params) - set(self.traces)
+        if unknown:
+            raise ValueError(f"unknown parameters: {sorted(unknown)}")
+        return resolved
+
     def _trace_field_spec(self, name: str) -> tuple[Any, ...]:
         shape = self._field_shapes.get(name)
         if shape is None:
@@ -1706,12 +1728,7 @@ class Model:
         the finished rows to experiment() with the same seed. Trace
         fields passed here are ignored, so the experiment() keyword
         arguments can be reused as-is."""
-        missing = set(self.params) - set(param_values)
-        unknown = set(param_values) - set(self.params) - set(self.traces)
-        if missing:
-            raise ValueError(f"missing parameter values: {sorted(missing)}")
-        if unknown:
-            raise ValueError(f"unknown parameters: {sorted(unknown)}")
+        param_values = self._resolve_param_values(param_values)
         if replications < 1:
             raise ValueError("replications must be >= 1")
         n_points = 1
@@ -1731,6 +1748,8 @@ class Model:
                    ) -> "Experiment":
         """Build an experiment: the cross product of the swept parameter
         values (scalars are held fixed), replicated with distinct seeds.
+        Omitted Params use their declaration defaults; Params without a
+        default remain required.
 
         Trace fields take their replay data here as well: a 1-D array
         shared by every trial, a 2-D array whose row i replays in trial i
@@ -1746,16 +1765,11 @@ class Model:
         derivation (see ``trace_rng``)."""
         compiled = self._compile()
 
-        missing = set(self.params) - set(param_values)
-        unknown = set(param_values) - set(self.params) - set(self.traces)
+        param_values = self._resolve_param_values(param_values)
         missing_traces = set(self.traces) - set(param_values)
-        if missing:
-            raise ValueError(f"missing parameter values: {sorted(missing)}")
         if missing_traces:
             raise ValueError(f"missing trace values: "
                              f"{sorted(missing_traces)}")
-        if unknown:
-            raise ValueError(f"unknown parameters: {sorted(unknown)}")
         if replications < 1:
             raise ValueError("replications must be >= 1")
 

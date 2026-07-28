@@ -66,7 +66,8 @@ from ._dataset.methods import (
     lower_env_dataset_method_calls,
 )
 from ._declarations import (_DECL_KINDS, _MISSING, _check_name,
-                            _Declarations, _field_declarations, _FieldDecl)
+                            _Declarations, _field_declarations, _FieldDecl,
+                            _param_default)
 from ._timeseries.methods import (
     HISTORY_GETTER_NAMES,
     lower_env_history_method_calls,
@@ -406,6 +407,8 @@ class _ComponentDecl:
     direct_field_map: dict[str, str]
     #: per-instance primitive attribute values captured from the defaults
     constants: dict[str, tuple[Any, ...]]
+    #: optional per-instance Param defaults, by local field name
+    param_defaults: dict[str, tuple[float, ...]]
     #: per-instance PQueues element counts / start offsets, by field
     pqueue_counts: dict[str, tuple[int, ...]]
     pqueue_offsets: dict[str, tuple[int, ...]]
@@ -539,6 +542,36 @@ def _validate_component_consts(
             instance_values.append(value)
         values[fname] = tuple(instance_values)
     return values
+
+
+def _component_param_defaults(
+    component_name: str,
+    templates: Sequence[Component],
+    decls: _Declarations,
+) -> dict[str, tuple[float, ...]]:
+    """Capture Param defaults from class attributes or component instances.
+
+    A shaped flattened parameter can only be omitted as a whole, so every
+    instance covered by a component declaration must either provide the
+    default or leave it required.
+    """
+    defaults: dict[str, tuple[float, ...]] = {}
+    for fname in decls.names("param"):
+        values = tuple(
+            getattr(template, fname, _MISSING) for template in templates)
+        present = tuple(value is not _MISSING for value in values)
+        if not any(present):
+            continue
+        if not all(present):
+            raise ValueError(
+                f"component '{component_name}' Param '{fname}' must have "
+                "a default on every instance or none")
+        defaults[fname] = tuple(
+            _param_default(
+                value, f"component '{component_name}' Param '{fname}'")
+            for value in values
+        )
+    return defaults
 
 
 def _offsets_from_counts(counts: Iterable[int]) -> tuple[tuple[int, ...],
@@ -802,6 +835,7 @@ class _DeclBuilder:
         direct_field_map = _component_field_map(name, decls)
         wiring_raw = self._field_wiring(name, templates, decls)
         component_refs = _component_ref_values(name, templates, decls)
+        param_defaults = _component_param_defaults(name, templates, decls)
         const_values = _validate_component_consts(name, templates,
                                                   decls.consts)
         constants = {
@@ -833,6 +867,7 @@ class _DeclBuilder:
             item_display_name=item_display_name,
             direct_field_map=direct_field_map,
             constants=constants,
+            param_defaults=param_defaults,
             pqueue_counts=pqueue_counts,
             pqueue_offsets=pqueue_offsets,
             process_counts=process_counts,
@@ -866,8 +901,13 @@ class _DeclBuilder:
                 capacity = _rewrite_component_capacity(
                     decl.name, fname, field_decl.capacity, decl.decls,
                     decl.direct_field_map)
+                default = field_decl.default
+                if kind.name == "param" and fname in decl.param_defaults:
+                    values = decl.param_defaults[fname]
+                    default = values[0] if decl.count == 1 else values
                 self.target.add(_FieldDecl(flat_name, kind,
-                                           capacity=capacity, shape=shape))
+                                           capacity=capacity, shape=shape,
+                                           default=default))
 
     # -- entity wiring -------------------------------------------------------
 

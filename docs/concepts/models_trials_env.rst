@@ -51,8 +51,20 @@ One trial does not share simulation state with another trial.
 Field roles
 -----------
 
-``sim.Param`` fields are inputs. They are set by ``model.experiment(...)`` and
-may be scalars or swept arrays.
+``sim.Param`` fields are inputs. They may be required or carry a scalar
+declaration default:
+
+.. code-block:: python
+
+   class Clinic(sim.Model):
+       arrival_rate: sim.Param
+       mean_service: sim.Param = 0.25
+
+``model.experiment(arrival_rate=4.0)`` uses ``0.25`` for ``mean_service``.
+Passing ``mean_service=...`` overrides the default with a scalar or swept
+array. Required parameters such as ``arrival_rate`` still produce a missing
+parameter error when omitted. ``model.param_defaults`` exposes the effective
+flattened defaults.
 
 ``sim.Output`` fields are results. They start as missing values and are usually
 written by a collector after the trial finishes.

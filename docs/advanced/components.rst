@@ -33,6 +33,12 @@ constructed, Cimba Python lowers those methods into ordinary model processes.
 Inside the method, ``self.waiting`` and ``self.completed`` refer to the
 component-owned fields for this trial.
 
+Component parameters can also carry defaults. A class default applies to every
+instance unless its constructor assigns an instance-specific value. For a
+component collection, every item must provide a default or the flattened
+parameter remains required as a whole. Experiment arguments such as
+``desks__service_rate=[0.2, 0.3]`` override the flattened defaults.
+
 Primitive per-instance settings can be marked explicitly with ``sim.Const``.
 Constants are captured from each component instance at model construction time
 and lowered as compile-time values or small lookup tables:

@@ -481,6 +481,62 @@ def test_component_declarations_flatten_into_model_dtype():
         assert field in model.dtype.fields
 
 
+def test_component_param_defaults_flatten_per_instance_and_can_be_overridden():
+    class Policy(sim.Component):
+        threshold: sim.Param = 10.0
+        multiplier: sim.Param
+
+        def __init__(self, multiplier: float):
+            self.multiplier = multiplier
+
+    class Network(sim.Model):
+        policies: list[Policy] = [Policy(2.0), Policy(3.0)]
+        result: sim.Output
+
+    model = Network()
+    assert model.param_defaults == {
+        "policies__threshold": (10.0, 10.0),
+        "policies__multiplier": (2.0, 3.0),
+    }
+
+    @model.process
+    def run(env: Network):
+        env.result = (
+            env.policies[0].threshold * env.policies[0].multiplier
+            + env.policies[1].threshold * env.policies[1].multiplier
+        )
+
+    defaulted = model.experiment(replications=1, duration=1.0)
+    assert defaulted.run() == 0
+    assert defaulted["result"][0] == 50.0
+    assert defaulted.trials["policies__threshold"][0].tolist() == [10.0, 10.0]
+
+    overridden = model.experiment(
+        policies__threshold=[5.0, 7.0],
+        policies__multiplier=[4.0, 6.0],
+        replications=1,
+        duration=1.0,
+    )
+    assert overridden.run() == 0
+    assert overridden["result"][0] == 62.0
+
+
+def test_component_param_defaults_must_cover_every_collection_item():
+    class Policy(sim.Component):
+        threshold: sim.Param
+
+        def __init__(self, threshold=None):
+            if threshold is not None:
+                self.threshold = threshold
+
+    class Network(sim.Model):
+        policies: list[Policy] = [Policy(2.0), Policy()]
+
+    with pytest.raises(
+            ValueError, match="must have a default on every instance or none"):
+        Network()
+
+
 def test_component_process_runs_with_fields_and_constants():
     class Network(sim.Model):
         retailer: Warehouse = Warehouse(R=20, B=50)

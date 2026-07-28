@@ -20,6 +20,12 @@ mutable trial-local state, and entities such as ``sim.Queue``, ``sim.Resource``,
 ``sim.Pool``, ``sim.Store``, ``sim.PQueues``, ``sim.Condition``, and
 ``sim.Dataset`` are created for each trial.
 
+A parameter may declare a scalar default with normal Python syntax,
+``mean_service: sim.Param = 0.25``. Omitted experiment arguments use that
+value; explicit scalar or swept values override it. Parameters without defaults
+remain required, and ``model.param_defaults`` reports defaults by flattened
+field name.
+
 .. code-block:: python
 
    import cimba.sim as sim
