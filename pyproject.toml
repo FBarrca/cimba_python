@@ -4,7 +4,7 @@ build-backend = "mesonpy"
 
 [project]
 name = "cimba"
-version = "0.3.0"
+version = "0.4.0"
 description = "Python bindings for Cimba, a multithreaded discrete-event-simulation C library"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -17,7 +17,6 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: C",
     "Operating System :: POSIX :: Linux",
-    "Operating System :: MacOS :: MacOS X",
     "Topic :: Scientific/Engineering",
     "Typing :: Typed",
 ]
@@ -66,8 +65,8 @@ compile = ["cimba_ext"]
 install = ["--skip-subprojects"]
 
 [tool.cibuildwheel]
-# Native macOS source builds are supported; binary wheel publication remains
-# limited to Linux x86_64 for CPython 3.13 and 3.14 for now.
+# The vendored Cimba C library currently ships x86-64 assembly ports, so we
+# publish Linux x86_64 wheels for CPython 3.13 and 3.14.
 build = "cp313-manylinux_x86_64 cp314-manylinux_x86_64"
 test-requires = "pytest>=8"
 test-command = "pytest {project}/tests"

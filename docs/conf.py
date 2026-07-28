@@ -12,7 +12,7 @@ if version_match:
     release = version_match.group(1)
     version = release
 else:
-    release = "0.3.0"
+    release = "0.4.0"
     version = release
 
 copyright = "Asbjorn M. Bonvik 2025-26"
