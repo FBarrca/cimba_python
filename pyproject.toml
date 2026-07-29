@@ -69,6 +69,8 @@ install = ["--skip-subprojects"]
 [tool.cibuildwheel]
 # Publish CPython 3.13 and 3.14 wheels on each release-workflow platform.
 build = "cp313-* cp314-*"
+# Numba/llvmlite publish manylinux wheels but not musllinux wheels.
+skip = "*-musllinux*"
 test-requires = "pytest>=8"
 test-command = "pytest {project}/tests"
 
