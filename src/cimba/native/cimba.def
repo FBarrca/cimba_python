@@ -1,5 +1,16 @@
 EXPORTS
     PyInit__cimba_native
+    cimba_version
+    cimba_run_experiment
+    cmb_random_hwseed
+    cpy_process_sizeof
+    cpy_history_capture_store_create
+    cpy_history_capture_store_destroy
+    cpy_history_capture_store_count
+    cpy_history_capture_store_data
+    cpy_logger_flags_on
+    cpy_logger_flags_off
+    cmb_logger_flags_off
     cmb_event_queue_initialize
     cmb_event_queue_execute
     cmb_event_queue_terminate
