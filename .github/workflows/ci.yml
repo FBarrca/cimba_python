@@ -72,7 +72,16 @@ jobs:
         run: uv sync --locked
 
       - name: Run tests
-        run: uv run pytest
+        shell: pwsh
+        run: |
+          uv run pytest 2>&1 | Tee-Object -FilePath ci-pytest.log
+          $pytestExit = $LASTEXITCODE
+          if ($pytestExit -ne 0) {
+            $message = (Get-Content ci-pytest.log -Tail 100) -join "`n"
+            $message = $message.Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A")
+            Write-Output "::error title=Windows pytest failed::$message"
+          }
+          exit $pytestExit
 
   test-macos:
     name: Test macOS (${{ matrix.arch }})
@@ -110,7 +119,19 @@ jobs:
         run: brew install nasm
 
       - name: Install Python dependencies
-        run: uv sync --locked
+        shell: bash
+        run: |
+          set +e
+          uv sync --locked 2>&1 | tee ci-sync.log
+          sync_exit=${PIPESTATUS[0]}
+          if [ "$sync_exit" -ne 0 ]; then
+            message="$(tail -n 100 ci-sync.log)"
+            message="${message//'%'/'%25'}"
+            message="${message//$'\r'/'%0D'}"
+            message="${message//$'\n'/'%0A'}"
+            echo "::error title=macOS dependency build failed::$message"
+          fi
+          exit "$sync_exit"
 
       - name: Run tests
         run: uv run pytest

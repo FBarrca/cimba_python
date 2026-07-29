@@ -18,10 +18,17 @@ cc = meson.get_compiler('c')
 # Flags common to all build types
 common_flags = [
     '-Wno-pedantic',
-    '-D_POSIX_C_SOURCE=200809L',
     '-fno-semantic-interposition',
     '-DNMXCSR',
 ]
+
+if host_machine.system() == 'linux'
+    common_flags += '-D_POSIX_C_SOURCE=200809L'
+elif host_machine.system() == 'darwin'
+    # Keep declarations for Darwin extensions such as pthread_get_stackaddr_np
+    # and arc4random_buf visible while building the native runtime.
+    common_flags += '-D_DARWIN_C_SOURCE'
+endif
 
 if cc.has_argument('-std=c23')
     common_flags += '-std=c23'
