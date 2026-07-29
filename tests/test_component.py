@@ -4,6 +4,270 @@ import pytest
 import cimba.sim as sim
 
 
+def test_nested_component_uses_concrete_default_function_override():
+    class Policy(sim.Component):
+        @sim.function
+        def calculate(self, value: float) -> float:
+            return value
+
+    class DoublePolicy(Policy):
+        @sim.function
+        def calculate(self, value: float) -> float:
+            return value * 2.0
+
+    class Holder(sim.Component):
+        policy: Policy = DoublePolicy()
+        result: sim.Output
+
+        @sim.collect
+        def report(self, env):
+            self.result = self.policy.calculate(3.0)
+
+    class Example(sim.Model):
+        holder: Holder = Holder()
+
+    model = Example()
+
+    @model.process
+    def run(env: Example):
+        sim.suspend()
+
+    exp = model.experiment(replications=1, duration=1.0)
+    assert exp.run() == 0
+    assert exp["holder__result"][0] == 6.0
+
+
+def test_heterogeneous_component_collection_dispatches_dynamic_function_calls():
+    class Policy(sim.Component):
+        @sim.function
+        def calculate(self, value: float) -> float:
+            return value
+
+    class FixedLot(Policy):
+        lot_size: sim.Param = 10.0
+
+        @sim.function
+        def calculate(self, value: float) -> float:
+            return value + self.lot_size
+
+    class EOQ(Policy):
+        ordering_cost: sim.Param = 4.0
+
+        @sim.function
+        def calculate(self, value: float) -> float:
+            return value * self.ordering_cost
+
+    class System(sim.Model):
+        policies: list[Policy] = [FixedLot(), EOQ(), FixedLot()]
+        total: sim.Output
+
+    model = System()
+    assert model.dtype["policies__lot_size"].shape == (2,)
+    assert model.dtype["policies__ordering_cost"].shape == ()
+
+    @model.process
+    def run(env: System):
+        env.total = 0.0
+        for i in range(3):
+            env.total += env.policies[i].calculate(2.0)
+        sim.suspend()
+
+    exp = model.experiment(
+        policies__lot_size=[3.0, 5.0],
+        policies__ordering_cost=7.0,
+        replications=1,
+        duration=1.0,
+    )
+    assert exp.run() == 0
+    assert exp["total"][0] == 26.0
+    assert exp.trials["policies__lot_size"][0].tolist() == [3.0, 5.0]
+    assert exp.trials["policies__ordering_cost"][0] == 7.0
+
+
+def test_component_collection_can_have_different_nested_policy_types():
+    class Policy(sim.Component):
+        @sim.function
+        def calculate(self, value: float) -> float:
+            return value
+
+    class DoublePolicy(Policy):
+        @sim.function
+        def calculate(self, value: float) -> float:
+            return value * 2.0
+
+    class TriplePolicy(Policy):
+        @sim.function
+        def calculate(self, value: float) -> float:
+            return value * 3.0
+
+    class Material(sim.Component):
+        policy: Policy
+        result: sim.Output
+
+        def __init__(self, policy):
+            self.policy = policy
+
+        @sim.function
+        def value(self, amount: float) -> float:
+            return self.policy.calculate(amount)
+
+        @sim.collect
+        def report(self, env):
+            self.result = self.value(3.0)
+
+    class SupplyModel(sim.Model):
+        materials: list[Material] = [
+            Material(DoublePolicy()),
+            Material(TriplePolicy()),
+        ]
+        dynamic_total: sim.Output
+
+    model = SupplyModel()
+
+    @model.process
+    def run(env: SupplyModel):
+        env.dynamic_total = 0.0
+        for i in range(2):
+            env.dynamic_total += env.materials[i].value(2.0)
+        sim.suspend()
+
+    graph_nodes = {node.key for node in model.process_dag().nodes}
+    assert {
+        "function:materials__value__variant_0",
+        "function:materials__value__variant_1",
+        "function:materials__policy__calculate__variant_0",
+        "function:materials__policy__calculate__variant_1",
+    } <= graph_nodes
+
+    exp = model.experiment(replications=1, duration=1.0)
+    assert exp.run() == 0
+    assert exp["materials__result"][0].tolist() == [6.0, 9.0]
+    assert exp["dynamic_total"][0] == 10.0
+
+
+def test_heterogeneous_component_process_and_collect_overrides_run():
+    class Worker(sim.Component):
+        count: sim.State
+        result: sim.Output
+
+        @sim.process
+        def run(self, env):
+            self.count += 1
+            sim.suspend()
+
+        @sim.collect
+        def report(self, env):
+            self.result = self.count
+
+    class FastWorker(Worker):
+        @sim.process
+        def run(self, env):
+            self.count += 5
+            sim.suspend()
+
+        @sim.collect
+        def report(self, env):
+            self.result = self.count * 2
+
+    class System(sim.Model):
+        workers: list[Worker] = [Worker(), FastWorker()]
+
+    model = System()
+    assert [process.name for process in model._processes] == [
+        "workers__0__run",
+        "workers__1__run",
+    ]
+    exp = model.experiment(replications=1, duration=1.0)
+    assert exp.run() == 0
+    assert exp["workers__result"][0].tolist() == [1.0, 10.0]
+
+
+def test_subtype_only_entity_and_processes_fields_are_packed():
+    class Policy(sim.Component):
+        capacity: sim.Param
+
+        def __init__(self, capacity):
+            self.capacity = capacity
+
+    class ManagedPolicy(Policy):
+        queue: sim.Queue = sim.capacity("capacity")
+        workers: sim.Processes
+        result: sim.Output
+
+        @sim.process(copies=2)
+        def workers(self, env, idx):
+            self.queue.put(1)
+            sim.suspend()
+
+        @sim.collect
+        def report(self, env):
+            self.result = self.queue.level()
+
+    class System(sim.Model):
+        policies: list[Policy] = [Policy(1), ManagedPolicy(2)]
+
+    model = System()
+    assert model.dtype["policies__queue"].shape == ()
+    assert model.dtype["policies__workers"].shape == (2,)
+    assert model.dtype["policies__result"].shape == ()
+    exp = model.experiment(replications=1, duration=1.0)
+    assert exp.run() == 0
+    assert exp["policies__result"][0] == 2.0
+    assert all(exp.trials["policies__workers"][0] != 0)
+
+
+def test_polymorphic_component_errors_are_clear():
+    class Policy(sim.Component):
+        @sim.function
+        def calculate(self, value: float) -> float:
+            return value
+
+    class WithField(Policy):
+        amount: sim.Param = 2.0
+
+    class WithoutField(Policy):
+        pass
+
+    class DynamicFields(sim.Model):
+        policies: list[Policy] = [WithField(), WithoutField()]
+        result: sim.Output
+
+    model = DynamicFields()
+    with pytest.raises(ValueError, match="not declared by every concrete"):
+        @model.process
+        def bad_field(env: DynamicFields):
+            i = env.result
+            env.result = env.policies[i].amount
+
+    class IntPolicy(Policy):
+        @sim.function
+        def calculate(self, value: int) -> float:
+            return float(value)
+
+    class BadFunctions(sim.Model):
+        policies: list[Policy] = [Policy(), IntPolicy()]
+        result: sim.Output
+
+    bad_functions = BadFunctions()
+    with pytest.raises(TypeError, match="incompatible signatures"):
+        @bad_functions.process
+        def bad_call(env: BadFunctions):
+            i = 0
+            env.result = env.policies[i].calculate(1.0)
+
+    class ParamPolicy(Policy):
+        setting: sim.Param
+
+    class StatePolicy(Policy):
+        setting: sim.State
+
+    class BadFields(sim.Model):
+        policies: list[Policy] = [ParamPolicy(), StatePolicy()]
+
+    with pytest.raises(TypeError, match="incompatible field 'setting'"):
+        BadFields()
+
+
 def test_component_function_reads_params_and_returns_value():
     class Policy(sim.Component):
         threshold: sim.Param

@@ -662,7 +662,11 @@ class Model:
                         )
                     setattr(parent, child.local_name, items)
             else:
-                for child_index, parent in enumerate(parents):
+                for parent_index, parent in enumerate(parents):
+                    child_index = (child.parent_slots[parent_index]
+                                   if child.parent_slots else parent_index)
+                    if child_index < 0:
+                        continue
                     component = copy.copy(child.instances[child_index])
                     bound.append(component)
                     setattr(parent, child.local_name, component)
@@ -702,6 +706,54 @@ class Model:
         Spawnable methods are always per-instance -- the spawn descriptor
         is what identifies the instance at runtime."""
         components = self._component_bindings[decl.name]
+        if decl.polymorphic:
+            for index, component in enumerate(components):
+                cls = decl.class_at(index)
+                for method_name, method, spec in \
+                        _component_process_methods(cls):
+                    count = spec.resolve_copies(
+                        component,
+                        f"{decl.process_names[index]}.{method_name}")
+                    field_kind = (
+                        decl.decls.kind_of(method_name)
+                        if (method_name in decl.field_owners
+                            and index in decl.field_owners[method_name])
+                        else None)
+                    lowered = _lower_component_process(
+                        decl.process_names[index], decl, method_name, method,
+                        _is_struct_class, instance_index=index,
+                        model_dataset_fields=self.datasets,
+                        model_history_fields=self.history_fields,
+                        model_entity_fields=self.entity_fields,
+                        component_functions=self._component_functions)
+                    spawn_field = (decl.direct_field_map[method_name]
+                                   if field_kind == "spawnable" else None)
+                    spawn_index = None
+                    if spawn_field is not None:
+                        owners = decl.field_owners[method_name]
+                        if len(owners) > 1:
+                            spawn_index = decl.field_slots[method_name][index]
+                    process_field = (decl.direct_field_map[method_name]
+                                     if field_kind == "processes" else None)
+                    process_offset = (
+                        decl.process_offsets[method_name][index]
+                        if process_field is not None else 0)
+                    self.process(
+                        lowered, copies=count, priority=spec.priority,
+                        _spawn_field=spawn_field, _spawn_index=spawn_index,
+                        _process_field=process_field,
+                        _process_offset=process_offset)
+                for method_name, method in _component_collect_methods(cls):
+                    lowered = _lower_component_collect(
+                        decl.process_names[index], decl, method_name, method,
+                        instance_index=index,
+                        model_dataset_fields=self.datasets,
+                        model_history_fields=self.history_fields,
+                        model_entity_fields=self.entity_fields,
+                        component_functions=self._component_functions)
+                    self._component_collects.append((lowered, 1))
+            return
+
         for method_name, method, spec in _component_process_methods(decl.cls):
             counts = tuple(
                 spec.resolve_copies(
@@ -1465,7 +1517,8 @@ class Model:
         callbacks as Python source (njit-compilable against the namespace
         from _codegen_namespace)."""
 
-        def cap_expr(cap, index: int | None = None):
+        def cap_expr(cap, index: int | None = None,
+                     slots: tuple[int, ...] | None = None):
             if cap is None:
                 return "CAP"
             if isinstance(cap, int):
@@ -1478,6 +1531,8 @@ class Model:
                 if index is None:
                     raise ValueError(f"capacity parameter '{cap}' needs "
                                      "an entity index")
+                if slots is not None:
+                    index = slots[index]
                 return f"np.uint64(env['{cap}'][{index}])"
             return f"np.uint64(env['{cap}'])"
 
@@ -1540,7 +1595,7 @@ class Model:
                 if f.kind.named:
                     args += f", {self._field_name_keys(f.name)[i][0]}"
                 if f.kind.capacitated:
-                    args += f", {cap_expr(f.capacity, i)}"
+                    args += f", {cap_expr(f.capacity, i, f.capacity_slots)}"
                 src += [f"    h = {binding}_create()",
                         f"    {binding}_initialize({args})",
                         f"    {ref} = h"]

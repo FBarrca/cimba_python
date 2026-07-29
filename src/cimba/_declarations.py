@@ -114,6 +114,8 @@ class _FieldDecl:
     kind: _FieldKind
     #: Queue/Pool/Store capacity: an int, a param name, or None (unbounded)
     capacity: int | str | None = None
+    #: for a shaped symbolic capacity, entity slot -> capacity Param slot.
+    capacity_slots: tuple[int, ...] | None = None
     #: PQueues element count: an int or (components) a constant name;
     #: after flattening, the total element count
     count: int | str | None = None

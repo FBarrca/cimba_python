@@ -191,6 +191,65 @@ The collection length is fixed by the model class. This is a good fit for
 known departments, stations, gates, or desks. If the number of active entities
 changes during a trial, use dynamic processes instead.
 
+Concrete component specialization
+---------------------------------
+
+A component annotation is a compatibility constraint; the default instance
+selects the concrete implementation compiled for that field. This makes normal
+policy and strategy composition work without specialized container classes:
+
+.. code-block:: python
+
+   class Policy(sim.Component):
+       @sim.function
+       def calculate(self, value: float) -> float:
+           return value
+
+
+   class DoublePolicy(Policy):
+       @sim.function
+       def calculate(self, value: float) -> float:
+           return value * 2.0
+
+
+   class Material(sim.Component):
+       policy: Policy
+
+       def __init__(self, policy):
+           self.policy = policy
+
+
+   class SupplyModel(sim.Model):
+       materials: list[Material] = [
+           Material(DoublePolicy()),
+           Material(Policy()),
+       ]
+
+Cimba validates each instance against its annotation, then discovers fields,
+``@sim.function``, ``@sim.process``, and ``@sim.collect`` methods from the
+concrete class. Different items in a collection may use different concrete
+classes, including nested paths such as ``materials[].policy``.
+
+The instance-to-implementation mapping is fixed when the model is constructed.
+A call through a computed index, such as
+``env.materials[i].policy.calculate(value)``, becomes a compiled switch over
+that fixed mapping. Every possible implementation of a dynamically dispatched
+function must have compatible argument and return annotations.
+
+Fields declared by only some concrete classes keep their natural flattened
+name and are packed over the owning items in collection order. For policies
+``[FixedLot(), EOQ(), FixedLot()]``, ``materials__policy__lot_size`` therefore
+has two slots, corresponding to the first and third materials. Parameter
+overrides use that same owner-only order. Direct access through a dynamic index
+is accepted only when every possible concrete type declares the field; access
+to a subtype-only field must be through a statically known item or from the
+subtype's own compiled methods.
+
+If different concrete classes give the same flattened field name incompatible
+kinds or structural declarations, model construction fails with a type error.
+Homogeneous component fields and collections retain their existing names,
+shapes, and lowering behavior.
+
 Wiring components together
 --------------------------
 

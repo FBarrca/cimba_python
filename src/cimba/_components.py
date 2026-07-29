@@ -389,7 +389,13 @@ class _ComponentDecl:
 
     #: flattened field prefix, e.g. ``zones__gates``
     name: str
+    #: compatibility constraint from the annotation. ``cls`` remains the
+    #: concrete class for homogeneous declarations for backwards-compatible
+    #: private introspection; polymorphic declarations use the annotated base.
     cls: type[Component]
+    declared_cls: type[Component]
+    #: exact class selected by each template instance.
+    instance_classes: tuple[type[Component], ...]
     collection: bool
     #: bound template instances, one per (parent instance x item)
     instances: tuple[Component, ...]
@@ -425,10 +431,34 @@ class _ComponentDecl:
     #: for collections: first item index / item count per parent instance
     parent_offsets: tuple[int, ...] = ()
     parent_lengths: tuple[int, ...] = ()
+    #: scalar children are packed over the parents that declare them:
+    #: parent instance index -> child instance index, or -1 when absent.
+    parent_slots: tuple[int, ...] = ()
+    #: field/constant owners and logical-instance -> packed-slot mappings.
+    field_owners: dict[str, tuple[int, ...]] = field(default_factory=dict)
+    field_slots: dict[str, tuple[int, ...]] = field(default_factory=dict)
+    constant_owners: dict[str, tuple[int, ...]] = field(default_factory=dict)
+    constant_slots: dict[str, tuple[int, ...]] = field(default_factory=dict)
 
     @property
     def count(self) -> int:
         return len(self.instances)
+
+    @property
+    def polymorphic(self) -> bool:
+        """Whether this path or one of its descendants needs per-instance
+        specialization."""
+        return (len(set(self.instance_classes)) > 1
+                or any(child.polymorphic for child in self.children))
+
+    def class_at(self, index: int = 0) -> type[Component]:
+        return self.instance_classes[index]
+
+    def specialization_indices(self) -> tuple[int | None, ...]:
+        """None denotes the existing homogeneous shared specialization."""
+        if self.polymorphic:
+            return tuple(range(self.count))
+        return (None,)
 
     def walk(self) -> Iterator["_ComponentDecl"]:
         """This node and all of its descendants, depth-first."""
@@ -449,8 +479,12 @@ class _ComponentDecl:
         owns (wired fields belong to, and are displayed in, the wiring
         target's block)."""
         members: list[str] = []
-        for method_name, _method, _spec in _component_process_methods(
-                self.cls):
+        methods: dict[str, tuple[Callable[..., Any],
+                                 _ComponentProcessSpec]] = {}
+        for cls in dict.fromkeys(self.instance_classes):
+            for method_name, method, spec in _component_process_methods(cls):
+                methods.setdefault(method_name, (method, spec))
+        for method_name in methods:
             # A method compiled once for every instance registers under
             # the decl name; instance-specialized methods (spawnables,
             # the per-instance fallback) under the per-instance names.
@@ -488,6 +522,71 @@ def _component_declarations(cls: type[Component]) -> _Declarations:
     return decls
 
 
+def _merge_component_declarations(
+    component_name: str,
+    classes: Sequence[type[Component]],
+) -> tuple[_Declarations, tuple[_Declarations, ...]]:
+    """Merge the declarations of concrete classes sharing one logical path.
+
+    Per-instance declarations are retained for ownership checks. The merged
+    declarations drive the flattened schema; structurally incompatible fields
+    that would otherwise receive the same flattened name are rejected.
+    """
+    per_instance = tuple(_component_declarations(cls) for cls in classes)
+    merged = _Declarations()
+    field_sources: dict[str, type[Component]] = {}
+    for cls, decls in zip(classes, per_instance):
+        for name, candidate in decls.fields.items():
+            existing = merged.fields.get(name)
+            if existing is None:
+                merged.add(candidate)
+                field_sources[name] = cls
+                continue
+            compatible = (
+                existing.kind.name == candidate.kind.name
+                and existing.capacity == candidate.capacity
+                and existing.count == candidate.count
+            )
+            if not compatible:
+                other = field_sources[name]
+                raise TypeError(
+                    f"component '{component_name}' concrete classes "
+                    f"{other.__name__} and {cls.__name__} declare "
+                    f"incompatible field '{name}'")
+        for name, target in decls.refs.items():
+            existing = merged.refs.get(name, _MISSING)
+            if existing is not _MISSING and existing != target:
+                raise TypeError(
+                    f"component '{component_name}' concrete classes declare "
+                    f"incompatible Ref field '{name}'")
+            merged.refs[name] = target
+        for name, target in decls.ref_tables.items():
+            existing = merged.ref_tables.get(name, _MISSING)
+            if existing is not _MISSING and existing != target:
+                raise TypeError(
+                    f"component '{component_name}' concrete classes declare "
+                    f"incompatible Refs field '{name}'")
+            merged.ref_tables[name] = target
+        for name, ctype in decls.consts.items():
+            existing = merged.consts.get(name, _MISSING)
+            if existing is not _MISSING and existing != ctype:
+                raise TypeError(
+                    f"component '{component_name}' concrete classes declare "
+                    f"incompatible Const field '{name}'")
+            merged.consts[name] = ctype
+    return merged, per_instance
+
+
+def _owner_slots(
+    count: int,
+    owners: Sequence[int],
+) -> tuple[int, ...]:
+    slots = [-1] * count
+    for slot, owner in enumerate(owners):
+        slots[owner] = slot
+    return tuple(slots)
+
+
 def _component_field_map(name: str, decls: _Declarations) -> dict[str, str]:
     return {fname: f"{name}__{fname}" for fname in decls.fields}
 
@@ -519,17 +618,51 @@ def _component_constants(
     return constants
 
 
+def _polymorphic_component_constants(
+    items: Sequence[Component],
+    field_map: Mapping[str, str],
+    exclude: frozenset[str],
+) -> tuple[dict[str, tuple[Any, ...]], dict[str, tuple[int, ...]]]:
+    """Capture primitive attributes over only the instances that own them."""
+    constants: dict[str, tuple[Any, ...]] = {}
+    owners_by_name: dict[str, tuple[int, ...]] = {}
+    names = {
+        name
+        for item in items
+        for name in vars(item)
+        if (not name.startswith("_") and name not in field_map
+            and name not in exclude)
+    }
+    for name in names:
+        owned = tuple(
+            index for index, item in enumerate(items)
+            if (value := getattr(item, name, _MISSING)) is not _MISSING
+            and _primitive_constant(value)
+        )
+        if not owned:
+            continue
+        values = tuple(getattr(items[index], name) for index in owned)
+        constants[name] = values
+        owners_by_name[name] = owned
+    return constants, owners_by_name
+
+
 def _validate_component_consts(
     component_name: str,
     templates: Sequence[Component],
     consts: Mapping[str, type],
-) -> dict[str, tuple[Any, ...]]:
+    owners_by_name: Mapping[str, tuple[int, ...]] | None = None,
+) -> tuple[dict[str, tuple[Any, ...]], dict[str, tuple[int, ...]]]:
     """Per-instance values of the declared ``sim.Const`` fields, checked
     to be present and of the annotated type on every instance."""
     values: dict[str, tuple[Any, ...]] = {}
+    resolved_owners: dict[str, tuple[int, ...]] = {}
     for fname, ctype in consts.items():
         instance_values = []
-        for template in templates:
+        owners = ((tuple(range(len(templates)))
+                   if owners_by_name is None else owners_by_name[fname]))
+        for index in owners:
+            template = templates[index]
             value = getattr(template, fname, _MISSING)
             if value is _MISSING:
                 raise ValueError(
@@ -541,13 +674,15 @@ def _validate_component_consts(
                     f"be {ctype.__name__}")
             instance_values.append(value)
         values[fname] = tuple(instance_values)
-    return values
+        resolved_owners[fname] = tuple(owners)
+    return values, resolved_owners
 
 
 def _component_param_defaults(
     component_name: str,
     templates: Sequence[Component],
     decls: _Declarations,
+    field_owners: Mapping[str, tuple[int, ...]] | None = None,
 ) -> dict[str, tuple[float, ...]]:
     """Capture Param defaults from class attributes or component instances.
 
@@ -557,8 +692,10 @@ def _component_param_defaults(
     """
     defaults: dict[str, tuple[float, ...]] = {}
     for fname in decls.names("param"):
+        owners = (tuple(range(len(templates))) if field_owners is None
+                  else field_owners[fname])
         values = tuple(
-            getattr(template, fname, _MISSING) for template in templates)
+            getattr(templates[index], fname, _MISSING) for index in owners)
         present = tuple(value is not _MISSING for value in values)
         if not any(present):
             continue
@@ -590,6 +727,8 @@ def _resolve_component_pqueues(
     instance_count: int,
     decls: _Declarations,
     constants: Mapping[str, tuple[Any, ...]],
+    field_owners: Mapping[str, tuple[int, ...]] | None = None,
+    constant_slots: Mapping[str, tuple[int, ...]] | None = None,
 ) -> tuple[dict[str, tuple[int, ...]], dict[str, tuple[int, ...]]]:
     """Per-instance element counts and start offsets of each PQueues
     field; symbolic counts name a per-instance int constant."""
@@ -597,9 +736,11 @@ def _resolve_component_pqueues(
     offsets_by_field: dict[str, tuple[int, ...]] = {}
     for field_decl in decls.by_kind("pqueues"):
         fname = field_decl.name
+        owners = (tuple(range(instance_count)) if field_owners is None
+                  else field_owners[fname])
         count_decl = field_decl.count
         if isinstance(count_decl, int):
-            counts: tuple[Any, ...] = (count_decl,) * instance_count
+            owned_counts: tuple[Any, ...] = (count_decl,) * len(owners)
         else:
             values = constants.get(count_decl)
             if values is None:
@@ -612,9 +753,20 @@ def _resolve_component_pqueues(
                     f"component '{component_name}' field "
                     f"'{fname}' uses PQueues count '{count_decl}', which "
                     "must be a positive int on every item")
-            counts = values
-        counts_by_field[fname], offsets_by_field[fname] = \
-            _offsets_from_counts(counts)
+            if constant_slots is None:
+                owned_counts = values
+            else:
+                slots = constant_slots[count_decl]
+                owned_counts = tuple(values[slots[index]] for index in owners)
+        owned_counts_tuple, owned_offsets = _offsets_from_counts(owned_counts)
+        counts = [0] * instance_count
+        offsets = [0] * instance_count
+        for owner, count, offset in zip(
+                owners, owned_counts_tuple, owned_offsets):
+            counts[owner] = count
+            offsets[owner] = offset
+        counts_by_field[fname] = tuple(counts)
+        offsets_by_field[fname] = tuple(offsets)
     return counts_by_field, offsets_by_field
 
 
@@ -623,27 +775,39 @@ def _resolve_component_processes(
     cls: type[Component],
     templates: Sequence[Component],
     decls: _Declarations,
+    instance_classes: Sequence[type[Component]] | None = None,
+    field_owners: Mapping[str, tuple[int, ...]] | None = None,
 ) -> tuple[dict[str, tuple[int, ...]], dict[str, tuple[int, ...]]]:
     """Per-instance copy counts and handle offsets of each Processes
     field, bound to the same-named @sim.process method."""
-    methods = {
-        name: spec
-        for name, _method, spec in _component_process_methods(cls)
-    }
+    classes = tuple(instance_classes or (cls,) * len(templates))
     counts_by_field: dict[str, tuple[int, ...]] = {}
     offsets_by_field: dict[str, tuple[int, ...]] = {}
     for fname in decls.names("processes"):
-        spec = methods.get(fname)
-        if spec is None:
-            raise ValueError(
-                f"component '{component_name}' Processes field '{fname}' "
-                "must have a same-named @sim.process method")
-        counts = [
-            spec.resolve_copies(template, f"{component_name}.{fname}")
-            for template in templates
-        ]
-        counts_by_field[fname], offsets_by_field[fname] = \
-            _offsets_from_counts(counts)
+        owners = (tuple(range(len(templates))) if field_owners is None
+                  else field_owners[fname])
+        owned_counts: list[int] = []
+        for index in owners:
+            methods = {
+                name: spec for name, _method, spec
+                in _component_process_methods(classes[index])
+            }
+            spec = methods.get(fname)
+            if spec is None:
+                raise ValueError(
+                    f"component '{component_name}' Processes field '{fname}' "
+                    "must have a same-named @sim.process method")
+            owned_counts.append(spec.resolve_copies(
+                templates[index], f"{component_name}.{fname}"))
+        resolved_counts, resolved_offsets = _offsets_from_counts(owned_counts)
+        counts = [0] * len(templates)
+        offsets = [0] * len(templates)
+        for owner, count, offset in zip(
+                owners, resolved_counts, resolved_offsets):
+            counts[owner] = count
+            offsets[owner] = offset
+        counts_by_field[fname] = tuple(counts)
+        offsets_by_field[fname] = tuple(offsets)
     return counts_by_field, offsets_by_field
 
 
@@ -769,7 +933,8 @@ class _DeclBuilder:
         them to the target declarations."""
         for fname, item_cls, is_collection in _component_fields(cls):
             decl = self._build_field((cls,), (None,), "", "", fname,
-                                     item_cls, is_collection)
+                                     (item_cls,), is_collection,
+                                     owner_positions=(0,), parent_count=1)
             target = (self.target.component_collections if is_collection
                       else self.target.components)
             target.append(decl)
@@ -781,8 +946,11 @@ class _DeclBuilder:
         parent_name: str,
         parent_display: str,
         fname: str,
-        cls: type[Component],
+        declared_classes: Sequence[type[Component]],
         collection: bool,
+        *,
+        owner_positions: Sequence[int],
+        parent_count: int,
     ) -> _ComponentDecl:
         """Build one component field's decl, gathering its instances from
         each owner (the model class for a root, the parent's instances for
@@ -792,37 +960,43 @@ class _DeclBuilder:
         name = f"{parent_name}__{fname}" if parent_name else fname
         templates: list[Component] = []
         process_names: list[str] = []
-        offsets: list[int] = []
-        lengths: list[int] = []
-        for owner, prefix in zip(owners, prefixes):
+        offsets: list[int] = [0] * parent_count if collection else []
+        lengths: list[int] = [0] * parent_count if collection else []
+        parent_slots = [-1] * parent_count
+        for owner, prefix, owner_position, declared_cls in zip(
+                owners, prefixes, owner_positions, declared_classes):
             base = fname if prefix is None else f"{prefix}__{fname}"
             if collection:
-                items = self._collection_default(owner, fname, label, cls)
-                offsets.append(len(templates))
-                lengths.append(len(items))
+                items = self._collection_default(
+                    owner, fname, label, declared_cls)
+                offsets[owner_position] = len(templates)
+                lengths[owner_position] = len(items)
                 templates.extend(items)
                 process_names.extend(f"{base}__{i}" for i in range(len(items)))
             else:
+                parent_slots[owner_position] = len(templates)
                 templates.append(
-                    self._instance_default(owner, fname, label, cls))
+                    self._instance_default(owner, fname, label, declared_cls))
                 process_names.append(base)
 
         display = f"{parent_display}.{fname}" if parent_name else fname
         item_display = f"{display}[]" if collection else display
         return self._build(
-            local_name=fname, name=name, cls=cls,
+            local_name=fname, name=name,
+            declared_cls=declared_classes[0],
             templates=tuple(templates), process_names=tuple(process_names),
             display_name=display, item_display_name=item_display,
             collection=collection,
             parent_offsets=tuple(offsets) if collection else (),
-            parent_lengths=tuple(lengths) if collection else ())
+            parent_lengths=tuple(lengths) if collection else (),
+            parent_slots=tuple(parent_slots) if not collection else ())
 
     def _build(
         self,
         *,
         local_name: str,
         name: str,
-        cls: type[Component],
+        declared_cls: type[Component],
         templates: tuple[Component, ...],
         process_names: tuple[str, ...],
         display_name: str,
@@ -830,34 +1004,87 @@ class _DeclBuilder:
         collection: bool,
         parent_offsets: tuple[int, ...] = (),
         parent_lengths: tuple[int, ...] = (),
+        parent_slots: tuple[int, ...] = (),
     ) -> _ComponentDecl:
-        decls = _component_declarations(cls)
+        instance_classes = tuple(type(template) for template in templates)
+        cls = (instance_classes[0] if len(set(instance_classes)) == 1
+               else declared_cls)
+        decls, per_instance_decls = _merge_component_declarations(
+            name, instance_classes)
+        field_owners = {
+            fname: tuple(
+                index for index, own in enumerate(per_instance_decls)
+                if fname in own.fields)
+            for fname in decls.fields
+        }
+        field_slots = {
+            fname: _owner_slots(len(templates), owners)
+            for fname, owners in field_owners.items()
+        }
         direct_field_map = _component_field_map(name, decls)
         wiring_raw = self._field_wiring(name, templates, decls)
         component_refs = _component_ref_values(name, templates, decls)
-        param_defaults = _component_param_defaults(name, templates, decls)
-        const_values = _validate_component_consts(name, templates,
-                                                  decls.consts)
+        param_defaults = _component_param_defaults(
+            name, templates, decls, field_owners)
+        const_owners_declared = {
+            fname: tuple(
+                index for index, own in enumerate(per_instance_decls)
+                if fname in own.consts)
+            for fname in decls.consts
+        }
+        const_values, declared_const_owners = _validate_component_consts(
+            name, templates, decls.consts, const_owners_declared)
+        implicit_constants, implicit_owners = \
+            _polymorphic_component_constants(
+                templates, direct_field_map,
+                exclude=frozenset(component_refs) | set(decls.consts))
         constants = {
             **const_values,
-            **_component_constants(
-                templates, direct_field_map,
-                exclude=frozenset(component_refs) | set(decls.consts)),
+            **implicit_constants,
+        }
+        constant_owners = {**declared_const_owners, **implicit_owners}
+        constant_slots = {
+            fname: _owner_slots(len(templates), owners)
+            for fname, owners in constant_owners.items()
         }
         pqueue_counts, pqueue_offsets = _resolve_component_pqueues(
-            name, len(templates), decls, constants)
+            name, len(templates), decls, constants, field_owners,
+            constant_slots)
         process_counts, process_offsets = _resolve_component_processes(
-            name, cls, templates, decls)
-        children = tuple(
-            self._build_field(templates, process_names, name,
-                              item_display_name, child_name, child_cls,
-                              child_collection)
-            for child_name, child_cls, child_collection
-            in _component_fields(cls)
-        )
+            name, cls, templates, decls, instance_classes, field_owners)
+        child_specs: dict[
+            str, list[tuple[int, type[Component], bool]]] = {}
+        child_order: list[str] = []
+        for index, instance_cls in enumerate(instance_classes):
+            for child_name, child_cls, child_collection in \
+                    _component_fields(instance_cls):
+                if child_name not in child_specs:
+                    child_specs[child_name] = []
+                    child_order.append(child_name)
+                child_specs[child_name].append(
+                    (index, child_cls, child_collection))
+        children_list: list[_ComponentDecl] = []
+        for child_name in child_order:
+            specs = child_specs[child_name]
+            collection_values = {spec[2] for spec in specs}
+            if len(collection_values) != 1:
+                raise TypeError(
+                    f"component '{name}' concrete classes declare "
+                    f"'{child_name}' as both a component and a collection")
+            positions = tuple(spec[0] for spec in specs)
+            children_list.append(self._build_field(
+                tuple(templates[index] for index in positions),
+                tuple(process_names[index] for index in positions),
+                name, item_display_name, child_name,
+                tuple(spec[1] for spec in specs),
+                specs[0][2], owner_positions=positions,
+                parent_count=len(templates)))
+        children = tuple(children_list)
         return _ComponentDecl(
             name=name,
             cls=cls,
+            declared_cls=declared_cls,
+            instance_classes=instance_classes,
             collection=collection,
             instances=templates,
             decls=decls,
@@ -877,6 +1104,11 @@ class _DeclBuilder:
             children=children,
             parent_offsets=parent_offsets,
             parent_lengths=parent_lengths,
+            parent_slots=parent_slots,
+            field_owners=field_owners,
+            field_slots=field_slots,
+            constant_owners=constant_owners,
+            constant_slots=constant_slots,
         )
 
     def flatten(self, decl: _ComponentDecl) -> None:
@@ -885,10 +1117,11 @@ class _DeclBuilder:
         decls declare shaped fields with one element per instance. Wired
         (aliased) fields name the target's entity and declare nothing of
         their own."""
-        shape = (decl.count,) if decl.count > 1 else None
         aliased = set(decl.aliased_fields)
         for field_decl in decl.decls.fields.values():
             fname = field_decl.name
+            owner_count = len(decl.field_owners[fname])
+            shape = (owner_count,) if owner_count > 1 else None
             flat_name = decl.direct_field_map[fname]
             kind = field_decl.kind
             if kind.name == "pqueues":
@@ -901,12 +1134,27 @@ class _DeclBuilder:
                 capacity = _rewrite_component_capacity(
                     decl.name, fname, field_decl.capacity, decl.decls,
                     decl.direct_field_map)
+                capacity_slots = None
+                if (isinstance(field_decl.capacity, str)
+                        and decl.decls.kind_of(field_decl.capacity) == "param"):
+                    param_slots = decl.field_slots[field_decl.capacity]
+                    slots = tuple(
+                        param_slots[owner]
+                        for owner in decl.field_owners[fname])
+                    if any(slot < 0 for slot in slots):
+                        raise ValueError(
+                            f"component '{decl.name}' field '{fname}' "
+                            f"capacity '{field_decl.capacity}' is not "
+                            "declared by every owning concrete type")
+                    capacity_slots = slots
                 default = field_decl.default
                 if kind.name == "param" and fname in decl.param_defaults:
                     values = decl.param_defaults[fname]
                     default = values[0] if decl.count == 1 else values
                 self.target.add(_FieldDecl(flat_name, kind,
-                                           capacity=capacity, shape=shape,
+                                           capacity=capacity,
+                                           capacity_slots=capacity_slots,
+                                           shape=shape,
                                            default=default))
 
     # -- entity wiring -------------------------------------------------------
@@ -1118,6 +1366,18 @@ def _collection_offsets_symbol(component: str) -> str:
     return f"_CIMBA_OFF_{component}"
 
 
+def _component_slots_symbol(component: str) -> str:
+    return f"_CIMBA_COMPSLOT_{component}"
+
+
+def _field_slots_symbol(component: str, field_name: str) -> str:
+    return f"_CIMBA_FIELDSLOT_{component}__{field_name}"
+
+
+def _constant_slots_symbol(component: str, field_name: str) -> str:
+    return f"_CIMBA_CONSTSLOT_{component}__{field_name}"
+
+
 def _ref_index_symbol(component: str, name: str) -> str:
     return f"_CIMBA_REFIDX_{component}__{name}"
 
@@ -1149,6 +1409,14 @@ def _lowering_namespace(
                 if len(values) > 1:
                     namespace[_const_symbol(decl.name, name)] = \
                         np.asarray(values)
+                slots = decl.constant_slots.get(name, ())
+                if slots and slots != tuple(range(len(slots))):
+                    namespace[_constant_slots_symbol(decl.name, name)] = \
+                        np.asarray(slots, dtype=np.int64)
+            for fname, slots in decl.field_slots.items():
+                if slots != tuple(range(len(slots))):
+                    namespace[_field_slots_symbol(decl.name, fname)] = \
+                        np.asarray(slots, dtype=np.int64)
             for fname, offsets in decl.pqueue_offsets.items():
                 if len(offsets) > 1:
                     namespace[_pqueue_offsets_symbol(decl.name, fname)] = \
@@ -1160,6 +1428,9 @@ def _lowering_namespace(
             if decl.collection and len(decl.parent_offsets) > 1:
                 namespace[_collection_offsets_symbol(decl.name)] = np.asarray(
                     decl.parent_offsets, dtype=np.int64)
+            if decl.parent_slots:
+                namespace[_component_slots_symbol(decl.name)] = np.asarray(
+                    decl.parent_slots, dtype=np.int64)
             for name, ref in decl.component_refs.items():
                 if ref.table:
                     if ref.table_decl is not None:
@@ -1260,6 +1531,9 @@ class _ComponentFunctionSpec:
     dependencies: tuple[_ComponentFunctionDependency, ...]
     helper: Any
     callees: tuple[str, ...] = ()
+    #: None for the homogeneous shared helper; otherwise the logical
+    #: instance this helper is specialized for.
+    instance_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1326,7 +1600,35 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             if child is not None:
                 if child.collection:
                     return None
-                index = parent.index if child.count > 1 else None
+                if not child.parent_slots:
+                    index = parent.index if child.count > 1 else None
+                elif (isinstance(parent.index, ast.Constant)
+                      and type(parent.index.value) is int):
+                    slot = child.parent_slots[parent.index.value]
+                    if slot < 0:
+                        raise ValueError(
+                            f"{self._callback_label()} accesses "
+                            f"{parent.text}.{node.attr}, which is not "
+                            "declared by that concrete component type")
+                    index = ast.Constant(slot) if child.count > 1 else None
+                elif parent.index is None:
+                    slot = child.parent_slots[0]
+                    if slot < 0:
+                        raise ValueError(
+                            f"{self._callback_label()} accesses "
+                            f"{parent.text}.{node.attr}, which is not "
+                            "declared by that concrete component type")
+                    index = ast.Constant(slot) if child.count > 1 else None
+                else:
+                    if any(slot < 0 for slot in child.parent_slots):
+                        raise ValueError(
+                            f"{self._callback_label()} dynamically accesses "
+                            f"{parent.text}.{node.attr}, which is not "
+                            "declared by every concrete component type")
+                    index = _subscript(
+                        ast.Name(id=_component_slots_symbol(child.name),
+                                 ctx=ast.Load()),
+                        parent.index, ast.Load())
                 return _ComponentAccess(
                     child, index, f"{parent.text}.{node.attr}")
             ref = parent.decl.component_refs.get(node.attr)
@@ -1348,6 +1650,22 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             child = parent.decl.child(node.attr)
             if child is None or not child.collection:
                 return None
+            if child.parent_lengths:
+                if (isinstance(parent.index, ast.Constant)
+                        and type(parent.index.value) is int
+                        and child.parent_lengths[parent.index.value] == 0):
+                    raise ValueError(
+                        f"{self._callback_label()} accesses "
+                        f"{parent.text}.{node.attr}, which is not declared "
+                        "by that concrete component type")
+                if (parent.index is not None
+                        and not isinstance(parent.index, ast.Constant)
+                        and any(length == 0
+                                for length in child.parent_lengths)):
+                    raise ValueError(
+                        f"{self._callback_label()} dynamically accesses "
+                        f"{parent.text}.{node.attr}, which is not declared "
+                        "by every concrete component type")
             return _ComponentAccess(
                 child, parent.index, f"{parent.text}.{node.attr}")
 
@@ -1551,15 +1869,87 @@ class _ComponentPathLowerer(ast.NodeTransformer):
     ) -> ast.expr:
         flat_name = access.decl.direct_field_map[access.field]
         target = _env_attr(self.env_name, flat_name, ctx)
-        if access.decl.count <= 1:
+        owners = access.decl.field_owners[access.field]
+        if len(owners) <= 1:
+            if (isinstance(access.index, ast.Constant)
+                    and type(access.index.value) is int
+                    and access.index.value not in owners):
+                raise ValueError(
+                    f"{self._callback_label()} accesses {access.text}, which "
+                    "is not declared by that concrete component type")
+            if (access.index is not None
+                    and not isinstance(access.index, ast.Constant)
+                    and len(owners) != access.decl.count):
+                raise ValueError(
+                    f"{self._callback_label()} dynamically accesses "
+                    f"{access.text}, which is not declared by every concrete "
+                    "component type")
             return target
         if access.index is None:
             raise TypeError("component field has no instance index")
-        return _subscript(target, access.index, ctx)
+        slots = access.decl.field_slots[access.field]
+        if (isinstance(access.index, ast.Constant)
+                and type(access.index.value) is int):
+            slot = slots[access.index.value]
+            if slot < 0:
+                raise ValueError(
+                    f"{self._callback_label()} accesses {access.text}, which "
+                    "is not declared by that concrete component type")
+            packed_index: ast.expr = ast.Constant(slot)
+        else:
+            if any(slot < 0 for slot in slots):
+                raise ValueError(
+                    f"{self._callback_label()} dynamically accesses "
+                    f"{access.text}, which is not declared by every concrete "
+                    "component type")
+            if slots == tuple(range(len(slots))):
+                packed_index = access.index
+            else:
+                packed_index = _subscript(
+                    ast.Name(id=_field_slots_symbol(
+                        access.decl.name, access.field), ctx=ast.Load()),
+                    access.index, ast.Load())
+        return _subscript(target, packed_index, ctx)
 
     def _constant_expr(self, access: _ComponentFieldAccess) -> ast.expr:
+        owners = access.decl.constant_owners[access.field]
+        if len(owners) == 1:
+            if (isinstance(access.index, ast.Constant)
+                    and type(access.index.value) is int
+                    and access.index.value not in owners):
+                raise ValueError(
+                    f"{self._callback_label()} accesses {access.text}, which "
+                    "is not declared by that concrete component type")
+            if (access.index is not None
+                    and not isinstance(access.index, ast.Constant)
+                    and len(owners) != access.decl.count):
+                raise ValueError(
+                    f"{self._callback_label()} dynamically accesses "
+                    f"{access.text}, which is not declared by every concrete "
+                    "component type")
+        slots = access.decl.constant_slots[access.field]
+        index = access.index
+        if (isinstance(index, ast.Constant)
+                and type(index.value) is int):
+            slot = slots[index.value]
+            if slot < 0:
+                raise ValueError(
+                    f"{self._callback_label()} accesses {access.text}, which "
+                    "is not declared by that concrete component type")
+            index = ast.Constant(slot)
+        elif len(access.decl.constant_owners[access.field]) > 1:
+            if any(slot < 0 for slot in slots):
+                raise ValueError(
+                    f"{self._callback_label()} dynamically accesses "
+                    f"{access.text}, which is not declared by every concrete "
+                    "component type")
+            if slots != tuple(range(len(slots))):
+                index = _subscript(
+                    ast.Name(id=_constant_slots_symbol(
+                        access.decl.name, access.field), ctx=ast.Load()),
+                    index, ast.Load())
         return self._instance_table_expr(
-            access.decl.constants[access.field], access.index,
+            access.decl.constants[access.field], index,
             _const_symbol(access.decl.name, access.field), "constant")
 
     def _lower_indexed_field(
@@ -1606,13 +1996,37 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             f"{self._callback_label()} references unknown {kind} "
             f"{namespace.text}.{field_name}")
 
-    def _function_spec(
+    def _function_specs(
         self,
         namespace: _ComponentAccess,
         method_name: str,
-    ) -> _ComponentFunctionSpec | None:
-        return self.component_functions.get(
-            f"{namespace.decl.name}__{method_name}")
+    ) -> tuple[_ComponentFunctionSpec, ...]:
+        candidates = [
+            spec for spec in self.component_functions.values()
+            if spec.decl is namespace.decl and spec.name == method_name
+        ]
+        if not candidates:
+            return ()
+        if (isinstance(namespace.index, ast.Constant)
+                and type(namespace.index.value) is int):
+            wanted = (namespace.index.value
+                      if namespace.decl.polymorphic else None)
+            return tuple(
+                spec for spec in candidates
+                if spec.instance_index == wanted)
+        shared = [spec for spec in candidates if spec.instance_index is None]
+        if shared:
+            return (shared[0],)
+        ordered = sorted(
+            candidates,
+            key=lambda spec: (
+                -1 if spec.instance_index is None else spec.instance_index))
+        if len(ordered) != namespace.decl.count:
+            raise ValueError(
+                f"{self._callback_label()} dynamically calls "
+                f"{namespace.text}.{method_name}(), which is not declared "
+                "as @sim.function by every concrete component type")
+        return tuple(ordered)
 
     @staticmethod
     def _substitute_expr(
@@ -1635,7 +2049,7 @@ class _ComponentPathLowerer(ast.NodeTransformer):
                             "to an expression")
         return result
 
-    def _lower_component_function_call(
+    def _lower_one_component_function_call(
         self,
         node: ast.Call,
         receiver: _ComponentAccess,
@@ -1685,6 +2099,41 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             node,
         )
 
+    def _lower_component_function_call(
+        self,
+        node: ast.Call,
+        receiver: _ComponentAccess,
+        specs: Sequence[_ComponentFunctionSpec],
+    ) -> ast.expr:
+        if len(specs) == 1:
+            return self._lower_one_component_function_call(
+                node, receiver, specs[0])
+        first = specs[0]
+        contract = (first.parameter_names, first.argument_types,
+                    first.return_type)
+        if any((spec.parameter_names, spec.argument_types, spec.return_type)
+               != contract for spec in specs[1:]):
+            raise TypeError(
+                f"{self._callback_label()} dynamically calls "
+                f"{receiver.text}.{node.func.attr}(), whose concrete "
+                "implementations have incompatible signatures")
+        if receiver.index is None:
+            raise TypeError("polymorphic component function has no index")
+        expression = self._lower_one_component_function_call(
+            copy.deepcopy(node), receiver, specs[-1])
+        for spec in reversed(specs[:-1]):
+            expression = ast.IfExp(
+                test=ast.Compare(
+                    left=copy.deepcopy(receiver.index),
+                    ops=[ast.Eq()],
+                    comparators=[ast.Constant(spec.instance_index)],
+                ),
+                body=self._lower_one_component_function_call(
+                    copy.deepcopy(node), receiver, spec),
+                orelse=expression,
+            )
+        return ast.copy_location(expression, node)
+
     # -- node visitors -----------------------------------------------------------
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
@@ -1700,10 +2149,10 @@ class _ComponentPathLowerer(ast.NodeTransformer):
         if isinstance(node.func, ast.Attribute):
             receiver = self._namespace_ref(node.func.value)
             if receiver is not None:
-                spec = self._function_spec(receiver, node.func.attr)
-                if spec is not None:
+                specs = self._function_specs(receiver, node.func.attr)
+                if specs:
                     return self._lower_component_function_call(
-                        node, receiver, spec)
+                        node, receiver, specs)
             # Leave ``.history().capture()`` as a history call after lowering
             # the component path; Model.collect handles capture registration.
             if node.func.attr == "capture":
@@ -2227,6 +2676,7 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
         method_name: str,
         receiver_name: str,
         parameter_names: tuple[str, ...],
+        instance_index: int | None,
     ):
         super().__init__(env_name="__cimba_no_env")
         self.builder = builder
@@ -2234,6 +2684,7 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
         self.method_name = method_name
         self.receiver_name = receiver_name
         self.parameter_names = parameter_names
+        self.instance_index = instance_index
         self.dependencies: list[_ComponentFunctionDependency] = []
         self._dependency_keys: dict[tuple[Any, ...], int] = {}
         self.callees: list[str] = []
@@ -2241,8 +2692,13 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
 
     def _root_namespace_ref(self, node: ast.AST) -> _ComponentAccess | None:
         if isinstance(node, ast.Name) and node.id == self.receiver_name:
-            index = (ast.Name(id="__cimba_receiver_index", ctx=ast.Load())
-                     if self.decl.count > 1 else None)
+            if self.instance_index is not None:
+                index = (ast.Constant(self.instance_index)
+                         if self.decl.count > 1 else None)
+            else:
+                index = (ast.Name(
+                    id="__cimba_receiver_index", ctx=ast.Load())
+                    if self.decl.count > 1 else None)
             return _ComponentAccess(self.decl, index, self.receiver_name)
         return None
 
@@ -2295,11 +2751,13 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
         if isinstance(node.func, ast.Attribute):
             receiver = self._namespace_ref(node.func.value)
             if receiver is not None:
-                method = dict(_component_function_methods(
-                    receiver.decl.cls)).get(node.func.attr)
-                if method is not None:
-                    callee = self.builder.build(
-                        receiver.decl, node.func.attr, method)
+                candidates = self.builder.specs_for(
+                    receiver.decl, receiver.index, node.func.attr)
+                if candidates:
+                    if len(candidates) != 1:
+                        return self._lower_polymorphic_call(
+                            node, receiver, candidates)
+                    callee = candidates[0]
                     if node.keywords:
                         raise ValueError(
                             f"{self._callback_label()} call to component "
@@ -2352,6 +2810,75 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
                     f"{self._callback_label()} cannot call unmarked "
                     f"component method {receiver.text}.{node.func.attr}()")
         return self.generic_visit(node)
+
+    def _lower_polymorphic_call(
+        self,
+        node: ast.Call,
+        receiver: _ComponentAccess,
+        candidates: Sequence[_ComponentFunctionSpec],
+    ) -> ast.expr:
+        first = candidates[0]
+        if node.keywords:
+            raise ValueError(
+                f"{self._callback_label()} call to component function "
+                f"'{first.graph_name}' must use positional arguments")
+        if len(node.args) != len(first.parameter_names):
+            raise ValueError(
+                f"{self._callback_label()} call to component function "
+                f"'{first.graph_name}' takes "
+                f"{len(first.parameter_names)} argument(s), got "
+                f"{len(node.args)}")
+        contract = (first.parameter_names, first.argument_types,
+                    first.return_type)
+        if any((spec.parameter_names, spec.argument_types, spec.return_type)
+               != contract for spec in candidates[1:]):
+            raise TypeError(
+                f"{self._callback_label()} dynamically calls "
+                f"{receiver.text}.{node.func.attr}(), whose concrete "
+                "implementations have incompatible signatures")
+        if receiver.index is None:
+            raise TypeError("polymorphic component function has no index")
+
+        def branch(callee: _ComponentFunctionSpec) -> ast.Call:
+            arguments = [
+                self.visit(copy.deepcopy(arg)) for arg in node.args]
+            replacements = {
+                name: arg for name, arg
+                in zip(callee.parameter_names, arguments)
+            }
+            dependency_args: list[ast.expr] = []
+            for dependency in callee.dependencies:
+                access = dependency.access
+                bound = _ComponentFieldAccess(
+                    access.decl,
+                    self._substitute_expr(access.index, replacements),
+                    access.field,
+                    access.text,
+                )
+                value = self._dependency(bound, direct=False)
+                dependency_args.append(value)
+                replacements[dependency.parameter] = value
+            self.helper_namespace[callee.symbol] = callee.helper
+            if callee.graph_name not in self.callees:
+                self.callees.append(callee.graph_name)
+            return ast.Call(
+                func=ast.Name(id=callee.symbol, ctx=ast.Load()),
+                args=[*arguments, *dependency_args],
+                keywords=[],
+            )
+
+        expression: ast.expr = branch(candidates[-1])
+        for callee in reversed(candidates[:-1]):
+            expression = ast.IfExp(
+                test=ast.Compare(
+                    left=copy.deepcopy(receiver.index),
+                    ops=[ast.Eq()],
+                    comparators=[ast.Constant(callee.instance_index)],
+                ),
+                body=branch(callee),
+                orelse=expression,
+            )
+        return ast.copy_location(expression, node)
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
         nested = self._field_ref(node.value)
@@ -2413,8 +2940,11 @@ class _ComponentFunctionBuilder:
         decl: _ComponentDecl,
         method_name: str,
         method: Callable[..., Any],
+        instance_index: int | None = None,
     ) -> _ComponentFunctionSpec:
-        graph_name = f"{decl.name}__{method_name}"
+        base_name = f"{decl.name}__{method_name}"
+        graph_name = (base_name if instance_index is None
+                      else f"{base_name}__variant_{instance_index}")
         existing = self.specs.get(graph_name)
         if existing is not None:
             return existing
@@ -2439,13 +2969,16 @@ class _ComponentFunctionBuilder:
 
             symbol = (
                 f"_CIMBA_FUNCTION_{decl.cls.__name__}_{method_name}_"
-                f"{id(method):x}")
+                f"{id(method):x}"
+                + ("" if instance_index is None
+                   else f"_V{instance_index}"))
             lowerer = _ComponentFunctionBodyLowerer(
                 builder=self,
                 decl=decl,
                 method_name=method_name,
                 receiver_name=receiver_name,
                 parameter_names=parameter_names,
+                instance_index=instance_index,
             )
             lowered = lowerer.visit(node)
             if not isinstance(lowered, ast.FunctionDef):
@@ -2487,6 +3020,7 @@ class _ComponentFunctionBuilder:
                 )
             )
             cache_key = (
+                decl.class_at(instance_index or 0),
                 id(method),
                 source_key,
                 str(signature),
@@ -2527,6 +3061,7 @@ class _ComponentFunctionBuilder:
                 dependencies=tuple(lowerer.dependencies),
                 helper=helper,
                 callees=tuple(lowerer.callees),
+                instance_index=instance_index,
             )
             self.specs[graph_name] = spec
             return spec
@@ -2539,10 +3074,48 @@ class _ComponentFunctionBuilder:
     ) -> dict[str, _ComponentFunctionSpec]:
         for root in roots:
             for decl in root.walk():
-                for method_name, method in _component_function_methods(
-                        decl.cls):
-                    self.build(decl, method_name, method)
+                for instance_index in decl.specialization_indices():
+                    cls = decl.class_at(instance_index or 0)
+                    for method_name, method in _component_function_methods(
+                            cls):
+                        self.build(
+                            decl, method_name, method, instance_index)
         return self.specs
+
+    def specs_for(
+        self,
+        decl: _ComponentDecl,
+        index: ast.expr | None,
+        method_name: str,
+    ) -> tuple[_ComponentFunctionSpec, ...]:
+        """Resolve/build the concrete helper candidates for an access."""
+        if (isinstance(index, ast.Constant)
+                and type(index.value) is int):
+            instance_index: int | None = (
+                index.value if decl.polymorphic else None)
+            cls = decl.class_at(index.value)
+            method = dict(_component_function_methods(cls)).get(method_name)
+            if method is None:
+                return ()
+            return (self.build(
+                decl, method_name, method, instance_index),)
+        if not decl.polymorphic:
+            method = dict(_component_function_methods(
+                decl.class_at())).get(method_name)
+            if method is None:
+                return ()
+            return (self.build(decl, method_name, method, None),)
+        candidates: list[_ComponentFunctionSpec] = []
+        for instance_index, cls in enumerate(decl.instance_classes):
+            method = dict(_component_function_methods(cls)).get(method_name)
+            if method is None:
+                raise ValueError(
+                    f"dynamic component function call to "
+                    f"'{decl.name}.{method_name}' requires every concrete "
+                    "component type to declare that @sim.function")
+            candidates.append(self.build(
+                decl, method_name, method, instance_index))
+        return tuple(candidates)
 
 
 def _build_component_functions(
