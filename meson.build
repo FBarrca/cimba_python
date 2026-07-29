@@ -5,7 +5,7 @@ project(
     'cimba',
     'c',
     'cython',
-    version: '0.4.0',
+    version: '0.4.1',
     meson_version: '>=1.1.0',
     # Fast wheels by default. Use -Dcimba_debug_logs=true to build the bundled
     # Cimba library with native INFO logging for tutorials/debugging.
@@ -26,6 +26,8 @@ cimba_default_options = [
     'default_library=static',
     'enable_docs=false',
     'warning_level=1',
+    'external_context_switch_wrapper=true',
+    'enable_extras=false',
 ]
 
 cimba_proj = subproject('cimba', default_options: cimba_default_options)
@@ -35,8 +37,12 @@ cimba_lib = cimba_proj.get_variable('cimba_lib')
 inc_api = cimba_proj.get_variable('inc_api')
 inc_int = cimba_proj.get_variable('inc_int')
 
-m_dep = cc.find_library('m', required: true)
+m_dep = cc.find_library('m', required: false)
 thread_dep = dependency('threads')
+native_dependencies = [thread_dep]
+if m_dep.found()
+    native_dependencies += m_dep
+endif
 
 py.install_sources(
     'src/cimba/__init__.py',
@@ -113,8 +119,7 @@ cimba_native_ext = py.extension_module(
     # as Numba external symbols (cpy_*).
     'src/cimba/native/nbshim.c',
     include_directories: [inc_api, inc_int, 'src/cimba/native'],
-    dependencies: [m_dep, thread_dep],
-    link_args: ['-Wl,--wrap=cmi_coroutine_context_switch'],
+    dependencies: native_dependencies,
     link_whole: cimba_lib,
     install: true,
     subdir: 'cimba',

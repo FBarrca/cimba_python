@@ -1,0 +1,221 @@
+# test/meson.build
+
+python = import('python').find_installation()
+
+# Usage: python test_assert.py <expected_trip: true | false> <executable> [args...]
+wrapper = files('tools/test_assert.py')
+
+matrix = [
+    # buildtype, flags, expect_assert_debug_trip, expect_assert_release_trip
+    ['debug',       ['-UNDEBUG', '-UNASSERT'],  'true',     'true'],
+    ['release',     ['-DNDEBUG', '-UNASSERT'],  'false',    'true'],
+    ['optimized',   ['-DNDEBUG', '-DNASSERT'],  'false',    'false'],
+]
+
+foreach item : matrix
+    test_buildtype = item[0]
+    test_buildflags = item[1]
+
+    # build an executable of this build type
+    exe = executable('test_assert_' + test_buildtype,
+                     files('test_assert.c', 'test.h'),
+                     c_args : test_buildflags,
+                     include_directories : [inc_api, inc_int],
+                     link_with : cimba_lib,
+                     dependencies : [project_deps],
+                     install : false,
+                     native : true
+    )
+
+    # test cmb_assert_debug in this build type
+    exp_trip = item[2]
+    test('test_build_' + test_buildtype + '_assert_debug', python,
+         args: [wrapper, exp_trip, exe, 'debug'])
+
+    # test cmb_assert_release in this build type
+    exp_trip = item[3]
+    test('test_build_' + test_buildtype + '_assert_release', python,
+         args: [wrapper, exp_trip, exe, 'release'])
+endforeach
+
+test_buffer = executable('test_buffer',
+                         files('test_buffer.c', 'test.h'),
+                         include_directories : [inc_api, inc_int],
+                         link_with : cimba_lib,
+                         dependencies : [project_deps],
+                         install : false,
+                         native : true
+)
+
+test('buffer', test_buffer)
+
+test_cimba = executable('test_cimba',
+                         files('test_cimba.c', 'test.h'),
+                         include_directories : [inc_api, inc_int],
+                         link_with : cimba_lib,
+                         dependencies : [project_deps],
+                         install : false,
+                         native : true
+)
+
+# Make sure this one gets all cores to itself
+test('cimba', test_cimba, is_parallel : false, timeout : 0)
+
+test_condition = executable('test_condition',
+                            files('test_condition.c', 'test.h'),
+                            include_directories : [inc_api, inc_int],
+                            link_with : cimba_lib,
+                            dependencies : [project_deps],
+                            install : false,
+                            native : true
+)
+
+test('condition', test_condition)
+
+test_coroutine = executable('test_coroutine',
+                            files('test_coroutine.c', 'test.h'),
+                            include_directories : [inc_api, inc_int],
+                            link_with : cimba_lib,
+                            dependencies : [project_deps],
+                            install : false,
+                            native : true
+)
+
+test('coroutine', test_coroutine)
+
+test_data = executable( 'test_data',
+                        files('test_data.c', 'test.h'),
+                        include_directories : [inc_api, inc_int],
+                        link_with : cimba_lib,
+                        dependencies : [project_deps],
+                        install : false,
+                        native : true
+)
+
+# may take a while
+test('data', test_data, timeout : 0)
+
+test_event = executable('test_event',
+                        files('test_event.c', 'test.h'),
+                        include_directories : [inc_api, inc_int],
+                        link_with : cimba_lib,
+                        dependencies : [project_deps],
+                        install : false,
+                        native : true
+)
+
+test('event', test_event)
+
+test_hashheap = executable('test_hashheap',
+                        files('test_hashheap.c', 'test.h'),
+                        include_directories : [inc_api, inc_int],
+                        link_with : cimba_lib,
+                        dependencies : [project_deps],
+                        install : false,
+                        native : true
+)
+
+test('hashheap', test_hashheap)
+
+test_logger = executable('test_logger',
+                         files('test_logger.c', 'test.h'),
+                         include_directories : [inc_api, inc_int],
+                         link_with : cimba_lib,
+                         dependencies : [project_deps],
+                         install : false,
+                         native : true
+)
+
+test('logger', test_logger)
+
+test_mempool = executable('test_mempool',
+                         files('test_mempool.c', 'test.h'),
+                         include_directories : [inc_api, inc_int],
+                         link_with : cimba_lib,
+                         dependencies : [project_deps],
+                         install : false,
+                         native : true
+)
+
+test('mempool', test_mempool)
+
+test_objectqueue = executable('test_objectqueue',
+                              files('test_objectqueue.c', 'test.h'),
+                              include_directories : [inc_api, inc_int],
+                              link_with : cimba_lib,
+                              dependencies : [project_deps],
+                              install : false,
+                              native : true
+)
+
+test('objectqueue', test_objectqueue)
+
+test_priorityqueue = executable('test_priorityqueue',
+                              files('test_priorityqueue.c', 'test.h'),
+                              include_directories : [inc_api, inc_int],
+                              link_with : cimba_lib,
+                              dependencies : [project_deps],
+                              install : false,
+                              native : true
+)
+
+test('priorityqueue', test_priorityqueue)
+
+test_process = executable('test_process',
+                            files('test_process.c', 'test.h'),
+                            include_directories : [inc_api, inc_int],
+                            link_with : cimba_lib,
+                            dependencies : [project_deps],
+                            install : false,
+                            native : true
+)
+
+test('process', test_process)
+
+test_random = executable('test_random',
+                         files('test_random.c', 'test.h'),
+                         include_directories : [inc_api, inc_int],
+                         link_with : cimba_lib,
+                         dependencies : [project_deps],
+                         install : false,
+                         native : true
+)
+
+# will certainly take a while
+test('random', test_random, timeout : 0)
+
+test_resource = executable('test_resource',
+                          files('test_resource.c', 'test.h'),
+                          include_directories : [inc_api, inc_int],
+                          link_with : cimba_lib,
+                          dependencies : [project_deps],
+                          install : false,
+                          native : true
+)
+
+test('resource', test_resource)
+
+test_resourcepool = executable('test_resourcepool',
+                           files('test_resourcepool.c', 'test.h'),
+                           include_directories : [inc_api, inc_int],
+                           link_with : cimba_lib,
+                           dependencies : [project_deps],
+                           install : false,
+                           native : true
+)
+
+test('resourcepool', test_resourcepool)
+
+# Stochastic regression tests (seed-fixed, reference output comparison)
+python = find_program('python3', required: true)
+
+test('stochastic',
+     python,
+     args: [
+         meson.project_source_root() / 'test' / 'tools' / 'test_stochastic.py',
+         '--build-dir', meson.current_build_dir() ,
+     ],
+     timeout: 600,
+     workdir: meson.project_source_root(),
+)
+

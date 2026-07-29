@@ -14,15 +14,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: Test
+  test-linux:
+    name: Test Linux
     runs-on: ubuntu-24.04
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
         with:
-          submodules: recursive
           persist-credentials: false
 
       - name: Set up Python
@@ -44,17 +43,88 @@ jobs:
       - name: Run tests
         run: uv run pytest
 
+  test-windows:
+    name: Test Windows
+    runs-on: windows-2025
+    env:
+      CC: clang-cl
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Install NASM
+        run: choco install nasm --no-progress -y
+
+      - name: Install Python dependencies
+        run: uv sync --locked
+
+      - name: Run tests
+        run: uv run pytest
+
+  test-macos:
+    name: Test macOS (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            arch: arm64
+          - os: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Verify native architecture
+        run: test "$(uname -m)" = "${{ matrix.arch }}"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Install NASM on Intel macOS
+        if: matrix.arch == 'x86_64'
+        run: brew install nasm
+
+      - name: Install Python dependencies
+        run: uv sync --locked
+
+      - name: Run tests
+        run: uv run pytest
+
   build:
     name: Build distributions
     runs-on: ubuntu-24.04
-    needs: [test]
+    needs: [test-linux, test-windows, test-macos]
     if: github.event_name == 'workflow_dispatch'
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
         with:
-          submodules: recursive
           persist-credentials: false
 
       - name: Set up Python

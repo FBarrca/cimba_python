@@ -1,0 +1,24 @@
+option('enable_docs',
+       type : 'boolean',
+       value : true,
+       description : 'Build the docs'
+)
+
+option('benchopt',
+       type    : 'combo',
+       choices : ['none', 'generate', 'use'],
+       value   : 'none',
+       description : 'Profile-guided optimisation: generate profiles, use them, or neither'
+)
+
+option('external_context_switch_wrapper',
+       type : 'boolean',
+       value : false,
+       description : 'Let an embedding application provide the coroutine context-switch wrapper'
+)
+
+option('enable_extras',
+       type : 'boolean',
+       value : true,
+       description : 'Configure native tests, tutorials, and benchmarks'
+)

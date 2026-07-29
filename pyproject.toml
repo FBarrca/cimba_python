@@ -4,7 +4,7 @@ build-backend = "mesonpy"
 
 [project]
 name = "cimba"
-version = "0.4.0"
+version = "0.4.1"
 description = "Python bindings for Cimba, a multithreaded discrete-event-simulation C library"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -17,6 +17,8 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: C",
     "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS :: MacOS X",
     "Topic :: Scientific/Engineering",
     "Typing :: Typed",
 ]
@@ -65,11 +67,18 @@ compile = ["cimba_ext"]
 install = ["--skip-subprojects"]
 
 [tool.cibuildwheel]
-# The vendored Cimba C library currently ships x86-64 assembly ports, so we
-# publish Linux x86_64 wheels for CPython 3.13 and 3.14.
-build = "cp313-manylinux_x86_64 cp314-manylinux_x86_64"
+# Publish CPython 3.13 and 3.14 wheels on each release-workflow platform.
+build = "cp313-* cp314-*"
 test-requires = "pytest>=8"
 test-command = "pytest {project}/tests"
 
 [tool.cibuildwheel.linux]
+archs = ["x86_64"]
 before-all = "command -v nasm || (dnf install -y nasm || yum install -y nasm || microdnf install -y nasm)"
+
+[tool.cibuildwheel.windows]
+archs = ["AMD64"]
+environment = { CC = "clang-cl" }
+
+[tool.cibuildwheel.macos]
+archs = ["native"]

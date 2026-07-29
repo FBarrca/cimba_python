@@ -1,0 +1,232 @@
+;
+; cmi_coroutine_context.asm
+;
+; Context switch and launcher/trampoline for coroutines.
+; For 64-bits Windows on AMD64/x86-64 architecture.
+; Written in NASM syntax.
+;
+; Copyright (c) Asbjørn M. Bonvik 2025.
+;
+; Licensed under the Apache License, Version 2.0 (the "License");
+; you may not use this file except in compliance with the License.
+; You may obtain a copy of the License at
+;
+;   http://www.apache.org/licenses/LICENSE-2.0
+;
+; Unless required by applicable law or agreed to in writing, software
+; distributed under the License is distributed on an "AS IS" BASIS,
+; WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+; See the License for the specific language governing permissions and
+; limitations under the License.
+
+section .text
+global cmi_coroutine_context_switch_raw
+global cmi_coroutine_trampoline
+global cmi_coroutine_stackbase
+global cmi_coroutine_stacklimit
+global cmi_coroutine_stackraw
+
+;-------------------------------------------------------------------------------
+; Callable function to return the current StackBase (top of allocated stack)
+;
+cmi_coroutine_stackbase:
+    mov rax, [gs:8]
+    ret
+
+;-------------------------------------------------------------------------------
+; Callable funnction to return the current StackLimit (bottom of allocated stack)
+;
+cmi_coroutine_stacklimit:
+    mov rax, [gs:16]
+    ret
+
+;-------------------------------------------------------------------------------
+; Callable function to return the current DeallocationStack
+;
+cmi_coroutine_stackraw:
+    mov rax, [gs:1478]
+    ret
+
+;-------------------------------------------------------------------------------
+; Macro to store relevant registers to current stack
+; In effect taking a (sub-)continuation at this point in execution.
+; Assumes that the stack is off 16-byte alignment by 8 bytes at the start of
+; this macro (i.e. it was 16-byte aligned, then RIP got pushed, now we are here)
+;
+%macro save_context 0
+    ; Save flags register
+    pushfq
+
+    %ifndef NMXCSR
+        ; Allocate space and save MXCSR (SSE status register)
+        sub rsp, 8
+        stmxcsr [rsp + 4]
+    %endif
+    ;
+    ; Save general purpose registers
+    push rbx
+    push rbp
+    push rdi
+    push rsi
+    push r12
+    push r13
+    push r14
+    push r15
+    ;
+    ; Save XMM registers
+    %ifndef NMXCSR
+        ; Add 8 bytes padding for alignment
+        sub rsp, 168
+    %else
+        ; No padding needed, even number of pushes
+        sub rsp, 160
+    %endif
+    ;
+    movaps [rsp + 144], xmm15
+    movaps [rsp + 128], xmm14
+    movaps [rsp + 112], xmm13
+    movaps [rsp + 96], xmm12
+    movaps [rsp + 80], xmm11
+    movaps [rsp + 64], xmm10
+    movaps [rsp + 48], xmm9
+    movaps [rsp + 32], xmm8
+    movaps [rsp + 16], xmm7
+    movaps [rsp + 0], xmm6
+%endmacro
+
+;-------------------------------------------------------------------------------
+; Macro to load relevant registers from current stack
+;
+%macro load_context 0
+    ; Restore XMM registers from stack
+    movaps xmm6, [rsp + 0]
+    movaps xmm7, [rsp + 16]
+    movaps xmm8, [rsp + 32]
+    movaps xmm9, [rsp + 48]
+    movaps xmm10, [rsp + 64]
+    movaps xmm11, [rsp + 80]
+    movaps xmm12, [rsp + 96]
+    movaps xmm13, [rsp + 112]
+    movaps xmm14, [rsp + 128]
+    movaps xmm15, [rsp + 144]
+    %ifndef NMXCSR
+        add rsp, 168
+    %else
+        add rsp, 160
+    %endif
+    ;
+    ; Restore general purpose registers
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rsi
+    pop rdi
+    pop rbp
+    pop rbx
+    ;
+    %ifndef NMXCSR
+        ; Restore MXCSR register
+        ldmxcsr [rsp + 4]
+        add rsp, 8
+    %endif
+    ;
+    ; Restore flags
+    popfq
+%endmacro
+
+;-------------------------------------------------------------------------------
+; Callable function void *cmi_coroutine_context_switch(void **old,
+;                                                      void **new,
+;                                                      void *ret)
+; Arguments:
+;   void **old - RCX - address for storing current stack pointer
+;   void **new - RDX - address for reading new stack pointer
+;   void *ret  - R8  - return value passed from old to new context
+; Scratch registers used:
+;   R9, R10, R11, RAX
+; Return value:
+;   void *     - RAX - whatever was given as the third argument
+; Error handling:
+;   None - the samurai returns victorious or not at all
+;
+cmi_coroutine_context_switch_raw:
+    ; Push all callee-saved registers to current stack
+    save_context
+
+    ; Push the TIB DeallocationStack, StackLimit, and StackBase entries
+    mov r9, [gs:1478]      ; DeallocationStack
+    push r9
+    mov r9, [gs:16]        ; StackLimit
+    push r9
+    mov r9, [gs:8]         ; StackBase
+    push r9
+    ;
+    ; Store old stack pointer to address given as first argument RCX
+    mov [rcx], rsp
+    ;
+    ; Load the new RSP from the second argument RDX into a scratch register
+    mov r9, [rdx]
+    ;
+    ; Load new stack info into scratch registers for atomic TIB change
+    mov r10, [r9]           ; New StackBase
+    mov r11, [r9 + 8]       ; New StackLimit
+    mov rax, [r9 + 16]      ; New DeallocationStack
+    ;
+    ; Write the new stack info to Windows TIB without touching the stack
+    mov [gs:8], r10         ; Update StackBase
+    mov [gs:16], r11        ; Update StackLimit
+    mov [gs:1478], rax      ; Update DeallocationStack
+    ;
+    ; Done, safe to switch to the new stack, advancing past the used TIB entries
+    mov rsp, r9
+    add rsp, 24
+    ;
+    ; We are now in the new context, restore other registers from the new stack
+    load_context
+    ;
+    ; Load whatever was in the third argument R8 as return value in RAX
+    mov rax, r8
+    ;
+    ; Return to wherever the new context was transferring from earlier
+    ; Note that we spell out the 'ret' as 'pop, jmp' for Intel CET reasons.
+    pop r9
+    jmp r9
+
+;-------------------------------------------------------------------------------
+; Not callable, preloaded as stack return address when activating a coroutine,
+; to be "called" by the first cmi_coroutine_context_switch RET instruction.
+; Launch the new coroutine by calling its function and waiting, ready to catch
+; it if the coroutine function ever attempts to return. If it does, transfer
+; control to the exit function loaded in R15 with the value returned from
+; the coroutine function as argument.
+; Assumes that the stack is 16-byte aligned at the start of the function.
+; Expected register content:
+;   R12 - coroutine function address
+;   R13 - its first argument cp, pointer to this coroutine
+;   R14 - its second argument arg, pointer to void
+;   R15 - address of coroutine exit function, usually cmb_coroutine_exit
+;
+cmi_coroutine_trampoline:
+    ; Not a leaf function, needs to obey Win64 ABI calling convention
+    ; requiring the stack to be 16-byte aligned before a call
+    ; and requiring 32 bytes of "shadow space" for the callee.
+    ; Already aligned here, just add the shadow space
+    sub rsp, 32
+
+    ; Will soon call coroutine function foo(cp, arg).
+    ; The address of foo is now in R12, cp in R13, and arg in R14.
+    ; The arguments for foo need to be in RCX and RDX, move them there.
+    mov rcx, r13
+    mov rdx, r14
+    ; Clear the return register. Probably not necessary, just to be sure.
+    xor rax, rax
+    ; And off it goes. We'll be waiting here in case it returns.
+    call r12
+    ; If we arrive here, it did return. The return value is now in RAX.
+    ; Push RCX to (un)align stack to 16-byte boundary since the jmp will
+    ; not be storing a return pointer before the callee stack frame.
+    push rcx
+    mov rcx, rax
+    ; Jump to whatever exit function was given when setting up the trampoline.
+    jmp r15

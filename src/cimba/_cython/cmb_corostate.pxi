@@ -2,8 +2,8 @@
 #
 # CPython per-thread state save/restore across Cimba's stackful-coroutine
 # context switches, for Python 3.14+. Pure binding/build-layer fix: the vendored
-# C library is NOT modified. We interpose the coroutine context switch with the
-# linker (meson.build: -Wl,--wrap=cmi_coroutine_context_switch) and, on each
+# C library exposes a raw context switch and asks the embedding extension to
+# provide its wrapper. On each
 # switch, save/restore the interpreter's per-thread frame and exception state.
 #
 # Why this is needed: Cimba runs Python on its own 64 KB coroutine stacks. All
@@ -30,9 +30,7 @@ cdef extern from *:
     """
     #include <Python.h>
 
-    /* Interposed via -Wl,--wrap=cmi_coroutine_context_switch (meson.build).
-     * Callers reach __wrap_...; the vendored implementation is __real_.... */
-    extern void *__real_cmi_coroutine_context_switch(void **old, void **newc, void *ret);
+    extern void *cmi_coroutine_context_switch_raw(void **old, void **newc, void *ret);
 
     #if PY_VERSION_HEX >= 0x030E0000
     /* Per-coroutine interpreter state. We swap only the frame stack, exception
@@ -80,16 +78,16 @@ cdef extern from *:
         ts->context_ver = s->context_ver;
     }
 
-    void *__wrap_cmi_coroutine_context_switch(void **old, void **newc, void *ret) {
+    void *cmi_coroutine_context_switch(void **old, void **newc, void *ret) {
         PyThreadState *ts = PyThreadState_GetUnchecked();
         if (ts == NULL) {
             /* No active Python thread state (e.g. switch outside the GIL):
              * nothing to save, just forward to the real switch. */
-            return __real_cmi_coroutine_context_switch(old, newc, ret);
+            return cmi_coroutine_context_switch_raw(old, newc, ret);
         }
         _cimba_corostate saved;
         _cimba_corostate_save(&saved, ts);
-        void *r = __real_cmi_coroutine_context_switch(old, newc, ret);
+        void *r = cmi_coroutine_context_switch_raw(old, newc, ret);
         /* Resumed (possibly much later, same OS thread): restore my state. */
         ts = PyThreadState_GetUnchecked();
         if (ts != NULL) {
@@ -112,8 +110,8 @@ cdef extern from *:
         ts->datastack_limit = NULL;
     }
     #else
-    void *__wrap_cmi_coroutine_context_switch(void **old, void **newc, void *ret) {
-        return __real_cmi_coroutine_context_switch(old, newc, ret);
+    void *cmi_coroutine_context_switch(void **old, void **newc, void *ret) {
+        return cmi_coroutine_context_switch_raw(old, newc, ret);
     }
     static inline void _cimba_corostate_enter_fresh(void) { }
     #endif

@@ -74,7 +74,6 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
         with:
-          submodules: recursive
           persist-credentials: false
 
       - name: Set up Python
@@ -104,16 +103,45 @@ jobs:
           if-no-files-found: error
 
   wheels:
-    name: Build Linux x86_64 wheel
-    runs-on: ubuntu-24.04
+    name: Build ${{ matrix.name }} wheels
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            os: ubuntu-24.04
+            artifact: linux-x86_64
+            arch: x86_64
+          - name: Windows x86_64
+            os: windows-2025
+            artifact: windows-x86_64
+            arch: AMD64
+          - name: macOS arm64
+            os: macos-14
+            artifact: macos-arm64
+            arch: arm64
+          - name: macOS x86_64
+            os: macos-15-intel
+            artifact: macos-x86_64
+            arch: x86_64
+    runs-on: ${{ matrix.os }}
     needs: validate
+    env:
+      CIBW_ARCHS: ${{ matrix.arch }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
         with:
-          submodules: recursive
           persist-credentials: false
+
+      - name: Install NASM on Windows
+        if: runner.os == 'Windows'
+        run: choco install nasm --no-progress -y
+
+      - name: Install NASM on Intel macOS
+        if: runner.os == 'macOS' && matrix.arch == 'x86_64'
+        run: brew install nasm
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.4.1
@@ -121,7 +149,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v7
         with:
-          name: dist-wheels-linux-x86-64
+          name: dist-wheels-${{ matrix.artifact }}
           path: wheelhouse/*.whl
           if-no-files-found: error
 

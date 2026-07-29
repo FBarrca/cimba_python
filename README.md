@@ -34,8 +34,9 @@ or with `uv`:
 uv add cimba
 ```
 
-Python 3.13 or newer is required. The wheel embeds the Cimba C library, so you
-do not need to install Cimba separately.
+Python 3.13 or newer is required. The Linux, Windows, and macOS wheels embed
+the Cimba C library, so you do not need to install Cimba separately. Native
+macOS wheels are available for both Apple Silicon and Intel Macs.
 
 ## What is it?
 
@@ -99,7 +100,6 @@ More examples, tutorials, background notes, and the API reference are in the
 From a fresh clone:
 
 ```bash
-git submodule update --init --recursive
 uv sync
 uv run pytest
 ```

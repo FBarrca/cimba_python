@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+permissions:
+  contents: read
+
+jobs:
+  # Linux Job
+  linux-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build python3-pip nasm meson
+      - name: Configure and Build
+        run: |
+          meson setup build
+          meson compile -C build
+      - name: Test
+        run: meson test -C build --print-errorlogs --timeout-multiplier 3
+
+  # Windows Job (MinGW)
+  windows-mingw-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-meson
+            mingw-w64-x86_64-python-pip
+            mingw-w64-x86_64-nasm
+
+      - name: Configure and Build
+        shell: msys2 {0}
+        run: |
+          meson setup build
+          meson compile -C build
+
+      - name: Test
+        shell: msys2 {0}
+        run: meson test -C build --print-errorlogs --timeout-multiplier 5
