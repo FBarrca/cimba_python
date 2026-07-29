@@ -44,6 +44,12 @@ if m_dep.found()
     native_dependencies += m_dep
 endif
 
+# Numba resolves these functions by name through LLVM. Unlike ELF/Mach-O,
+# PE/COFF does not expose symbols pulled from the static library unless the
+# extension DLL exports them explicitly. Meson ignores this Microsoft module
+# definition file when using non-Windows linkers.
+windows_module_defs = files('src/cimba/native/cimba.def')[0]
+
 py.install_sources(
     'src/cimba/__init__.py',
     'src/cimba/_cimba.py',
@@ -121,6 +127,7 @@ cimba_native_ext = py.extension_module(
     include_directories: [inc_api, inc_int, 'src/cimba/native'],
     dependencies: native_dependencies,
     link_whole: cimba_lib,
+    vs_module_defs: windows_module_defs,
     install: true,
     subdir: 'cimba',
 )

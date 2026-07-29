@@ -36,7 +36,8 @@ uv add cimba
 
 Python 3.13 or newer is required. The Linux, Windows, and macOS wheels embed
 the Cimba C library, so you do not need to install Cimba separately. Native
-macOS wheels are available for both Apple Silicon and Intel Macs.
+macOS wheels are available for Apple Silicon. Numba does not currently publish
+the required llvmlite wheels for Intel Macs.
 
 ## What is it?
 

@@ -25,6 +25,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+          submodules: recursive
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -75,6 +76,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+          submodules: recursive
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -120,10 +122,6 @@ jobs:
             os: macos-14
             artifact: macos-arm64
             arch: arm64
-          - name: macOS x86_64
-            os: macos-15-intel
-            artifact: macos-x86_64
-            arch: x86_64
     runs-on: ${{ matrix.os }}
     needs: validate
     env:
@@ -134,14 +132,11 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+          submodules: recursive
 
       - name: Install NASM on Windows
         if: runner.os == 'Windows'
         run: choco install nasm --no-progress -y
-
-      - name: Install NASM on Intel macOS
-        if: runner.os == 'macOS' && matrix.arch == 'x86_64'
-        run: brew install nasm
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.4.1

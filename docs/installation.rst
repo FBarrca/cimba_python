@@ -11,14 +11,12 @@ Cimba Python.
 Linux
 -----
 
-On Linux, clone the repository, initialize submodules, and let ``uv`` create the
-project environment:
+On Linux, clone the repository and let ``uv`` create the project environment:
 
 .. code-block:: bash
 
     git clone <repo-url> cimba_python
     cd cimba_python
-    git submodule update --init --recursive
     uv sync
 
 On Ubuntu or WSL, install the usual native build packages first:
@@ -40,13 +38,26 @@ toolchain. Then run the same project commands from a developer shell:
 
    git clone <repo-url> cimba_python
    cd cimba_python
-   git submodule update --init --recursive
    uv sync
 
 If Windows Security blocks build tools from writing into the project directory,
 allow the compiler, assembler, and Python build tools. If imports fail because
 another application provides incompatible runtime DLLs earlier on ``PATH``,
 adjust ``PATH`` so the active compiler environment comes first.
+
+macOS
+-----
+
+Apple Silicon Macs are supported with native arm64 wheels, so the normal
+installation does not require Xcode or a separate Cimba library:
+
+.. code-block:: bash
+
+   python -m pip install cimba
+
+For a source checkout, install Xcode Command Line Tools, clone the repository,
+and run ``uv sync``. Intel Macs are not currently supported because Numba does
+not publish the required llvmlite wheels for that architecture.
 
 Verifying your installation
 ---------------------------

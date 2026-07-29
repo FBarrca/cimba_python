@@ -1,0 +1,4 @@
+[submodule "subprojects/cimba"]
+	path = subprojects/cimba
+	url = https://github.com/FBarrca/cimba.git
+	branch = cimba-python-0.4.1
