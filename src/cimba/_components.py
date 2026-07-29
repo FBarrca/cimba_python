@@ -448,17 +448,52 @@ class _ComponentDecl:
     def polymorphic(self) -> bool:
         """Whether this path or one of its descendants needs per-instance
         specialization."""
-        return (len(set(self.instance_classes)) > 1
-                or any(child.polymorphic for child in self.children))
+        return len(self.specialization_groups()) > 1
 
     def class_at(self, index: int = 0) -> type[Component]:
         return self.instance_classes[index]
 
-    def specialization_indices(self) -> tuple[int | None, ...]:
-        """None denotes the existing homogeneous shared specialization."""
-        if self.polymorphic:
-            return tuple(range(self.count))
-        return (None,)
+    def specialization_key(self, index: int) -> tuple[Any, ...]:
+        """Recursive concrete layout of one logical instance."""
+        children: list[Any] = []
+        for child in self.children:
+            if child.collection:
+                start = child.parent_offsets[index]
+                length = child.parent_lengths[index]
+                children.append((
+                    child.local_name,
+                    tuple(child.specialization_key(item)
+                          for item in range(start, start + length)),
+                ))
+            else:
+                slot = (child.parent_slots[index]
+                        if child.parent_slots else index)
+                children.append((
+                    child.local_name,
+                    None if slot < 0 else child.specialization_key(slot),
+                ))
+        return (self.instance_classes[index], tuple(children))
+
+    def specialization_groups(self) -> tuple[tuple[int, ...], ...]:
+        """Logical instance indexes grouped by identical recursive layout."""
+        groups: list[list[int]] = []
+        positions: dict[tuple[Any, ...], int] = {}
+        for index in range(self.count):
+            key = self.specialization_key(index)
+            position = positions.get(key)
+            if position is None:
+                positions[key] = len(groups)
+                groups.append([index])
+            else:
+                groups[position].append(index)
+        return tuple(tuple(group) for group in groups)
+
+    def specialization_slots(self) -> tuple[int, ...]:
+        slots = [0] * self.count
+        for variant, group in enumerate(self.specialization_groups()):
+            for index in group:
+                slots[index] = variant
+        return tuple(slots)
 
     def walk(self) -> Iterator["_ComponentDecl"]:
         """This node and all of its descendants, depth-first."""
@@ -1378,6 +1413,10 @@ def _constant_slots_symbol(component: str, field_name: str) -> str:
     return f"_CIMBA_CONSTSLOT_{component}__{field_name}"
 
 
+def _variant_slots_symbol(component: str) -> str:
+    return f"_CIMBA_VARIANT_{component}"
+
+
 def _ref_index_symbol(component: str, name: str) -> str:
     return f"_CIMBA_REFIDX_{component}__{name}"
 
@@ -1431,6 +1470,9 @@ def _lowering_namespace(
             if decl.parent_slots:
                 namespace[_component_slots_symbol(decl.name)] = np.asarray(
                     decl.parent_slots, dtype=np.int64)
+            if decl.polymorphic:
+                namespace[_variant_slots_symbol(decl.name)] = np.asarray(
+                    decl.specialization_slots(), dtype=np.int64)
             for name, ref in decl.component_refs.items():
                 if ref.table:
                     if ref.table_decl is not None:
@@ -1495,6 +1537,8 @@ class _ComponentAccess:
     decl: _ComponentDecl
     index: ast.expr | None
     text: str
+    #: logical indexes this access may select when ``index`` is dynamic.
+    possible_indices: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -1505,6 +1549,7 @@ class _ComponentFieldAccess:
     index: ast.expr | None
     field: str
     text: str
+    possible_indices: tuple[int, ...] | None = None
 
 
 @dataclass
@@ -1531,9 +1576,11 @@ class _ComponentFunctionSpec:
     dependencies: tuple[_ComponentFunctionDependency, ...]
     helper: Any
     callees: tuple[str, ...] = ()
-    #: None for the homogeneous shared helper; otherwise the logical
-    #: instance this helper is specialized for.
-    instance_index: int | None = None
+    receiver_indexed: bool = False
+    #: None for the homogeneous shared helper; otherwise the recursive
+    #: specialization ordinal and its logical instance indexes.
+    variant: int | None = None
+    instance_indices: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1573,6 +1620,15 @@ class _ComponentPathLowerer(ast.NodeTransformer):
     def _callback_label(self) -> str:
         raise NotImplementedError
 
+    @staticmethod
+    def _possible_positions(access: _ComponentAccess) -> tuple[int, ...]:
+        if (isinstance(access.index, ast.Constant)
+                and type(access.index.value) is int):
+            return (access.index.value,)
+        if access.possible_indices is not None:
+            return access.possible_indices
+        return tuple(range(access.decl.count))
+
     # -- path resolution -------------------------------------------------------
 
     def _namespace_ref(self, node: ast.AST) -> _ComponentAccess | None:
@@ -1585,8 +1641,23 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             if collection is not None:
                 index = self._collection_item_index(
                     collection.decl, collection.index, node.slice)
+                possible = None
+                if not (isinstance(index, ast.Constant)
+                        and type(index.value) is int):
+                    if collection.index is None:
+                        possible = tuple(range(collection.decl.count))
+                    else:
+                        possible_items: list[int] = []
+                        for parent_index in self._possible_positions(
+                                collection):
+                            start = collection.decl.parent_offsets[parent_index]
+                            length = collection.decl.parent_lengths[parent_index]
+                            possible_items.extend(
+                                range(start, start + length))
+                        possible = tuple(possible_items)
                 return _ComponentAccess(
-                    collection.decl, index, f"{collection.text}[...]")
+                    collection.decl, index, f"{collection.text}[...]",
+                    possible)
             table = self._ref_table_ref(node.value)
             if table is not None:
                 return self._ref_table_item(table, node.slice)
@@ -1620,7 +1691,9 @@ class _ComponentPathLowerer(ast.NodeTransformer):
                             "declared by that concrete component type")
                     index = ast.Constant(slot) if child.count > 1 else None
                 else:
-                    if any(slot < 0 for slot in child.parent_slots):
+                    parent_possible = self._possible_positions(parent)
+                    if any(child.parent_slots[position] < 0
+                           for position in parent_possible):
                         raise ValueError(
                             f"{self._callback_label()} dynamically accesses "
                             f"{parent.text}.{node.attr}, which is not "
@@ -1629,8 +1702,14 @@ class _ComponentPathLowerer(ast.NodeTransformer):
                         ast.Name(id=_component_slots_symbol(child.name),
                                  ctx=ast.Load()),
                         parent.index, ast.Load())
+                possible = None
+                if not (isinstance(index, ast.Constant)
+                        and type(index.value) is int):
+                    possible = tuple(
+                        child.parent_slots[position]
+                        for position in self._possible_positions(parent))
                 return _ComponentAccess(
-                    child, index, f"{parent.text}.{node.attr}")
+                    child, index, f"{parent.text}.{node.attr}", possible)
             ref = parent.decl.component_refs.get(node.attr)
             if ref is not None and not ref.table:
                 return self._ref_namespace(parent, node.attr, ref)
@@ -1660,14 +1739,16 @@ class _ComponentPathLowerer(ast.NodeTransformer):
                         "by that concrete component type")
                 if (parent.index is not None
                         and not isinstance(parent.index, ast.Constant)
-                        and any(length == 0
-                                for length in child.parent_lengths)):
+                        and any(child.parent_lengths[position] == 0
+                                for position
+                                in self._possible_positions(parent))):
                     raise ValueError(
                         f"{self._callback_label()} dynamically accesses "
                         f"{parent.text}.{node.attr}, which is not declared "
                         "by every concrete component type")
             return _ComponentAccess(
-                child, parent.index, f"{parent.text}.{node.attr}")
+                child, parent.index, f"{parent.text}.{node.attr}",
+                parent.possible_indices)
 
         return None
 
@@ -1705,23 +1786,28 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             target_expr = (None if target_index is None
                            else ast.Constant(target_index))
             return _ComponentAccess(target_decl, target_expr, text)
-        if any(target is None for target in ref.targets):
+        parent_possible = self._possible_positions(parent)
+        if any(ref.targets[position] is None
+               for position in parent_possible):
             raise ValueError(
                 f"{self._callback_label()} dereferences {text} with a "
                 "dynamic instance index, but some instances have no target")
-        first = ref.targets[0][0]
-        if any(target[0] is not first for target in ref.targets):
+        targets = [ref.targets[position] for position in parent_possible]
+        first = targets[0][0]
+        if any(target[0] is not first for target in targets):
             raise ValueError(
                 f"{self._callback_label()} dereferences {text} with a "
                 "dynamic instance index, which requires every instance to "
                 "reference the same component declaration")
         if first.count <= 1:
-            return _ComponentAccess(first, None, text)
+            return _ComponentAccess(first, None, text, (0,))
         lookup = _subscript(
             ast.Name(id=_ref_index_symbol(parent.decl.name, name),
                      ctx=ast.Load()),
             index, ast.Load())
-        return _ComponentAccess(first, lookup, text)
+        return _ComponentAccess(
+            first, lookup, text,
+            tuple(target[1] for target in targets))
 
     def _ref_table_item(
         self,
@@ -1786,7 +1872,9 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             ast.Name(id=_ref_table_symbol(
                 table.parent.decl.name, table.name), ctx=ast.Load()),
             _add(offset, item_index), ast.Load())
-        return _ComponentAccess(ref.table_decl, lookup, text)
+        return _ComponentAccess(
+            ref.table_decl, lookup, text,
+            tuple(dict.fromkeys(ref.table_indices)))
 
     def _field_ref(self, node: ast.AST) -> _ComponentFieldAccess | None:
         if not isinstance(node, ast.Attribute):
@@ -1802,6 +1890,7 @@ class _ComponentPathLowerer(ast.NodeTransformer):
                 namespace.index,
                 field_name,
                 f"{namespace.text}.{field_name}",
+                namespace.possible_indices,
             )
         if namespace.decl.child(field_name) is not None:
             return None
@@ -1879,7 +1968,8 @@ class _ComponentPathLowerer(ast.NodeTransformer):
                     "is not declared by that concrete component type")
             if (access.index is not None
                     and not isinstance(access.index, ast.Constant)
-                    and len(owners) != access.decl.count):
+                    and not set(access.possible_indices
+                                or range(access.decl.count)).issubset(owners)):
                 raise ValueError(
                     f"{self._callback_label()} dynamically accesses "
                     f"{access.text}, which is not declared by every concrete "
@@ -1897,7 +1987,9 @@ class _ComponentPathLowerer(ast.NodeTransformer):
                     "is not declared by that concrete component type")
             packed_index: ast.expr = ast.Constant(slot)
         else:
-            if any(slot < 0 for slot in slots):
+            possible = (access.possible_indices
+                        or tuple(range(access.decl.count)))
+            if any(slots[position] < 0 for position in possible):
                 raise ValueError(
                     f"{self._callback_label()} dynamically accesses "
                     f"{access.text}, which is not declared by every concrete "
@@ -1922,7 +2014,8 @@ class _ComponentPathLowerer(ast.NodeTransformer):
                     "is not declared by that concrete component type")
             if (access.index is not None
                     and not isinstance(access.index, ast.Constant)
-                    and len(owners) != access.decl.count):
+                    and not set(access.possible_indices
+                                or range(access.decl.count)).issubset(owners)):
                 raise ValueError(
                     f"{self._callback_label()} dynamically accesses "
                     f"{access.text}, which is not declared by every concrete "
@@ -1938,7 +2031,9 @@ class _ComponentPathLowerer(ast.NodeTransformer):
                     "is not declared by that concrete component type")
             index = ast.Constant(slot)
         elif len(access.decl.constant_owners[access.field]) > 1:
-            if any(slot < 0 for slot in slots):
+            possible = (access.possible_indices
+                        or tuple(range(access.decl.count)))
+            if any(slots[position] < 0 for position in possible):
                 raise ValueError(
                     f"{self._callback_label()} dynamically accesses "
                     f"{access.text}, which is not declared by every concrete "
@@ -2009,19 +2104,23 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             return ()
         if (isinstance(namespace.index, ast.Constant)
                 and type(namespace.index.value) is int):
-            wanted = (namespace.index.value
-                      if namespace.decl.polymorphic else None)
             return tuple(
                 spec for spec in candidates
-                if spec.instance_index == wanted)
-        shared = [spec for spec in candidates if spec.instance_index is None]
+                if namespace.index.value in spec.instance_indices)
+        shared = [spec for spec in candidates if spec.variant is None]
         if shared:
             return (shared[0],)
+        possible = set(namespace.possible_indices
+                       or range(namespace.decl.count))
         ordered = sorted(
-            candidates,
-            key=lambda spec: (
-                -1 if spec.instance_index is None else spec.instance_index))
-        if len(ordered) != namespace.decl.count:
+            (spec for spec in candidates
+             if possible.intersection(spec.instance_indices)),
+            key=lambda spec: spec.variant)
+        covered = {
+            index for spec in ordered for index in spec.instance_indices
+            if index in possible
+        }
+        if covered != possible:
             raise ValueError(
                 f"{self._callback_label()} dynamically calls "
                 f"{namespace.text}.{method_name}(), which is not declared "
@@ -2081,6 +2180,7 @@ class _ComponentPathLowerer(ast.NodeTransformer):
                 self._substitute_expr(access.index, replacements),
                 access.field,
                 access.text,
+                access.possible_indices,
             )
             if bound.field in bound.decl.constants:
                 value = self._constant_expr(bound)
@@ -2090,10 +2190,16 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             replacements[dependency.parameter] = value
 
         self.called_functions.add(spec.graph_name)
+        helper_args = list(arguments)
+        if spec.receiver_indexed:
+            if receiver.index is None:
+                raise TypeError(
+                    "indexed component function has no receiver index")
+            helper_args.append(copy.deepcopy(receiver.index))
         return ast.copy_location(
             ast.Call(
                 func=ast.Name(id=spec.symbol, ctx=ast.Load()),
-                args=[*arguments, *dependency_args],
+                args=[*helper_args, *dependency_args],
                 keywords=[],
             ),
             node,
@@ -2121,12 +2227,16 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             raise TypeError("polymorphic component function has no index")
         expression = self._lower_one_component_function_call(
             copy.deepcopy(node), receiver, specs[-1])
+        variant_expr = _subscript(
+            ast.Name(id=_variant_slots_symbol(receiver.decl.name),
+                     ctx=ast.Load()),
+            copy.deepcopy(receiver.index), ast.Load())
         for spec in reversed(specs[:-1]):
             expression = ast.IfExp(
                 test=ast.Compare(
-                    left=copy.deepcopy(receiver.index),
+                    left=copy.deepcopy(variant_expr),
                     ops=[ast.Eq()],
-                    comparators=[ast.Constant(spec.instance_index)],
+                    comparators=[ast.Constant(spec.variant)],
                 ),
                 body=self._lower_one_component_function_call(
                     copy.deepcopy(node), receiver, spec),
@@ -2356,6 +2466,7 @@ class _ComponentMethodLowerer(_ComponentPathLowerer):
         env_name: str,
         component_decl: _ComponentDecl,
         instance_index: ast.expr,
+        possible_indices: tuple[int, ...] | None = None,
         kind: str = "process",
         component_functions: Mapping[
             str, _ComponentFunctionSpec] | None = None,
@@ -2366,6 +2477,7 @@ class _ComponentMethodLowerer(_ComponentPathLowerer):
         self.receiver_name = receiver_name
         self.component_decl = component_decl
         self.instance_index = instance_index
+        self.possible_indices = possible_indices
         self.strict_ref_tables = not isinstance(instance_index, ast.Constant)
         self.kind = kind
 
@@ -2374,7 +2486,8 @@ class _ComponentMethodLowerer(_ComponentPathLowerer):
             index = (copy.deepcopy(self.instance_index)
                      if self.component_decl.count > 1 else None)
             return _ComponentAccess(self.component_decl, index,
-                                    self.receiver_name)
+                                    self.receiver_name,
+                                    self.possible_indices)
         return None
 
     def _callback_label(self) -> str:
@@ -2676,7 +2789,8 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
         method_name: str,
         receiver_name: str,
         parameter_names: tuple[str, ...],
-        instance_index: int | None,
+        instance_indices: tuple[int, ...],
+        variant: int | None,
     ):
         super().__init__(env_name="__cimba_no_env")
         self.builder = builder
@@ -2684,7 +2798,8 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
         self.method_name = method_name
         self.receiver_name = receiver_name
         self.parameter_names = parameter_names
-        self.instance_index = instance_index
+        self.instance_indices = instance_indices
+        self.variant = variant
         self.dependencies: list[_ComponentFunctionDependency] = []
         self._dependency_keys: dict[tuple[Any, ...], int] = {}
         self.callees: list[str] = []
@@ -2692,14 +2807,17 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
 
     def _root_namespace_ref(self, node: ast.AST) -> _ComponentAccess | None:
         if isinstance(node, ast.Name) and node.id == self.receiver_name:
-            if self.instance_index is not None:
-                index = (ast.Constant(self.instance_index)
+            if self.variant is not None and len(self.instance_indices) == 1:
+                index = (ast.Constant(self.instance_indices[0])
                          if self.decl.count > 1 else None)
             else:
                 index = (ast.Name(
                     id="__cimba_receiver_index", ctx=ast.Load())
                     if self.decl.count > 1 else None)
-            return _ComponentAccess(self.decl, index, self.receiver_name)
+            possible = (self.instance_indices
+                        if not isinstance(index, ast.Constant) else None)
+            return _ComponentAccess(
+                self.decl, index, self.receiver_name, possible)
         return None
 
     def _callback_label(self) -> str:
@@ -2752,7 +2870,8 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
             receiver = self._namespace_ref(node.func.value)
             if receiver is not None:
                 candidates = self.builder.specs_for(
-                    receiver.decl, receiver.index, node.func.attr)
+                    receiver.decl, receiver.index, node.func.attr,
+                    receiver.possible_indices)
                 if candidates:
                     if len(candidates) != 1:
                         return self._lower_polymorphic_call(
@@ -2787,6 +2906,7 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
                                 access.index, replacements),
                             access.field,
                             access.text,
+                            access.possible_indices,
                         )
                         value = self._dependency(bound, direct=False)
                         dependency_args.append(value)
@@ -2794,9 +2914,16 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
                     self.helper_namespace[callee.symbol] = callee.helper
                     if callee.graph_name not in self.callees:
                         self.callees.append(callee.graph_name)
+                    helper_args = list(arguments)
+                    if callee.receiver_indexed:
+                        if receiver.index is None:
+                            raise TypeError(
+                                "indexed component function has no "
+                                "receiver index")
+                        helper_args.append(copy.deepcopy(receiver.index))
                     return ast.copy_location(ast.Call(
                         func=ast.Name(id=callee.symbol, ctx=ast.Load()),
-                        args=[*arguments, *dependency_args],
+                        args=[*helper_args, *dependency_args],
                         keywords=[],
                     ), node)
 
@@ -2854,6 +2981,7 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
                     self._substitute_expr(access.index, replacements),
                     access.field,
                     access.text,
+                    access.possible_indices,
                 )
                 value = self._dependency(bound, direct=False)
                 dependency_args.append(value)
@@ -2861,19 +2989,29 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
             self.helper_namespace[callee.symbol] = callee.helper
             if callee.graph_name not in self.callees:
                 self.callees.append(callee.graph_name)
+            helper_args = list(arguments)
+            if callee.receiver_indexed:
+                if receiver.index is None:
+                    raise TypeError(
+                        "indexed component function has no receiver index")
+                helper_args.append(copy.deepcopy(receiver.index))
             return ast.Call(
                 func=ast.Name(id=callee.symbol, ctx=ast.Load()),
-                args=[*arguments, *dependency_args],
+                args=[*helper_args, *dependency_args],
                 keywords=[],
             )
 
         expression: ast.expr = branch(candidates[-1])
+        variant_expr = _subscript(
+            ast.Name(id=_variant_slots_symbol(receiver.decl.name),
+                     ctx=ast.Load()),
+            copy.deepcopy(receiver.index), ast.Load())
         for callee in reversed(candidates[:-1]):
             expression = ast.IfExp(
                 test=ast.Compare(
-                    left=copy.deepcopy(receiver.index),
+                    left=copy.deepcopy(variant_expr),
                     ops=[ast.Eq()],
-                    comparators=[ast.Constant(callee.instance_index)],
+                    comparators=[ast.Constant(callee.variant)],
                 ),
                 body=branch(callee),
                 orelse=expression,
@@ -2940,11 +3078,12 @@ class _ComponentFunctionBuilder:
         decl: _ComponentDecl,
         method_name: str,
         method: Callable[..., Any],
-        instance_index: int | None = None,
+        variant: int | None,
+        instance_indices: tuple[int, ...],
     ) -> _ComponentFunctionSpec:
         base_name = f"{decl.name}__{method_name}"
-        graph_name = (base_name if instance_index is None
-                      else f"{base_name}__variant_{instance_index}")
+        graph_name = (base_name if variant is None
+                      else f"{base_name}__variant_{variant}")
         existing = self.specs.get(graph_name)
         if existing is not None:
             return existing
@@ -2970,15 +3109,15 @@ class _ComponentFunctionBuilder:
             symbol = (
                 f"_CIMBA_FUNCTION_{decl.cls.__name__}_{method_name}_"
                 f"{id(method):x}"
-                + ("" if instance_index is None
-                   else f"_V{instance_index}"))
+                + ("" if variant is None else f"_V{variant}"))
             lowerer = _ComponentFunctionBodyLowerer(
                 builder=self,
                 decl=decl,
                 method_name=method_name,
                 receiver_name=receiver_name,
                 parameter_names=parameter_names,
-                instance_index=instance_index,
+                instance_indices=instance_indices,
+                variant=variant,
             )
             lowered = lowerer.visit(node)
             if not isinstance(lowered, ast.FunctionDef):
@@ -2991,6 +3130,11 @@ class _ComponentFunctionBuilder:
             for arg in lowered.args.args:
                 arg.annotation = None
                 arg.type_comment = None
+            receiver_indexed = (
+                decl.count > 1 and len(instance_indices) > 1)
+            if receiver_indexed:
+                lowered.args.args.append(
+                    ast.arg(arg="__cimba_receiver_index"))
             lowered.args.args.extend(
                 ast.arg(arg=dependency.parameter)
                 for dependency in lowerer.dependencies)
@@ -3008,7 +3152,9 @@ class _ComponentFunctionBuilder:
                 self._dependency_type(dependency)
                 for dependency in lowerer.dependencies)
             signature = return_type(
-                *argument_types, *dependency_types)
+                *argument_types,
+                *((types.int64,) if receiver_indexed else ()),
+                *dependency_types)
             closure_key = tuple(
                 (name,
                  value if _primitive_constant(value) else id(value))
@@ -3020,7 +3166,8 @@ class _ComponentFunctionBuilder:
                 )
             )
             cache_key = (
-                decl.class_at(instance_index or 0),
+                decl.class_at(instance_indices[0]),
+                decl.specialization_key(instance_indices[0]),
                 id(method),
                 source_key,
                 str(signature),
@@ -3061,7 +3208,9 @@ class _ComponentFunctionBuilder:
                 dependencies=tuple(lowerer.dependencies),
                 helper=helper,
                 callees=tuple(lowerer.callees),
-                instance_index=instance_index,
+                receiver_indexed=receiver_indexed,
+                variant=variant,
+                instance_indices=instance_indices,
             )
             self.specs[graph_name] = spec
             return spec
@@ -3074,12 +3223,15 @@ class _ComponentFunctionBuilder:
     ) -> dict[str, _ComponentFunctionSpec]:
         for root in roots:
             for decl in root.walk():
-                for instance_index in decl.specialization_indices():
-                    cls = decl.class_at(instance_index or 0)
+                groups = decl.specialization_groups()
+                for ordinal, instance_indices in enumerate(groups):
+                    variant = None if len(groups) == 1 else ordinal
+                    cls = decl.class_at(instance_indices[0])
                     for method_name, method in _component_function_methods(
                             cls):
                         self.build(
-                            decl, method_name, method, instance_index)
+                            decl, method_name, method, variant,
+                            instance_indices)
         return self.specs
 
     def specs_for(
@@ -3087,26 +3239,37 @@ class _ComponentFunctionBuilder:
         decl: _ComponentDecl,
         index: ast.expr | None,
         method_name: str,
+        possible_indices: tuple[int, ...] | None = None,
     ) -> tuple[_ComponentFunctionSpec, ...]:
         """Resolve/build the concrete helper candidates for an access."""
         if (isinstance(index, ast.Constant)
                 and type(index.value) is int):
-            instance_index: int | None = (
-                index.value if decl.polymorphic else None)
+            instance_index = index.value
+            groups = decl.specialization_groups()
+            variant = (None if len(groups) == 1
+                       else decl.specialization_slots()[instance_index])
+            group = (groups[0] if variant is None else groups[variant])
             cls = decl.class_at(index.value)
             method = dict(_component_function_methods(cls)).get(method_name)
             if method is None:
                 return ()
             return (self.build(
-                decl, method_name, method, instance_index),)
+                decl, method_name, method, variant, group),)
         if not decl.polymorphic:
             method = dict(_component_function_methods(
                 decl.class_at())).get(method_name)
             if method is None:
                 return ()
-            return (self.build(decl, method_name, method, None),)
+            group = decl.specialization_groups()[0]
+            return (self.build(
+                decl, method_name, method, None, group),)
         candidates: list[_ComponentFunctionSpec] = []
-        for instance_index, cls in enumerate(decl.instance_classes):
+        possible = set(possible_indices or range(decl.count))
+        groups = decl.specialization_groups()
+        for variant, group in enumerate(groups):
+            if not possible.intersection(group):
+                continue
+            cls = decl.class_at(group[0])
             method = dict(_component_function_methods(cls)).get(method_name)
             if method is None:
                 raise ValueError(
@@ -3114,7 +3277,7 @@ class _ComponentFunctionBuilder:
                     f"'{decl.name}.{method_name}' requires every concrete "
                     "component type to declare that @sim.function")
             candidates.append(self.build(
-                decl, method_name, method, instance_index))
+                decl, method_name, method, variant, group))
         return tuple(candidates)
 
 
@@ -3131,6 +3294,7 @@ def _lower_component_method(
     component_name: str,
     component_decl: _ComponentDecl,
     instance_index: ast.expr,
+    possible_indices: tuple[int, ...] | None = None,
     method_name: str,
     method: Callable[..., Any],
     struct_view: type | None = None,
@@ -3170,6 +3334,7 @@ def _lower_component_method(
         env_name=env_name,
         component_decl=component_decl,
         instance_index=instance_index,
+        possible_indices=possible_indices,
         kind=kind,
         component_functions=component_functions,
     )
@@ -3243,6 +3408,7 @@ def _shared_instance_setup(
     base: str,
     counts: tuple[int, ...],
     base_arg_count: int,
+    instance_indices: tuple[int, ...] | None = None,
 ) -> tuple[ast.expr, list[ast.stmt], dict[str, Any]]:
     """Prepare one compiled body to serve every instance of a collection.
 
@@ -3271,6 +3437,10 @@ def _shared_instance_setup(
 
     inst_symbol = f"_CIMBA_PROCINST_{base}"
     copybase_symbol = f"_CIMBA_COPYBASE_{base}"
+    group_symbol = f"_CIMBA_PROCGROUP_{base}"
+    mapped = (instance_indices is not None
+              and instance_indices != tuple(range(len(instance_indices))))
+    local_inst = "__cimba_local_inst" if mapped else "__cimba_inst"
     uniform = len(set(counts)) == 1
     per_instance = counts[0]
     lines: list[str] = []
@@ -3278,14 +3448,14 @@ def _shared_instance_setup(
 
     # __cimba_inst: the collection item this global copy belongs to.
     if uniform and per_instance == 1:
-        lines.append("__cimba_inst = __cimba_idx")
+        lines.append(f"{local_inst} = __cimba_idx")
     elif uniform:
-        lines.append(f"__cimba_inst = __cimba_idx // {per_instance}")
+        lines.append(f"{local_inst} = __cimba_idx // {per_instance}")
     else:
         tables[inst_symbol] = np.repeat(
             np.arange(len(counts), dtype=np.int64),
             np.asarray(counts, dtype=np.int64))
-        lines.append(f"__cimba_inst = {inst_symbol}[__cimba_idx]")
+        lines.append(f"{local_inst} = {inst_symbol}[__cimba_idx]")
 
     # the user's copy index: this copy's position within its own item.
     if user_idx is not None:
@@ -3297,7 +3467,13 @@ def _shared_instance_setup(
             tables[copybase_symbol] = np.asarray(
                 _offsets_from_counts(counts)[1], dtype=np.int64)
             lines.append(
-                f"{user_idx} = __cimba_idx - {copybase_symbol}[__cimba_inst]")
+                f"{user_idx} = __cimba_idx - "
+                f"{copybase_symbol}[{local_inst}]")
+
+    if mapped:
+        tables[group_symbol] = np.asarray(
+            instance_indices, dtype=np.int64)
+        lines.append(f"__cimba_inst = {group_symbol}[{local_inst}]")
 
     return (ast.Name(id="__cimba_inst", ctx=ast.Load()),
             ast.parse("\n".join(lines)).body, tables)
@@ -3347,6 +3523,7 @@ def _lower_component_process(
     *,
     instance_index: int | None = None,
     copies_per_instance: tuple[int, ...] | None = None,
+    instance_indices: tuple[int, ...] | None = None,
     model_dataset_fields: Iterable[str] = (),
     model_history_fields: Mapping[str, str] = {},
     model_entity_fields: Mapping[str, str] = {},
@@ -3373,11 +3550,14 @@ def _lower_component_process(
     else:
         index_expr, prologue, tables = _shared_instance_setup(
             node, f"{component_name}__{method_name}",
-            tuple(copies_per_instance), base_arg_count)
+            tuple(copies_per_instance), base_arg_count, instance_indices)
 
     return _lower_component_method(
         node, kind="process", component_name=component_name,
         component_decl=component_decl, instance_index=index_expr,
+        possible_indices=(
+            instance_indices if copies_per_instance is not None
+            else ((instance_index,) if instance_index is not None else None)),
         method_name=method_name, method=method, struct_view=struct_view,
         prologue=prologue, extra_namespace=tables,
         model_dataset_fields=model_dataset_fields,
@@ -3394,6 +3574,7 @@ def _lower_component_collect(
     *,
     instance_index: int | None = None,
     per_class: bool = False,
+    instance_indices: tuple[int, ...] | None = None,
     model_dataset_fields: Iterable[str] = (),
     model_history_fields: Mapping[str, str] = {},
     model_entity_fields: Mapping[str, str] = {},
@@ -3411,14 +3592,35 @@ def _lower_component_collect(
             f"component collect '{component_name}.{method_name}' must take "
             "(self, env) without defaults")
     if per_class:
-        args.args.append(ast.arg(arg="__cimba_inst"))
-        index_expr: ast.expr = ast.Name(id="__cimba_inst", ctx=ast.Load())
+        args.args.append(ast.arg(arg="__cimba_group_inst"))
+        indices = (instance_indices
+                   if instance_indices is not None
+                   else tuple(range(component_decl.count)))
+        if indices == tuple(range(len(indices))):
+            index_expr = ast.Name(
+                id="__cimba_group_inst", ctx=ast.Load())
+            prologue: list[ast.stmt] = []
+            tables: dict[str, Any] = {}
+        else:
+            symbol = f"_CIMBA_COLLECTGROUP_{component_name}__{method_name}"
+            index_expr = ast.Name(id="__cimba_inst", ctx=ast.Load())
+            prologue = ast.parse(
+                f"__cimba_inst = {symbol}[__cimba_group_inst]").body
+            tables = {
+                symbol: np.asarray(indices, dtype=np.int64),
+            }
     else:
         index_expr = ast.Constant(instance_index)
+        prologue = []
+        tables = {}
     return _lower_component_method(
         node, kind="collect", component_name=component_name,
         component_decl=component_decl, instance_index=index_expr,
+        possible_indices=(
+            instance_indices if per_class
+            else ((instance_index,) if instance_index is not None else None)),
         method_name=method_name, method=method,
+        prologue=prologue, extra_namespace=tables,
         model_dataset_fields=model_dataset_fields,
         model_history_fields=model_history_fields,
         model_entity_fields=model_entity_fields,

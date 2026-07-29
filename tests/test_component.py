@@ -64,6 +64,25 @@ def test_heterogeneous_component_collection_dispatches_dynamic_function_calls():
     model = System()
     assert model.dtype["policies__lot_size"].shape == (2,)
     assert model.dtype["policies__ordering_cost"].shape == ()
+    calculate_specs = [
+        spec for spec in model._component_functions.values()
+        if spec.decl.name == "policies" and spec.name == "calculate"
+    ]
+    assert len(calculate_specs) == 2
+    assert {spec.instance_indices for spec in calculate_specs} == {
+        (0, 2),
+        (1,),
+    }
+    lot_schema = model.component_schema("policies.lot_size")
+    assert isinstance(lot_schema, sim.ComponentFieldSchema)
+    assert lot_schema.path == "policies[].lot_size"
+    assert lot_schema.flattened_name == "policies__lot_size"
+    assert lot_schema.kind == "param"
+    assert lot_schema.owners == (0, 2)
+    assert lot_schema.concrete_types == (FixedLot, FixedLot)
+    assert lot_schema.logical_count == 3
+    assert lot_schema.shape == (2,)
+    assert lot_schema.packed
 
     @model.process
     def run(env: System):
@@ -73,8 +92,8 @@ def test_heterogeneous_component_collection_dispatches_dynamic_function_calls():
         sim.suspend()
 
     exp = model.experiment(
-        policies__lot_size=[3.0, 5.0],
-        policies__ordering_cost=7.0,
+        policies__lot_size={0: 3.0, 2: 5.0},
+        policies__ordering_cost={1: 7.0},
         replications=1,
         duration=1.0,
     )
@@ -170,16 +189,16 @@ def test_heterogeneous_component_process_and_collect_overrides_run():
             self.result = self.count * 2
 
     class System(sim.Model):
-        workers: list[Worker] = [Worker(), FastWorker()]
+        workers: list[Worker] = [Worker(), FastWorker(), Worker()]
 
     model = System()
     assert [process.name for process in model._processes] == [
-        "workers__0__run",
-        "workers__1__run",
+        "workers__variant_0__run",
+        "workers__variant_1__run",
     ]
     exp = model.experiment(replications=1, duration=1.0)
     assert exp.run() == 0
-    assert exp["workers__result"][0].tolist() == [1.0, 10.0]
+    assert exp["workers__result"][0].tolist() == [1.0, 10.0, 1.0]
 
 
 def test_subtype_only_entity_and_processes_fields_are_packed():
@@ -214,6 +233,142 @@ def test_subtype_only_entity_and_processes_fields_are_packed():
     assert exp.run() == 0
     assert exp["policies__result"][0] == 2.0
     assert all(exp.trials["policies__workers"][0] != 0)
+
+
+def test_polymorphic_subtype_pqueues_use_group_and_packed_offsets():
+    class Policy(sim.Component):
+        pass
+
+    class PriorityPolicy(Policy):
+        lane_count: sim.Const[int]
+        lanes: sim.PQueues = sim.count("lane_count")
+        result: sim.State
+
+        def __init__(self, lane_count):
+            self.lane_count = lane_count
+
+        @sim.process
+        def run(self, env):
+            lane = self.lanes[self.lane_count - 1]
+            lane.put(4, 0)
+            self.result += lane.take()
+            sim.suspend()
+
+    class System(sim.Model):
+        policies: list[Policy] = [
+            PriorityPolicy(1),
+            Policy(),
+            PriorityPolicy(2),
+        ]
+
+    model = System()
+    assert model.pqueues == {"policies__lanes": 3}
+    assert [process.name for process in model._processes] == [
+        "policies__variant_0__run",
+    ]
+    exp = model.experiment(replications=1, duration=1.0)
+    assert exp.run() == 0
+    assert exp.trials["policies__result"][0].tolist() == [4, 4]
+
+
+def test_polymorphic_subtype_spawnables_use_packed_descriptors():
+    class Policy(sim.Component):
+        pass
+
+    class Flow(Policy):
+        amount: sim.Const[int]
+        count: sim.State
+        worker: sim.Spawnable
+
+        def __init__(self, amount):
+            self.amount = amount
+
+        @sim.process
+        def worker(self, env):
+            self.count += self.amount
+
+        @sim.process
+        def launch(self, env):
+            handle = sim.spawn(self.worker, env)
+            sim.wait_process(handle)
+            sim.despawn(handle)
+            sim.suspend()
+
+    class System(sim.Model):
+        policies: list[Policy] = [Policy(), Flow(2), Flow(5)]
+
+    model = System()
+    worker_bindings = [
+        (process.name, process.spawn_index)
+        for process in model._processes
+        if process.spawnable
+    ]
+    assert worker_bindings == [
+        ("policies__1__worker", 0),
+        ("policies__2__worker", 1),
+    ]
+    exp = model.experiment(replications=1, duration=1.0)
+    assert exp.run() == 0
+    assert exp.trials["policies__count"][0].tolist() == [2, 5]
+
+
+def test_polymorphic_ref_and_refs_dispatch_concrete_functions():
+    class Policy(sim.Component):
+        @sim.function
+        def calculate(self, value: float) -> float:
+            return value
+
+    class DoublePolicy(Policy):
+        @sim.function
+        def calculate(self, value: float) -> float:
+            return value * 2.0
+
+    class TriplePolicy(Policy):
+        @sim.function
+        def calculate(self, value: float) -> float:
+            return value * 3.0
+
+    class Follower(sim.Component):
+        target: sim.Ref[Policy]
+        result: sim.FloatState
+
+        def __init__(self, target):
+            self.target = target
+
+        @sim.process
+        def run(self, env):
+            self.result = self.target.calculate(2.0)
+            sim.suspend()
+
+    class Router(sim.Component):
+        routes: sim.Refs[Policy]
+        result: sim.FloatState
+
+        def __init__(self, routes):
+            self.routes = routes
+
+        @sim.process
+        def run(self, env):
+            for i in range(2):
+                self.result += self.routes[i].calculate(2.0)
+            sim.suspend()
+
+    double = DoublePolicy()
+    triple = TriplePolicy()
+
+    class System(sim.Model):
+        policies: list[Policy] = [double, triple]
+        followers: list[Follower] = [
+            Follower(double),
+            Follower(triple),
+        ]
+        router: Router = Router((double, triple))
+
+    model = System()
+    exp = model.experiment(replications=1, duration=1.0)
+    assert exp.run() == 0
+    assert exp.trials["followers__result"][0].tolist() == [4.0, 6.0]
+    assert exp.trials["router__result"][0] == 10.0
 
 
 def test_polymorphic_component_errors_are_clear():

@@ -193,6 +193,24 @@ class _Compiled(TypedDict):
     dtype: np.dtype
 
 
+@dataclass(frozen=True)
+class ComponentFieldSchema:
+    """Public flattened-layout metadata for one component-owned field."""
+
+    path: str
+    flattened_name: str
+    kind: str
+    owners: tuple[int, ...]
+    concrete_types: tuple[type[Component], ...]
+    logical_count: int
+    shape: tuple[int, ...] | None
+
+    @property
+    def packed(self) -> bool:
+        """Whether the field omits logical component instances."""
+        return self.owners != tuple(range(self.logical_count))
+
+
 def _as_capacity_dict(value: _Capacities) -> dict[str, int | str | None]:
     """Normalize a `stores`/`pools` declaration: a list means unbounded
     capacity; dict values are an int capacity or a param name string."""
@@ -707,51 +725,99 @@ class Model:
         is what identifies the instance at runtime."""
         components = self._component_bindings[decl.name]
         if decl.polymorphic:
-            for index, component in enumerate(components):
-                cls = decl.class_at(index)
+            for variant, indices in enumerate(
+                    decl.specialization_groups()):
+                cls = decl.class_at(indices[0])
+                group_name = f"{decl.name}__variant_{variant}"
                 for method_name, method, spec in \
                         _component_process_methods(cls):
-                    count = spec.resolve_copies(
-                        component,
-                        f"{decl.process_names[index]}.{method_name}")
+                    counts = tuple(
+                        spec.resolve_copies(
+                            components[index],
+                            f"{decl.process_names[index]}.{method_name}")
+                        for index in indices)
+                    representative = indices[0]
                     field_kind = (
                         decl.decls.kind_of(method_name)
                         if (method_name in decl.field_owners
-                            and index in decl.field_owners[method_name])
+                            and representative
+                            in decl.field_owners[method_name])
                         else None)
-                    lowered = _lower_component_process(
-                        decl.process_names[index], decl, method_name, method,
-                        _is_struct_class, instance_index=index,
-                        model_dataset_fields=self.datasets,
-                        model_history_fields=self.history_fields,
-                        model_entity_fields=self.entity_fields,
-                        component_functions=self._component_functions)
-                    spawn_field = (decl.direct_field_map[method_name]
-                                   if field_kind == "spawnable" else None)
-                    spawn_index = None
-                    if spawn_field is not None:
-                        owners = decl.field_owners[method_name]
-                        if len(owners) > 1:
-                            spawn_index = decl.field_slots[method_name][index]
-                    process_field = (decl.direct_field_map[method_name]
-                                     if field_kind == "processes" else None)
-                    process_offset = (
-                        decl.process_offsets[method_name][index]
-                        if process_field is not None else 0)
+                    # Descriptor and handle slots are per logical instance;
+                    # retain per-instance registration for these two field
+                    # kinds while grouping ordinary scheduled processes.
+                    if field_kind in ("spawnable", "processes"):
+                        for position, index in enumerate(indices):
+                            lowered = _lower_component_process(
+                                decl.process_names[index], decl, method_name,
+                                method, _is_struct_class,
+                                instance_index=index,
+                                model_dataset_fields=self.datasets,
+                                model_history_fields=self.history_fields,
+                                model_entity_fields=self.entity_fields,
+                                component_functions=self._component_functions)
+                            spawn_field = (
+                                decl.direct_field_map[method_name]
+                                if field_kind == "spawnable" else None)
+                            spawn_index = None
+                            if spawn_field is not None:
+                                owners = decl.field_owners[method_name]
+                                if len(owners) > 1:
+                                    spawn_index = \
+                                        decl.field_slots[method_name][index]
+                            process_field = (
+                                decl.direct_field_map[method_name]
+                                if field_kind == "processes" else None)
+                            process_offset = (
+                                decl.process_offsets[method_name][index]
+                                if process_field is not None else 0)
+                            self.process(
+                                lowered, copies=counts[position],
+                                priority=spec.priority,
+                                _spawn_field=spawn_field,
+                                _spawn_index=spawn_index,
+                                _process_field=process_field,
+                                _process_offset=process_offset)
+                        continue
+                    if len(indices) == 1:
+                        lowered = _lower_component_process(
+                            group_name, decl, method_name, method,
+                            _is_struct_class, instance_index=indices[0],
+                            model_dataset_fields=self.datasets,
+                            model_history_fields=self.history_fields,
+                            model_entity_fields=self.entity_fields,
+                            component_functions=self._component_functions)
+                    else:
+                        lowered = _lower_component_process(
+                            group_name, decl, method_name, method,
+                            _is_struct_class, copies_per_instance=counts,
+                            instance_indices=indices,
+                            model_dataset_fields=self.datasets,
+                            model_history_fields=self.history_fields,
+                            model_entity_fields=self.entity_fields,
+                            component_functions=self._component_functions)
                     self.process(
-                        lowered, copies=count, priority=spec.priority,
-                        _spawn_field=spawn_field, _spawn_index=spawn_index,
-                        _process_field=process_field,
-                        _process_offset=process_offset)
+                        lowered, copies=sum(counts),
+                        priority=spec.priority)
                 for method_name, method in _component_collect_methods(cls):
-                    lowered = _lower_component_collect(
-                        decl.process_names[index], decl, method_name, method,
-                        instance_index=index,
-                        model_dataset_fields=self.datasets,
-                        model_history_fields=self.history_fields,
-                        model_entity_fields=self.entity_fields,
-                        component_functions=self._component_functions)
-                    self._component_collects.append((lowered, 1))
+                    if len(indices) == 1:
+                        lowered = _lower_component_collect(
+                            group_name, decl, method_name, method,
+                            instance_index=indices[0],
+                            model_dataset_fields=self.datasets,
+                            model_history_fields=self.history_fields,
+                            model_entity_fields=self.entity_fields,
+                            component_functions=self._component_functions)
+                    else:
+                        lowered = _lower_component_collect(
+                            group_name, decl, method_name, method,
+                            per_class=True, instance_indices=indices,
+                            model_dataset_fields=self.datasets,
+                            model_history_fields=self.history_fields,
+                            model_entity_fields=self.entity_fields,
+                            component_functions=self._component_functions)
+                    self._component_collects.append(
+                        (lowered, len(indices)))
             return
 
         for method_name, method, spec in _component_process_methods(decl.cls):
@@ -827,6 +893,48 @@ class Model:
         return {decl.name: decl
                 for decl in (*self._component_decls,
                              *self._component_collection_decls)}
+
+    def component_schema(
+        self,
+        path: str | None = None,
+    ) -> "ComponentFieldSchema | tuple[ComponentFieldSchema, ...]":
+        """Describe component-owned flattened fields and packed ownership.
+
+        ``path`` accepts the authoring path (with or without ``[]`` markers)
+        or the flattened field name. With no path, returns every component
+        field in declaration order.
+        """
+        schemas: list[ComponentFieldSchema] = []
+        for root in self._component_roots.values():
+            for decl in root.walk():
+                for field_decl in decl.decls.fields.values():
+                    name = field_decl.name
+                    owners = decl.field_owners[name]
+                    flat_name = decl.direct_field_map[name]
+                    schemas.append(ComponentFieldSchema(
+                        path=f"{decl.item_display_name}.{name}",
+                        flattened_name=flat_name,
+                        kind=field_decl.kind.name,
+                        owners=owners,
+                        concrete_types=tuple(
+                            decl.instance_classes[index]
+                            for index in owners),
+                        logical_count=decl.count,
+                        shape=self._field_shapes.get(flat_name),
+                    ))
+        if path is None:
+            return tuple(schemas)
+        normalized = path.replace("[]", "")
+        matches = [
+            schema for schema in schemas
+            if (path == schema.flattened_name
+                or normalized == schema.path.replace("[]", ""))
+        ]
+        if not matches:
+            raise KeyError(f"unknown component field: {path}")
+        if len(matches) > 1:
+            raise KeyError(f"ambiguous component field: {path}")
+        return matches[0]
 
     def _lower_component_refs(self, fn: _F) -> _F:
         return _lower_model_component_refs(
@@ -1321,6 +1429,16 @@ class Model:
     ) -> dict[str, Any]:
         """Fill omitted Params from declared defaults and validate names."""
         resolved = dict(param_values)
+        schemas = {
+            schema.flattened_name: schema
+            for schema in self.component_schema()
+            if schema.kind == "param"
+        }
+        for name, value in tuple(resolved.items()):
+            schema = schemas.get(name)
+            if schema is not None and isinstance(value, Mapping):
+                resolved[name] = self._resolve_indexed_component_param(
+                    name, value, schema)
         for name, default in self.param_defaults.items():
             resolved.setdefault(name, default)
         missing = set(self.params) - set(resolved)
@@ -1330,6 +1448,52 @@ class Model:
         if unknown:
             raise ValueError(f"unknown parameters: {sorted(unknown)}")
         return resolved
+
+    def _resolve_indexed_component_param(
+        self,
+        name: str,
+        value: Mapping[Any, Any],
+        schema: ComponentFieldSchema,
+    ) -> Any:
+        """Convert ``{logical component index: value}`` to packed order."""
+        invalid = [key for key in value if type(key) is not int]
+        if invalid:
+            raise TypeError(
+                f"component parameter '{name}' owner indexes must be ints")
+        owner_set = set(schema.owners)
+        extra = set(value) - owner_set
+        if extra:
+            raise ValueError(
+                f"component parameter '{name}' has non-owning indexes: "
+                f"{sorted(extra)}")
+
+        defaults = self.param_defaults.get(name, _MISSING)
+        if defaults is _MISSING:
+            default_by_owner: dict[int, Any] = {}
+        else:
+            packed_defaults = (
+                (defaults,) if schema.shape is None else tuple(defaults))
+            default_by_owner = dict(zip(schema.owners, packed_defaults))
+        missing = owner_set - set(value) - set(default_by_owner)
+        if missing:
+            raise ValueError(
+                f"component parameter '{name}' is missing owner indexes: "
+                f"{sorted(missing)}")
+        ordered = [
+            value[owner] if owner in value else default_by_owner[owner]
+            for owner in schema.owners
+        ]
+        if schema.shape is None:
+            return ordered[0]
+        arrays = [np.asarray(item, dtype=np.float64) for item in ordered]
+        if all(item.ndim == 0 for item in arrays):
+            return np.asarray(ordered, dtype=np.float64)
+        if (all(item.ndim == 1 for item in arrays)
+                and len({item.shape for item in arrays}) == 1):
+            return np.column_stack(arrays)
+        raise ValueError(
+            f"component parameter '{name}' indexed values must be all "
+            "scalars or equal-length 1-D sweep arrays")
 
     def _trace_field_spec(self, name: str) -> tuple[Any, ...]:
         shape = self._field_shapes.get(name)

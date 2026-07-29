@@ -234,15 +234,43 @@ The instance-to-implementation mapping is fixed when the model is constructed.
 A call through a computed index, such as
 ``env.materials[i].policy.calculate(value)``, becomes a compiled switch over
 that fixed mapping. Every possible implementation of a dynamically dispatched
-function must have compatible argument and return annotations.
+function must have compatible argument and return annotations. Instances with
+the same concrete class and the same recursive child specialization share one
+compiled implementation, even when they are separated in the collection.
 
 Fields declared by only some concrete classes keep their natural flattened
 name and are packed over the owning items in collection order. For policies
 ``[FixedLot(), EOQ(), FixedLot()]``, ``materials__policy__lot_size`` therefore
 has two slots, corresponding to the first and third materials. Parameter
-overrides use that same owner-only order. Direct access through a dynamic index
-is accepted only when every possible concrete type declares the field; access
-to a subtype-only field must be through a statically known item or from the
+overrides may use that owner-only packed order, or an index mapping that names
+the logical collection items explicitly:
+
+.. code-block:: python
+
+   model.experiment(
+       materials__policy__lot_size={0: 50, 2: 75},
+   )
+
+The mapping form is especially useful when subtype fields are sparse. Its keys
+must be owning logical indexes; omitted owners use declared defaults when
+available. Values may also be equal-length one-dimensional arrays to define a
+parameter sweep.
+
+``model.component_schema()`` exposes the layout without requiring callers to
+infer it from the flattened dtype. Pass either an authoring path or flattened
+name to inspect one field:
+
+.. code-block:: python
+
+   schema = model.component_schema("materials[].policy.lot_size")
+   assert schema.flattened_name == "materials__policy__lot_size"
+   assert schema.owners == (0, 2)
+   assert schema.packed
+
+The schema also reports the field kind, logical instance count, packed shape,
+and the concrete type of each owner. Direct access through a dynamic index is
+accepted only when every possible concrete type declares the field; access to
+a subtype-only field must be through a statically known item or from the
 subtype's own compiled methods.
 
 If different concrete classes give the same flattened field name incompatible
