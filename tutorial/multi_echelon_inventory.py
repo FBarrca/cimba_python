@@ -9,6 +9,11 @@ The network has six nodes:
 * nodes 1-5 are stocking facilities,
 * 0 -> 1, 1 -> 2, 1 -> 3, 3 -> 4, and 3 -> 5 are replenishment arcs.
 
+The facilities form one ``list[Facility]`` but use two concrete component
+implementations. ``SourceFacility`` supplies orders without holding stock,
+while ``StockingFacility`` owns demand and inventory processes. Cimba selects
+and compiles those implementations from the concrete template instances.
+
 Historical demand and lead-time delay observations are bootstrap-resampled
 outside the simulation with ``cimba.bootstrap`` and replayed as Cimba trace
 fields: facility demands with a joint stationary bootstrap (one set of block
@@ -40,7 +45,7 @@ REORDER_POINT_TOLERANCE = 0.05
 DURATION = 360.0
 WARMUP = 0.0
 
-# Parameters for each stocking facility (0-6)
+# Network-node parameters, indexed 0-5 (node 0 is the source).
 BASE_LEAD_TIME = np.array([0.0, 3.0, 4.0, 4.0, 2.0, 2.0])
 BASE_STOCK = np.array([10000.0, 3000.0, 600.0, 900.0, 300.0, 600.0])
 REORDER_POINT = np.array([0.0, 1000.0, 250.0, 200.0, 150.0, 200.0])
@@ -53,8 +58,8 @@ class Shipment(sim.Struct):
 
 
 class Facility(sim.Component):
-    demand: sim.Trace
-
+    # Shared schema: shipment arrivals use a runtime facility index, so
+    # on_hand belongs to every variant even though the source never consumes it.
     on_hand: sim.FloatState
     inventory_position: sim.FloatState
     backorder: sim.FloatState
@@ -70,10 +75,42 @@ class Facility(sim.Component):
     order_requesters: sim.Store
     order_quantities: sim.Store
 
-    def __init__(self, node: int, upstream: int, is_source: int):
+    def __init__(self, node: int, upstream: int):
         self.node = node
         self.upstream = upstream
-        self.is_source = is_source
+
+
+class SourceFacility(Facility):
+    """External source: accepts every replenishment request immediately."""
+
+    def __init__(self):
+        super().__init__(SOURCE_NODE, -1)
+
+    @sim.process
+    def fulfill_orders(self, env):
+        while True:
+            if self.order_requesters.length() == 0:
+                sim.hold(1.0)
+            else:
+                requester = self.order_requesters.take()
+                quantity = sim.i2f(self.order_quantities.take())
+                handle = sim.spawn(env.shipment, env)
+                shipment = Shipment(handle)
+                shipment.requester = requester
+                shipment.quantity = quantity
+
+    @sim.collect
+    def facility_stats(self, env):
+        self.avg_on_hand = 0.0
+        self.service_level = 1.0
+
+
+class StockingFacility(Facility):
+    """Inventory-holding node with customer demand and replenishment."""
+
+    # Only stocking facilities own demand, so this field is packed over
+    # logical facility indexes 1-5.
+    demand: sim.Trace
 
     @sim.process(priority=10)
     def initialize(self, env):
@@ -87,9 +124,6 @@ class Facility(sim.Component):
         reorder_point = sim.Trace(env.reorder_point)
         while True:
             sim.hold(1.0)
-            if self.is_source == 1:
-                continue  # Source node does not place orders
-
             # Inventory position includes stock already ordered but not arrived.
             threshold = reorder_point[self.node] \
                 * (1.0 + REORDER_POINT_TOLERANCE)
@@ -113,14 +147,6 @@ class Facility(sim.Component):
                 # These are replenishment orders from downstream facilities.
                 requester = self.order_requesters.take()
                 quantity = sim.i2f(self.order_quantities.take())
-
-                if self.is_source == 1:
-                    # External supply is unlimited, so nothing is deducted.
-                    handle = sim.spawn(env.shipment, env)
-                    shipment = Shipment(handle)
-                    shipment.requester = requester
-                    shipment.quantity = quantity
-                    continue
 
                 # Stocking nodes may have to wait until enough stock arrives.
                 shipped_now = min(quantity, self.on_hand)
@@ -146,51 +172,43 @@ class Facility(sim.Component):
         trajectory = sim.Trace(self.demand)
         day = 0
         while True:
-            if self.is_source == 1:
-                sim.suspend()
+            self.on_hand_total += self.on_hand
+            self.on_hand_samples += 1
+            sim.hold(1.0)
+
+            demand = trajectory[day]
+            day += 1
+            self.total_demand += demand
+
+            if env.backorder >= 0.5:
+                # Backorder mode counts demand not filled immediately.
+                shipment = min(demand + self.backorder, self.on_hand)
+                self.on_hand -= shipment
+                self.inventory_position -= shipment
+
+                backorder_delta = demand - shipment
+                self.backorder += backorder_delta
+                if backorder_delta > 0.0:
+                    self.total_late_sales += backorder_delta
             else:
-                # Customer demand applies only to the stocking nodes.
-                self.on_hand_total += self.on_hand
-                self.on_hand_samples += 1
-                sim.hold(1.0)
-
-                demand = trajectory[day]
-                day += 1
-                self.total_demand += demand
-
-                if env.backorder >= 0.5:
-                    # Backorder mode counts demand not filled immediately.
-                    shipment = min(demand + self.backorder, self.on_hand)
-                    self.on_hand -= shipment
-                    self.inventory_position -= shipment
-
-                    backorder_delta = demand - shipment
-                    self.backorder += backorder_delta
-                    if backorder_delta > 0.0:
-                        self.total_late_sales += backorder_delta
-                else:
-                    # Lost-sales mode counts only units shipped on demand.
-                    shipment = min(demand, self.on_hand)
-                    self.total_shipped += shipment
-                    self.on_hand -= shipment
-                    self.inventory_position -= shipment
+                # Lost-sales mode counts only units shipped on demand.
+                shipment = min(demand, self.on_hand)
+                self.total_shipped += shipment
+                self.on_hand -= shipment
+                self.inventory_position -= shipment
 
     @sim.collect
     def facility_stats(self, env):
-        if self.is_source == 1:
-            self.avg_on_hand = 0.0
-            self.service_level = 1.0
+        if self.on_hand_samples > 0:
+            self.avg_on_hand = self.on_hand_total / self.on_hand_samples
         else:
-            if self.on_hand_samples > 0:
-                self.avg_on_hand = self.on_hand_total / self.on_hand_samples
-            else:
-                self.avg_on_hand = self.on_hand
+            self.avg_on_hand = self.on_hand
 
-            demand = self.total_demand + EPSILON
-            if env.backorder >= 0.5:
-                self.service_level = 1.0 - self.total_late_sales / demand
-            else:
-                self.service_level = self.total_shipped / demand
+        demand = self.total_demand + EPSILON
+        if env.backorder >= 0.5:
+            self.service_level = 1.0 - self.total_late_sales / demand
+        else:
+            self.service_level = self.total_shipped / demand
 
 
 class MultiEchelonInventory(sim.Model):
@@ -207,12 +225,12 @@ class MultiEchelonInventory(sim.Model):
     lead_time_cursor: sim.State
 
     facilities: list[Facility] = [
-        Facility(0, -1, 1),
-        Facility(1, 0, 0),
-        Facility(2, 1, 0),
-        Facility(3, 1, 0),
-        Facility(4, 3, 0),
-        Facility(5, 3, 0),
+        SourceFacility(),
+        StockingFacility(1, 0),
+        StockingFacility(2, 1),
+        StockingFacility(3, 1),
+        StockingFacility(4, 3),
+        StockingFacility(5, 3),
     ]
 
 
@@ -279,8 +297,9 @@ def main() -> int:
         name="demand",
         mean_block=mean_block,
     )
-    # Node 0 has no demand, so we prepend a zero array.
-    facility_demand = [np.zeros(horizon)] + [
+    # The subtype-only field is packed over stocking facilities (nodes 1-5),
+    # so no placeholder is needed for the source at logical index 0.
+    facility_demand = [
         demand_gens[f"facility_{node}"] for node in range(1, NUM_NODES)
     ]
 
