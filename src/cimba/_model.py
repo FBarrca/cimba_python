@@ -80,6 +80,36 @@ _UNBOUNDED = np.uint64(0xFFFFFFFFFFFFFFFF)
 # the cmb_process header, rounded up to the 8-byte record alignment.
 _PROC_DATA_OFFSET = (int(lib.cpy_process_sizeof()) + 7) & ~7
 
+# Native ``cmb_process`` names have a 32-byte buffer including the trailing
+# NUL. Logical Python names stay intact for fields, graphs, and diagnostics;
+# only the runtime display name is shortened when necessary.
+_NATIVE_PROCESS_NAME_BYTES = 31
+
+
+def _native_process_names(names: Iterable[str]) -> dict[str, str]:
+    """Return deterministic, unique names that fit cmb_process.name."""
+    result: dict[str, str] = {}
+    used: set[str] = set()
+    for name in names:
+        encoded = name.encode("utf-8")
+        if len(encoded) <= _NATIVE_PROCESS_NAME_BYTES and name not in used:
+            candidate = name
+        else:
+            salt = 0
+            while True:
+                digest = hashlib.sha256(
+                    f"{salt}:{name}".encode("utf-8")).hexdigest()[:10]
+                suffix = f"__{digest}"
+                budget = _NATIVE_PROCESS_NAME_BYTES - len(suffix)
+                prefix = encoded[:budget].decode("utf-8", errors="ignore")
+                candidate = f"{prefix}{suffix}"
+                if candidate not in used:
+                    break
+                salt += 1
+        result[name] = candidate
+        used.add(candidate)
+    return result
+
 
 class Struct:
     """Per-process data fields, declared like a dataclass: subclass it
@@ -1654,8 +1684,12 @@ class Model:
         collect_inners = [njit(fn) for fn, _count in self._collects]
         return proc_cfuncs, pred_cfuncs, event_cfuncs, collect_inners
 
-    def _codegen_namespace(self, proc_cfuncs: dict[str, Any],
-                           collect_inners: Sequence[Any]) -> dict[str, Any]:
+    def _codegen_namespace(
+        self,
+        proc_cfuncs: dict[str, Any],
+        collect_inners: Sequence[Any],
+        native_process_names: Mapping[str, str],
+    ) -> dict[str, Any]:
         """Globals for the generated trial source: the extern bindings,
         interned entity/process name strings, and process cfunc addresses."""
         ns = dict(_EXTERN_FUNCS)
@@ -1669,7 +1703,8 @@ class Model:
             for k in range(n):
                 ns[f"NAME_{f}_{k}"] = _b.cstring(f"{f}_{k}")
         for pname, proc in proc_cfuncs.items():
-            ns[f"NAME_{pname}"] = _b.cstring(pname)
+            ns[f"NAME_{pname}"] = _b.cstring(
+                native_process_names[pname])
             ns[f"F_{pname}"] = proc.address
         for p in self._processes:
             if p.struct is not None and not p.spawnable:
@@ -1893,9 +1928,12 @@ class Model:
 
         proc_cfuncs, pred_cfuncs, event_cfuncs, collect_inners = \
             self._compile_callbacks(rec)
+        native_process_names = _native_process_names(
+            process.name for process in self._processes)
         spawn_descs = {
             p.name: np.array([proc_cfuncs[p.name].address,
-                              _b.cstring(p.name), p.alloc_size],
+                              _b.cstring(native_process_names[p.name]),
+                              p.alloc_size],
                              dtype=np.int64)
             for p in self._processes if p.spawnable
         }
@@ -1904,7 +1942,8 @@ class Model:
             for p in self._processes
             if p.spawnable and p.spawn_field is not None
         )
-        ns = self._codegen_namespace(proc_cfuncs, collect_inners)
+        ns = self._codegen_namespace(
+            proc_cfuncs, collect_inners, native_process_names)
         self._source = self._trial_source(dtype)
         exec(compile(self._source, f"<cimba model '{self.name}'>", "exec"),
              ns)

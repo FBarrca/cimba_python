@@ -201,6 +201,39 @@ def test_heterogeneous_component_process_and_collect_overrides_run():
     assert exp["workers__result"][0].tolist() == [1.0, 10.0, 1.0]
 
 
+def test_long_polymorphic_process_names_fit_native_buffer():
+    class Worker(sim.Component):
+        completed: sim.State
+
+        @sim.process
+        def perform_lengthy_operation(self, env):
+            self.completed += 1
+            sim.suspend()
+
+    class FastWorker(Worker):
+        @sim.process
+        def perform_lengthy_operation(self, env):
+            self.completed += 2
+            sim.suspend()
+
+    class System(sim.Model):
+        extraordinarily_long_worker_collection: list[Worker] = [
+            Worker(),
+            FastWorker(),
+        ]
+
+    model = System()
+    assert all(
+        len(process.name.encode("utf-8")) > 31
+        for process in model._processes
+    )
+    exp = model.experiment(replications=1, duration=1.0)
+    assert exp.run() == 0
+    assert exp.trials[
+        "extraordinarily_long_worker_collection__completed"
+    ][0].tolist() == [1, 2]
+
+
 def test_subtype_only_entity_and_processes_fields_are_packed():
     class Policy(sim.Component):
         capacity: sim.Param
