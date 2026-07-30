@@ -307,6 +307,15 @@ def _as_param_axis(
         f"got shape {arr.shape}")
 
 
+def _n_design_points(axes: Sequence[np.ndarray]) -> int:
+    """Design points in the cross product of the parameter axes; a
+    scalar parameter is a length-1 axis and contributes a factor of 1."""
+    n_points = 1
+    for axis in axes:
+        n_points *= axis.shape[0]
+    return n_points
+
+
 def _trace_generator_wants_index(fn: Callable[..., ArrayLike]) -> bool:
     try:
         required = [p for p in inspect.signature(fn).parameters.values()
@@ -1989,9 +1998,7 @@ class Model:
         param_values = self._resolve_param_values(param_values)
         if replications < 1:
             raise ValueError("replications must be >= 1")
-        n_points = 1
-        for axis in self._param_axes(param_values):
-            n_points *= axis.shape[0]
+        n_points = _n_design_points(self._param_axes(param_values))
         return _draw_trial_seeds(seed, n_points * replications)
 
     def experiment(self,
@@ -2032,11 +2039,7 @@ class Model:
             raise ValueError("replications must be >= 1")
 
         axes = self._param_axes(param_values)
-        axis_indexes = [
-            np.arange(axis.shape[0], dtype=np.int64) for axis in axes
-        ]
-        mesh = np.meshgrid(*axis_indexes, indexing="ij") if axes else []
-        n_points = mesh[0].size if mesh else 1
+        n_points = _n_design_points(axes)
         n_trials = n_points * replications
 
         trials = np.zeros(n_trials, dtype=compiled["dtype"])
@@ -2048,9 +2051,21 @@ class Model:
             trials[HISTORY_CAPTURE_TRIAL_FIELD] = np.arange(
                 n_trials, dtype=np.uint64)
             trials[HISTORY_CAPTURE_STORE_FIELD] = 0
-        for p, axis, indexes in zip(self.params, axes, mesh):
-            selected = axis[indexes.ravel()]
+        # Index each axis directly rather than meshgrid'ing all of them: the
+        # design points are a mixed-radix count over the axis sizes, which is
+        # exactly meshgrid(indexing="ij") ravel order. Singleton axes cost a
+        # broadcast instead of a mesh dimension, so numpy's 32-dimension
+        # ceiling no longer applies to the declared parameter count.
+        points = np.arange(n_points, dtype=np.int64)
+        stride = 1
+        for p, axis in zip(reversed(self.params), reversed(axes)):
+            size = axis.shape[0]
+            if size == 1:
+                selected = np.repeat(axis, n_points, axis=0)
+            else:
+                selected = axis[(points // stride) % size]
             trials[p] = np.repeat(selected, replications, axis=0)
+            stride *= size
         for o in self.outputs:
             trials[o] = np.nan
         for field, pred in compiled["preds"].items():
