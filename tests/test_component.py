@@ -234,6 +234,98 @@ def test_long_polymorphic_process_names_fit_native_buffer():
     ][0].tolist() == [1, 2]
 
 
+def test_long_entity_names_fit_native_buffer():
+    # Named entities share the 32-byte native name buffer with processes.
+    # An over-long flattened name used to trip cmb_assert_release in
+    # cmi_resourcebase_set_name, aborting the interpreter with SIGABRT --
+    # no Python exception and no traceback.
+    class Inner(sim.Component):
+        incoming_replenishment_orders: sim.Store
+        awaiting_dispatch_confirmation: sim.Queue
+        constrained_loading_bay_slots: sim.Pool = 2
+        shipment_ready_notification: sim.Condition
+        length_seen: sim.Output
+        level_seen: sim.Output
+
+        @sim.process
+        def run(self, env):
+            self.incoming_replenishment_orders.put(1)
+            self.awaiting_dispatch_confirmation.put(3)
+            self.length_seen = float(
+                self.incoming_replenishment_orders.length())
+            self.level_seen = float(
+                self.awaiting_dispatch_confirmation.level())
+
+    class Middle(sim.Component):
+        inner: Inner = Inner()
+
+    class Depot(sim.Model):
+        regional_distribution_centre: Middle = Middle()
+
+    model = Depot()
+    prefix = "regional_distribution_centre__inner__"
+    entity_fields = [
+        prefix + "incoming_replenishment_orders",
+        prefix + "awaiting_dispatch_confirmation",
+        prefix + "constrained_loading_bay_slots",
+        prefix + "shipment_ready_notification",
+    ]
+    for field in entity_fields:
+        assert field in model.dtype.fields
+        assert len(field.encode("utf-8")) > 31
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0)
+    assert exp.run() == 0
+    assert exp[prefix + "length_seen"][0] == 1.0
+    assert exp[prefix + "level_seen"][0] == 3.0
+
+
+def test_long_shaped_entity_names_fit_native_buffer():
+    # Shaped fields (collection items, PQueues) get a "_<index>" suffix on
+    # the native name, so they exhaust the buffer sooner than the flattened
+    # field name alone suggests.
+    class Bay(sim.Component):
+        pending_customer_backorder_queue: sim.Queue
+        graded_inbound_priority_lanes: sim.PQueues = sim.count(2)
+        seen: sim.Output
+
+        @sim.process
+        def run(self, env):
+            self.pending_customer_backorder_queue.put(2)
+            lane = self.graded_inbound_priority_lanes[1]
+            lane.put(7, 0)
+            self.seen = float(
+                self.pending_customer_backorder_queue.level() + lane.take())
+
+    class Warehouse(sim.Model):
+        regional_bays: list[Bay] = [Bay(), Bay(), Bay()]
+
+    model = Warehouse()
+    queue_field = "regional_bays__pending_customer_backorder_queue"
+    assert queue_field in model.dtype.fields
+    # the per-item native name is this plus "_0".."_2"
+    assert len(f"{queue_field}_2".encode("utf-8")) > 31
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0)
+    assert exp.run() == 0
+    assert exp["regional_bays__seen"][0].tolist() == [9.0, 9.0, 9.0]
+
+
+def test_native_names_are_unique_bounded_and_stable():
+    from cimba._model import _native_names
+
+    short = "ok_queue"
+    alpha = "warehouse_regional_backorder_queue_alpha"
+    beta = "warehouse_regional_backorder_queue_beta"   # shares a long prefix
+    mapping = _native_names([short, alpha, beta])
+
+    assert mapping[short] == short          # short names pass through intact
+    assert len(set(mapping.values())) == 3  # distinct despite the shared prefix
+    assert all(len(value.encode("utf-8")) <= 31
+               for value in mapping.values())
+    assert _native_names([short, alpha, beta]) == mapping   # deterministic
+
+
 def test_subtype_only_entity_and_processes_fields_are_packed():
     class Policy(sim.Component):
         capacity: sim.Param

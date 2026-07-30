@@ -81,19 +81,23 @@ _UNBOUNDED = np.uint64(0xFFFFFFFFFFFFFFFF)
 # the cmb_process header, rounded up to the 8-byte record alignment.
 _PROC_DATA_OFFSET = (int(lib.cpy_process_sizeof()) + 7) & ~7
 
-# Native ``cmb_process`` names have a 32-byte buffer including the trailing
-# NUL. Logical Python names stay intact for fields, graphs, and diagnostics;
-# only the runtime display name is shortened when necessary.
-_NATIVE_PROCESS_NAME_BYTES = 31
+# Native ``cmb_process.name`` and ``cmi_resourcebase.name`` (every named
+# entity: Queue, Store, Resource, Pool, Condition, PQueues) are both 32-byte
+# buffers including the trailing NUL. Logical Python names stay intact for
+# fields, graphs, and diagnostics; only the runtime display name is shortened
+# when necessary. Passing an over-long name through instead trips
+# cmb_assert_release in cmi_resourcebase_set_name, which aborts the process --
+# no Python exception, no traceback.
+_NATIVE_NAME_BYTES = 31
 
 
-def _native_process_names(names: Iterable[str]) -> dict[str, str]:
-    """Return deterministic, unique names that fit cmb_process.name."""
+def _native_names(names: Iterable[str]) -> dict[str, str]:
+    """Return deterministic, unique names that fit a native name buffer."""
     result: dict[str, str] = {}
     used: set[str] = set()
     for name in names:
         encoded = name.encode("utf-8")
-        if len(encoded) <= _NATIVE_PROCESS_NAME_BYTES and name not in used:
+        if len(encoded) <= _NATIVE_NAME_BYTES and name not in used:
             candidate = name
         else:
             salt = 0
@@ -101,7 +105,7 @@ def _native_process_names(names: Iterable[str]) -> dict[str, str]:
                 digest = hashlib.sha256(
                     f"{salt}:{name}".encode("utf-8")).hexdigest()[:10]
                 suffix = f"__{digest}"
-                budget = _NATIVE_PROCESS_NAME_BYTES - len(suffix)
+                budget = _NATIVE_NAME_BYTES - len(suffix)
                 prefix = encoded[:budget].decode("utf-8", errors="ignore")
                 candidate = f"{prefix}{suffix}"
                 if candidate not in used:
@@ -1706,12 +1710,16 @@ class Model:
         ns.update(carray=carray, addressof=addressof, np=np, CAP=_UNBOUNDED)
         for i, inner in enumerate(collect_inners):
             ns[f"COLLECT_{i}"] = inner
-        for e in self._entities:
-            for key, name in self._field_name_keys(e):
-                ns[key] = _b.cstring(name)
-        for f, n in self.pqueues.items():
-            for k in range(n):
-                ns[f"NAME_{f}_{k}"] = _b.cstring(f"{f}_{k}")
+        # Every named entity shares the 32-byte native name buffer with
+        # processes, so shorten these the same way rather than letting an
+        # over-long flattened name abort in cmi_resourcebase_set_name.
+        entity_keys = [key_name for e in self._entities
+                       for key_name in self._field_name_keys(e)]
+        entity_keys += [(f"NAME_{f}_{k}", f"{f}_{k}")
+                        for f, n in self.pqueues.items() for k in range(n)]
+        native_entity_names = _native_names(name for _key, name in entity_keys)
+        for key, name in entity_keys:
+            ns[key] = _b.cstring(native_entity_names[name])
         for pname, proc in proc_cfuncs.items():
             ns[f"NAME_{pname}"] = _b.cstring(
                 native_process_names[pname])
@@ -1938,7 +1946,7 @@ class Model:
 
         proc_cfuncs, pred_cfuncs, event_cfuncs, collect_inners = \
             self._compile_callbacks(rec)
-        native_process_names = _native_process_names(
+        native_process_names = _native_names(
             process.name for process in self._processes)
         spawn_descs = {
             p.name: np.array([proc_cfuncs[p.name].address,
