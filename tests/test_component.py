@@ -3086,3 +3086,286 @@ def test_component_ref_usage_errors_are_rejected():
         def dynamic(env: Hetero):
             for j in range(2):
                 env.nodes[j].downstream.inbox.put(j)
+
+
+def test_component_function_indexes_a_collection_by_loop_variable():
+    # The index is bound inside the function, so it cannot be resolved at
+    # the call site: the whole flattened field is threaded in instead.
+    class Item(sim.Component):
+        cost: sim.Param
+
+    class Owner(sim.Component):
+        n: sim.Const[int]
+        items: list[Item] = [Item(), Item(), Item()]
+        by_argument: sim.Output
+        by_loop: sim.Output
+        by_local: sim.Output
+        by_while: sim.Output
+        cheapest: sim.Output
+
+        def __init__(self):
+            self.n = 3
+
+        @sim.function
+        def cost_of(self, index: int) -> float:
+            return self.items[index].cost
+
+        @sim.function
+        def total(self) -> float:
+            acc = 0.0
+            for index in range(self.n):
+                acc += self.items[index].cost
+            return acc
+
+        @sim.function
+        def second(self) -> float:
+            index = 1
+            return self.items[index].cost
+
+        @sim.function
+        def total_while(self) -> float:
+            acc = 0.0
+            index = 0
+            while index < 3:
+                acc += self.items[index].cost
+                index += 1
+            return acc
+
+        @sim.function
+        def cheapest_index(self) -> int:
+            best = 0
+            best_cost = self.items[0].cost
+            for index in range(self.n):
+                cost = self.items[index].cost
+                if cost < best_cost:
+                    best_cost = cost
+                    best = index
+            return best
+
+        @sim.process
+        def run(self, env):
+            self.by_argument = self.cost_of(1)
+            self.by_loop = self.total()
+            self.by_local = self.second()
+            self.by_while = self.total_while()
+            self.cheapest = float(self.cheapest_index())
+            sim.suspend()
+
+    class Shop(sim.Model):
+        owner: Owner = Owner()
+
+    model = Shop()
+    exp = model.experiment(owner__items__cost=[4.0, 1.0, 2.0],
+                           replications=1, duration=1.0, warmup=0.0)
+    assert exp.run() == 0
+    assert exp["owner__by_argument"][0] == 1.0
+    assert exp["owner__by_loop"][0] == 7.0
+    assert exp["owner__by_local"][0] == 1.0
+    assert exp["owner__by_while"][0] == 7.0
+    assert exp["owner__cheapest"][0] == 1.0
+
+
+def test_component_function_loop_index_works_across_call_contexts():
+    class Leg(sim.Component):
+        w: sim.Param
+
+    class Group(sim.Component):
+        legs: list[Leg] = [Leg(), Leg()]
+        from_process: sim.Output
+        from_collect: sim.Output
+        from_nested: sim.Output
+
+        @sim.function
+        def total(self) -> float:
+            acc = 0.0
+            for i in range(2):
+                acc += self.legs[i].w
+            return acc
+
+        @sim.function
+        def doubled(self) -> float:
+            # a function whose callee carries the array dependency
+            return 2.0 * self.total()
+
+        @sim.process
+        def run(self, env):
+            self.from_process = self.total()
+            self.from_nested = self.doubled()
+            sim.suspend()
+
+        @sim.collect
+        def report(self, env):
+            self.from_collect = self.total()
+
+    # a collection of owners exercises the runtime receiver index alongside
+    # the loop index, over a nested (offset) collection field
+    class Net(sim.Model):
+        groups: list[Group] = [Group(), Group(), Group()]
+        from_model: sim.Output
+
+    model = Net()
+
+    @model.process
+    def driver(env: Net):
+        env.from_model = env.groups[2].total()
+        sim.suspend()
+
+    exp = model.experiment(
+        groups__legs__w=[1.0, 2.0, 10.0, 20.0, 100.0, 200.0],
+        replications=1, duration=1.0, warmup=0.0)
+    assert exp.run() == 0
+    assert exp["groups__from_process"][0].tolist() == [3.0, 30.0, 300.0]
+    assert exp["groups__from_collect"][0].tolist() == [3.0, 30.0, 300.0]
+    assert exp["groups__from_nested"][0].tolist() == [6.0, 60.0, 600.0]
+    assert exp["from_model"][0] == 300.0
+
+
+def test_component_function_loop_index_reads_int_state_field():
+    class Bin(sim.Component):
+        level: sim.State
+
+    class Shelf(sim.Component):
+        bins: list[Bin] = [Bin(), Bin(), Bin()]
+        total: sim.Output
+
+        @sim.function
+        def total_level(self) -> int:
+            acc = 0
+            for i in range(3):
+                acc += self.bins[i].level
+            return acc
+
+        @sim.process
+        def run(self, env):
+            for i in range(3):
+                self.bins[i].level = i + 1
+            self.total = float(self.total_level())
+            sim.suspend()
+
+    class Store(sim.Model):
+        shelf: Shelf = Shelf()
+
+    model = Store()
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0)
+    assert exp.run() == 0
+    assert exp["shelf__total"][0] == 6.0
+
+
+def test_component_function_loop_index_over_polymorphic_collection():
+    class Base(sim.Component):
+        w: sim.Param
+
+    class Left(Base):
+        pass
+
+    class Right(Base):
+        pass
+
+    class Owner(sim.Component):
+        parts: list[Base] = [Left(), Right(), Left()]
+        total: sim.Output
+
+        @sim.function
+        def total_w(self) -> float:
+            acc = 0.0
+            for i in range(3):
+                acc += self.parts[i].w
+            return acc
+
+        @sim.process
+        def run(self, env):
+            self.total = self.total_w()
+            sim.suspend()
+
+    class Shop(sim.Model):
+        owner: Owner = Owner()
+
+    model = Shop()
+    exp = model.experiment(owner__parts__w=[1.0, 2.0, 4.0],
+                           replications=1, duration=1.0, warmup=0.0)
+    assert exp.run() == 0
+    assert exp["owner__total"][0] == 7.0
+
+
+def test_component_function_loop_index_restrictions_are_named():
+    # a field only some concrete types declare is stored packed, so a
+    # logical index computed inside the helper cannot address it
+    class Part(sim.Component):
+        pass
+
+    class Weighted(Part):
+        w: sim.Param
+
+    class Owner(sim.Component):
+        parts: list[Part] = [Weighted(), Part(), Weighted()]
+        total: sim.Output
+
+        @sim.function
+        def total_w(self) -> float:
+            acc = 0.0
+            for i in range(3):
+                acc += self.parts[i].w
+            return acc
+
+        @sim.process
+        def run(self, env):
+            self.total = self.total_w()
+            sim.suspend()
+
+    class Packed(sim.Model):
+        owner: Owner = Owner()
+
+    with pytest.raises(ValueError,
+                       match="every instance of 'owner__parts' to declare"):
+        Packed().experiment(owner__parts__w=[1.0, 2.0], duration=1.0)
+
+    # Const values live in a side table, not a flattened env field
+    class Sized(sim.Component):
+        k: sim.Const[int]
+
+        def __init__(self, k):
+            self.k = k
+
+    class ConstOwner(sim.Component):
+        parts: list[Sized] = [Sized(1), Sized(2)]
+        total: sim.Output
+
+        @sim.function
+        def total_k(self) -> int:
+            acc = 0
+            for i in range(2):
+                acc += self.parts[i].k
+            return acc
+
+        @sim.process
+        def run(self, env):
+            self.total = float(self.total_k())
+            sim.suspend()
+
+    class ConstModel(sim.Model):
+        owner: ConstOwner = ConstOwner()
+
+    with pytest.raises(ValueError, match="only supported for Param, Output"):
+        ConstModel().experiment(duration=1.0)
+
+    # mutation stays rejected whatever the index is
+    class Mutator(sim.Component):
+        parts: list[Weighted] = [Weighted(), Weighted()]
+        out: sim.Output
+
+        @sim.function
+        def bad(self) -> float:
+            for i in range(2):
+                self.parts[i].w = 1.0
+            return 0.0
+
+        @sim.process
+        def run(self, env):
+            self.out = self.bad()
+            sim.suspend()
+
+    class MutModel(sim.Model):
+        owner: Mutator = Mutator()
+
+    with pytest.raises(ValueError, match="cannot mutate component field"):
+        MutModel().experiment(owner__parts__w=[1.0, 2.0], duration=1.0)

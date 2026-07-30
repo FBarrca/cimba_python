@@ -1554,11 +1554,17 @@ class _ComponentFieldAccess:
 
 @dataclass
 class _ComponentFunctionDependency:
-    """One scalar component value threaded into a compiled function helper."""
+    """One component value threaded into a compiled function helper.
+
+    Normally a scalar the caller reads at the call site. When the helper
+    indexes a collection with a value it computes itself (a loop target
+    or a local), the caller cannot pick the element, so ``array`` threads
+    the whole flattened field and the helper subscripts it."""
 
     access: _ComponentFieldAccess
     parameter: str
     direct: bool = True
+    array: bool = False
 
 
 @dataclass
@@ -2003,6 +2009,13 @@ class _ComponentPathLowerer(ast.NodeTransformer):
                     access.index, ast.Load())
         return _subscript(target, packed_index, ctx)
 
+    def _field_array_target(self, access: _ComponentFieldAccess) -> ast.expr:
+        """The whole flattened field, for a component function helper that
+        indexes it itself. Only reached for fields every instance of the
+        collection declares, so logical index == storage slot."""
+        flat_name = access.decl.direct_field_map[access.field]
+        return _env_attr(self.env_name, flat_name, ast.Load())
+
     def _constant_expr(self, access: _ComponentFieldAccess) -> ast.expr:
         owners = access.decl.constant_owners[access.field]
         if len(owners) == 1:
@@ -2184,6 +2197,8 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             )
             if bound.field in bound.decl.constants:
                 value = self._constant_expr(bound)
+            elif dependency.array:
+                value = self._field_array_target(bound)
             else:
                 value = self._field_target(bound, ast.Load())
             dependency_args.append(value)
@@ -2719,6 +2734,39 @@ def _rooted_at_name(node: ast.AST, name: str) -> bool:
     return isinstance(node, ast.Name) and node.id == name
 
 
+def _locally_bound_names(node: ast.AST) -> set[str]:
+    """Names a function body binds itself: loop targets, assignments,
+    comprehension targets, ``with``/``except`` bindings, walrus.
+
+    Parameters are deliberately excluded -- a component function's
+    dependencies are read at the call site, where the arguments are in
+    scope but these names are not."""
+    bound: set[str] = set()
+
+    def add(target: ast.AST) -> None:
+        for sub in ast.walk(target):
+            if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store):
+                bound.add(sub.id)
+
+    for sub in ast.walk(node):
+        if isinstance(sub, (ast.Assign, ast.Delete)):
+            for target in sub.targets:
+                add(target)
+        elif isinstance(sub, (ast.AnnAssign, ast.AugAssign, ast.For,
+                              ast.AsyncFor, ast.comprehension)):
+            add(sub.target)
+        elif isinstance(sub, ast.NamedExpr):
+            add(sub.target)
+        elif isinstance(sub, (ast.With, ast.AsyncWith)):
+            for item in sub.items:
+                if item.optional_vars is not None:
+                    add(item.optional_vars)
+        elif isinstance(sub, ast.ExceptHandler):
+            if sub.name is not None:
+                bound.add(sub.name)
+    return bound
+
+
 class _ComponentFunctionValidator(ast.NodeVisitor):
     """Reject side effects that must never enter a synchronous helper."""
 
@@ -2804,6 +2852,13 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
         self._dependency_keys: dict[tuple[Any, ...], int] = {}
         self.callees: list[str] = []
         self.helper_namespace: dict[str, Any] = {}
+        #: Names the body binds itself; an instance index built from one of
+        #: these cannot be resolved at the call site (see _array_dependency).
+        self._local_names: set[str] = set()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
+        self._local_names = _locally_bound_names(node)
+        return self.generic_visit(node)
 
     def _root_namespace_ref(self, node: ast.AST) -> _ComponentAccess | None:
         if isinstance(node, ast.Name) and node.id == self.receiver_name:
@@ -2829,11 +2884,13 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
         access: _ComponentFieldAccess,
         *,
         direct: bool,
+        array: bool = False,
     ) -> ast.Name:
         key = (
             access.decl.name,
             access.field,
             None if access.index is None else ast.dump(access.index),
+            array,
         )
         index = self._dependency_keys.get(key)
         if index is None:
@@ -2843,11 +2900,47 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
                 access=copy.deepcopy(access),
                 parameter=f"__cimba_dep_{index}",
                 direct=direct,
+                array=array,
             ))
         elif direct:
             self.dependencies[index].direct = True
         return ast.Name(
             id=self.dependencies[index].parameter, ctx=ast.Load())
+
+    def _index_is_local(self, index: ast.expr | None) -> bool:
+        """Whether an instance index depends on a name the body binds, and
+        so cannot be evaluated by the caller."""
+        if index is None or not self._local_names:
+            return False
+        return any(isinstance(sub, ast.Name) and sub.id in self._local_names
+                   for sub in ast.walk(index))
+
+    def _array_dependency(self, access: _ComponentFieldAccess) -> ast.expr:
+        """Thread the whole flattened field in and subscript it here, for a
+        collection read whose index the body computes for itself."""
+        label = self._callback_label()
+        detail = (f"{label} indexes {access.text} with a value computed "
+                  f"inside the function")
+        if access.field in access.decl.constants:
+            raise ValueError(
+                f"{detail}, which is only supported for Param, Output, "
+                f"State, and FloatState fields; index '{access.field}' with "
+                "a function argument instead")
+        owners = access.decl.field_owners[access.field]
+        slots = access.decl.field_slots[access.field]
+        if len(owners) > 1 and slots != tuple(range(len(slots))):
+            raise ValueError(
+                f"{detail}, which requires every instance of "
+                f"'{access.decl.name}' to declare '{access.field}'; index it "
+                "with a function argument instead")
+        whole = _ComponentFieldAccess(
+            access.decl, None, access.field, access.text, None)
+        if len(owners) <= 1:
+            # A single owner means the flattened field is a plain scalar;
+            # there is no array to index and the index is irrelevant.
+            return self._dependency(whole, direct=True)
+        parameter = self._dependency(whole, direct=True, array=True)
+        return _subscript(parameter, access.index, ast.Load())
 
     def _validate_scalar_field(self, access: _ComponentFieldAccess) -> None:
         if access.field in access.decl.constants:
@@ -2908,7 +3001,8 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
                             access.text,
                             access.possible_indices,
                         )
-                        value = self._dependency(bound, direct=False)
+                        value = self._dependency(
+                            bound, direct=False, array=dependency.array)
                         dependency_args.append(value)
                         replacements[dependency.parameter] = value
                     self.helper_namespace[callee.symbol] = callee.helper
@@ -2983,7 +3077,8 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
                     access.text,
                     access.possible_indices,
                 )
-                value = self._dependency(bound, direct=False)
+                value = self._dependency(
+                    bound, direct=False, array=dependency.array)
                 dependency_args.append(value)
                 replacements[dependency.parameter] = value
             self.helper_namespace[callee.symbol] = callee.helper
@@ -3031,6 +3126,8 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
                     f"{self._callback_label()} cannot mutate component "
                     f"field {access.text}")
             self._validate_scalar_field(access)
+            if self._index_is_local(access.index):
+                return ast.copy_location(self._array_dependency(access), node)
             return ast.copy_location(
                 self._dependency(access, direct=True), node)
         namespace = self._namespace_ref(node)
@@ -3071,7 +3168,10 @@ class _ComponentFunctionBuilder:
                 access.decl.decls.consts[access.field],
                 f"component function constant '{access.field}'")
         kind = access.decl.decls.kind_of(access.field)
-        return types.int64 if kind == "state" else types.float64
+        scalar = types.int64 if kind == "state" else types.float64
+        # A shaped env field reaches the helper as a NestedArray, which
+        # matches an unspecified-layout array parameter but not "::1".
+        return scalar[:] if dependency.array else scalar
 
     def build(
         self,
@@ -3140,6 +3240,10 @@ class _ComponentFunctionBuilder:
                 for dependency in lowerer.dependencies)
 
             namespace = _closure_namespace(method)
+            # An array dependency keeps its index expression inside the
+            # helper, so the offset/slot tables it may reference have to be
+            # in scope here as well as at the call site.
+            namespace.update(_lowering_namespace((decl,)))
             namespace.update(lowerer.helper_namespace)
             lowered, random_changed = lower_random_calls_in_node(
                 lowered, namespace=namespace, label=label)

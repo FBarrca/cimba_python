@@ -101,6 +101,29 @@ calling component functions is rejected when the model is constructed. The
 generated helper runs in Numba nopython mode, while experiment parameters keep
 their normal flattened names such as ``policy__reorder_point``.
 
+A collection index may be a function argument or a value the function computes
+for itself, so a function can weigh a whole collection and return its choice:
+
+.. code-block:: python
+
+   class Buyer(sim.Component):
+       supplier_count: sim.Const[int]
+       suppliers: list[Supplier] = [Supplier(), Supplier(), Supplier()]
+
+       @sim.function
+       def cheapest(self) -> int:
+           best = 0
+           for i in range(self.supplier_count):
+               if self.suppliers[i].price < self.suppliers[best].price:
+                   best = i
+           return best
+
+Reading a field at a self-computed index requires every instance of the
+collection to declare that field, and the field must be a ``Param``,
+``Output``, ``State``, or ``FloatState`` -- scalar ``Const`` values live in a
+side table and have to be indexed by a function argument. Both restrictions are
+reported when the model is constructed.
+
 Component-owned statistics
 --------------------------
 
