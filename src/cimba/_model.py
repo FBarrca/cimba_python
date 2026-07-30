@@ -52,6 +52,7 @@ from ._declarations import (
     _FIELD_KINDS,
     _FieldDecl,
     _STANDARD_FIELDS,
+    class_type_hints,
 )
 from ._graph import (ProcessDAG, ProcessDAGBlock, ProcessDAGEdge,
                      ProcessDAGNode, infer_process_dag)
@@ -147,7 +148,7 @@ class Struct:
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         fields = []
-        for fname, hint in get_type_hints(cls).items():
+        for fname, hint in class_type_hints(cls).items():
             if fname.startswith("_"):
                 continue
             if hint is float:

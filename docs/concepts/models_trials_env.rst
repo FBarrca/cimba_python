@@ -48,6 +48,36 @@ different native entities.
 That separation is the reason Cimba Python can run experiments in parallel.
 One trial does not share simulation state with another trial.
 
+Where the class may be declared
+-------------------------------
+
+A ``sim.Model`` subclass may be declared anywhere a class may be, including
+inside a function -- which is the natural way to write a parameterised
+diagnostic or a test helper. Each such class is a distinct declaration, so
+building one twice with different sizes gives two independent models; nothing is
+keyed on the class's qualified name.
+
+The one restriction comes from Python, not Cimba: a *string* annotation is
+resolved against module globals, so it cannot name a class defined inside a
+function. That bites whenever the annotation is quoted, and in any module using
+``from __future__ import annotations`` it bites for every annotation, because
+there every annotation is a string:
+
+.. code-block:: python
+
+   from __future__ import annotations
+
+   def build():
+       class Holder(sim.Component):      # local, so invisible to the lookup
+           size: sim.Param
+
+       class Line(sim.Model):
+           holder: Holder = Holder()     # NameError: cannot resolve 'Holder'
+
+Declare the referenced class at module scope. Cimba reports this as a
+``NameError`` naming the annotation it could not resolve, rather than letting
+the bare Python error through.
+
 Field roles
 -----------
 

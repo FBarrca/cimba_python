@@ -67,7 +67,7 @@ from ._dataset.methods import (
 )
 from ._declarations import (_DECL_KINDS, _MISSING, _check_name,
                             _Declarations, _field_declarations, _FieldDecl,
-                            _param_default)
+                            _param_default, class_type_hints)
 from ._timeseries.methods import (
     HISTORY_GETTER_NAMES,
     lower_env_history_method_calls,
@@ -127,7 +127,7 @@ def _wirable_fields(cls: type) -> dict[str, str]:
     kinds = _wirable_fields_cache.get(cls)
     if kinds is None:
         kinds = {}
-        for fname, hint in get_type_hints(cls).items():
+        for fname, hint in class_type_hints(cls).items():
             try:
                 kind = _DECL_KINDS.get(hint)
             except TypeError:
@@ -198,7 +198,7 @@ def _component_fields(cls: type) -> Iterator[tuple[str, type[Component], bool]]:
     """Yield ``(field_name, item_class, is_collection)`` for each
     component-typed annotation on a Model or Component class, in
     declaration order."""
-    for fname, hint in get_type_hints(cls).items():
+    for fname, hint in class_type_hints(cls).items():
         if _is_component_class(hint):
             yield fname, hint, False
         else:

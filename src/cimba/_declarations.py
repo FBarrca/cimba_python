@@ -482,6 +482,32 @@ else:
         return view
 
 
+def class_type_hints(cls: type) -> dict[str, Any]:
+    """``get_type_hints(cls)``, but explaining the one failure that is easy
+    to hit and hard to read.
+
+    A string annotation -- written as one, or made one by
+    ``from __future__ import annotations`` -- is resolved against module
+    globals, never an enclosing function's locals. So a class declared
+    inside a function cannot annotate a field with another name local to
+    that function, and plain ``get_type_hints`` reports only a bare
+    ``NameError`` on the name. Declaring the class itself inside a function
+    is fine; it is the string annotation that cannot see the local."""
+    try:
+        return get_type_hints(cls)
+    except NameError as exc:
+        missing = getattr(exc, "name", None)
+        named = f" '{missing}'" if missing else ""
+        raise NameError(
+            f"'{cls.__qualname__}': cannot resolve annotation{named}. String "
+            f"annotations -- and under 'from __future__ import annotations' "
+            f"every annotation is one -- are looked up in module globals, so "
+            f"they cannot name anything defined inside a function. "
+            f"Declare{named or ' it'} at module scope; if the annotation is "
+            f"quoted and the module has no 'from __future__ import "
+            f"annotations', dropping the quotes also works.") from exc
+
+
 def _check_name(name: str, kind: str) -> None:
     if not name.isidentifier() or keyword.iskeyword(name):
         raise ValueError(f"{kind} name '{name}' is not a valid identifier")
@@ -506,7 +532,7 @@ def _field_declarations(
 ) -> _Declarations:
     """Collect direct env field declarations from a Model/Component class."""
     decls = _Declarations()
-    for fname, hint in get_type_hints(cls).items():
+    for fname, hint in class_type_hints(cls).items():
         if isinstance(hint, _RefHint):
             if not allow_refs:
                 raise ValueError(

@@ -3658,3 +3658,67 @@ def test_component_function_loop_index_restrictions_are_named():
 
     with pytest.raises(ValueError, match="cannot mutate component field"):
         MutModel().experiment(owner__parts__w=[1.0, 2.0], duration=1.0)
+
+
+def test_local_model_classes_are_independent_declarations():
+    # Declaring a model inside a function is supported: nothing is keyed on
+    # the class qualified name, so building twice gives two distinct models.
+    class Leaf(sim.Component):
+        cost: sim.Param
+
+    def build(count):
+        class Owner(sim.Component):
+            n: sim.Const[int]
+            leaves: list[Leaf]
+            total: sim.Output
+
+            def __init__(self, k):
+                self.n = k
+                self.leaves = [Leaf() for _ in range(k)]
+
+            @sim.function
+            def summed(self) -> float:
+                acc = 0.0
+                for i in range(self.n):
+                    acc += self.leaves[i].cost
+                return acc
+
+            @sim.process
+            def run(self, env):
+                self.total = self.summed()
+                sim.suspend()
+
+        class Local(sim.Model):
+            owner: Owner = Owner(count)
+
+        return Local()
+
+    seen = []
+    for count, costs in ((1, [5.0]), (3, [1.0, 2.0, 4.0]), (2, [10.0, 20.0])):
+        model = build(count)
+        assert "<locals>" in type(model).__qualname__
+        exp = model.experiment(owner__leaves__cost=costs,
+                               replications=1, duration=1.0, warmup=0.0)
+        assert exp.run() == 0
+        seen.append(exp["owner__total"][0])
+    assert seen == [5.0, 7.0, 30.0]
+
+
+def test_string_annotation_naming_a_local_class_is_diagnosed():
+    def build():
+        class Holder(sim.Component):
+            size: sim.Param
+
+        class Local(sim.Model):
+            holder: "Holder" = Holder()   # noqa: F821 - the point of the test
+
+        return Local()
+
+    with pytest.raises(NameError, match="cannot resolve annotation 'Holder'"):
+        build()
+
+    # the message says why and what to do about it
+    with pytest.raises(NameError, match="module globals"):
+        build()
+    with pytest.raises(NameError, match="at module scope"):
+        build()
