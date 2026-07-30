@@ -234,6 +234,98 @@ def test_long_polymorphic_process_names_fit_native_buffer():
     ][0].tolist() == [1, 2]
 
 
+def test_long_entity_names_fit_native_buffer():
+    # Named entities share the 32-byte native name buffer with processes.
+    # An over-long flattened name used to trip cmb_assert_release in
+    # cmi_resourcebase_set_name, aborting the interpreter with SIGABRT --
+    # no Python exception and no traceback.
+    class Inner(sim.Component):
+        incoming_replenishment_orders: sim.Store
+        awaiting_dispatch_confirmation: sim.Queue
+        constrained_loading_bay_slots: sim.Pool = 2
+        shipment_ready_notification: sim.Condition
+        length_seen: sim.Output
+        level_seen: sim.Output
+
+        @sim.process
+        def run(self, env):
+            self.incoming_replenishment_orders.put(1)
+            self.awaiting_dispatch_confirmation.put(3)
+            self.length_seen = float(
+                self.incoming_replenishment_orders.length())
+            self.level_seen = float(
+                self.awaiting_dispatch_confirmation.level())
+
+    class Middle(sim.Component):
+        inner: Inner = Inner()
+
+    class Depot(sim.Model):
+        regional_distribution_centre: Middle = Middle()
+
+    model = Depot()
+    prefix = "regional_distribution_centre__inner__"
+    entity_fields = [
+        prefix + "incoming_replenishment_orders",
+        prefix + "awaiting_dispatch_confirmation",
+        prefix + "constrained_loading_bay_slots",
+        prefix + "shipment_ready_notification",
+    ]
+    for field in entity_fields:
+        assert field in model.dtype.fields
+        assert len(field.encode("utf-8")) > 31
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0)
+    assert exp.run() == 0
+    assert exp[prefix + "length_seen"][0] == 1.0
+    assert exp[prefix + "level_seen"][0] == 3.0
+
+
+def test_long_shaped_entity_names_fit_native_buffer():
+    # Shaped fields (collection items, PQueues) get a "_<index>" suffix on
+    # the native name, so they exhaust the buffer sooner than the flattened
+    # field name alone suggests.
+    class Bay(sim.Component):
+        pending_customer_backorder_queue: sim.Queue
+        graded_inbound_priority_lanes: sim.PQueues = sim.count(2)
+        seen: sim.Output
+
+        @sim.process
+        def run(self, env):
+            self.pending_customer_backorder_queue.put(2)
+            lane = self.graded_inbound_priority_lanes[1]
+            lane.put(7, 0)
+            self.seen = float(
+                self.pending_customer_backorder_queue.level() + lane.take())
+
+    class Warehouse(sim.Model):
+        regional_bays: list[Bay] = [Bay(), Bay(), Bay()]
+
+    model = Warehouse()
+    queue_field = "regional_bays__pending_customer_backorder_queue"
+    assert queue_field in model.dtype.fields
+    # the per-item native name is this plus "_0".."_2"
+    assert len(f"{queue_field}_2".encode("utf-8")) > 31
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0)
+    assert exp.run() == 0
+    assert exp["regional_bays__seen"][0].tolist() == [9.0, 9.0, 9.0]
+
+
+def test_native_names_are_unique_bounded_and_stable():
+    from cimba._model import _native_names
+
+    short = "ok_queue"
+    alpha = "warehouse_regional_backorder_queue_alpha"
+    beta = "warehouse_regional_backorder_queue_beta"   # shares a long prefix
+    mapping = _native_names([short, alpha, beta])
+
+    assert mapping[short] == short          # short names pass through intact
+    assert len(set(mapping.values())) == 3  # distinct despite the shared prefix
+    assert all(len(value.encode("utf-8")) <= 31
+               for value in mapping.values())
+    assert _native_names([short, alpha, beta]) == mapping   # deterministic
+
+
 def test_subtype_only_entity_and_processes_fields_are_packed():
     class Policy(sim.Component):
         capacity: sim.Param
@@ -477,7 +569,9 @@ def test_component_function_reads_params_and_returns_value():
         env.order = env.policy.decide(env.level)
 
     source = model._processes[0].fn.__cimba_source__
-    assert "_CIMBA_FUNCTION_Policy_decide_" in source
+    # the call site names the helper per declaration, not per class, so
+    # same-class declarations with different signatures cannot collide
+    assert "_CIMBA_FUNCTION_policy__decide_" in source
     assert "env.policy__threshold" in source
     assert "env.policy__target" in source
     (spec,) = model._component_functions.values()
@@ -752,6 +846,174 @@ def test_component_function_classes_and_cache_are_independent():
     assert exp.run() == 0
     assert exp["added"][0] == 7.0
     assert exp["multiplied"][0] == 12.0
+
+
+def test_item_functions_compile_across_collections_of_unequal_length():
+    # A single-instance collection lowers a helper with no receiver index
+    # while a multi-instance one does, so the two must not share a symbol.
+    class Item(sim.Component):
+        factor: sim.Param
+        own: sim.Output
+
+        @sim.function
+        def scaled(self, wanted: float) -> float:
+            return wanted * self.factor
+
+        @sim.collect
+        def report(self, env):
+            self.own = self.scaled(10.0)
+
+    class Owner(sim.Component):
+        n: sim.Const[int]
+        items: list[Item]
+        total: sim.Output
+
+        def __init__(self, count):
+            self.n = count
+            self.items = [Item() for _ in range(count)]
+
+        @sim.process
+        def run(self, env):
+            acc = 0.0
+            for i in range(self.n):
+                acc += self.items[i].scaled(2.0)
+            self.total = acc
+            sim.suspend()
+
+    class Supply(sim.Model):
+        one: Owner = Owner(1)
+        two: Owner = Owner(2)
+        three: Owner = Owner(3)
+
+    model = Supply()
+    symbols = [spec.symbol for spec in model._component_functions.values()]
+    assert len(symbols) == len(set(symbols))
+
+    exp = model.experiment(one__items__factor=[5.0],
+                           two__items__factor=[2.0, 3.0],
+                           three__items__factor=[1.0, 10.0, 100.0],
+                           replications=1, duration=1.0, warmup=0.0)
+    assert exp.run() == 0
+    assert exp["one__total"][0] == 10.0
+    assert exp["two__total"][0] == 10.0
+    assert exp["three__total"][0] == 222.0
+    assert exp["one__items__own"][0] == 50.0
+    assert exp["two__items__own"][0].tolist() == [20.0, 30.0]
+    assert exp["three__items__own"][0].tolist() == [10.0, 100.0, 1000.0]
+
+
+def test_item_function_calls_item_function_across_unequal_collections():
+    class Leaf(sim.Component):
+        w: sim.Param
+        out: sim.Output
+
+        @sim.function
+        def base(self) -> float:
+            return self.w
+
+        @sim.function
+        def doubled(self) -> float:
+            return 2.0 * self.base()
+
+        @sim.collect
+        def report(self, env):
+            self.out = self.doubled()
+
+    class Box(sim.Component):
+        leaves: list[Leaf]
+
+        def __init__(self, count):
+            self.leaves = [Leaf() for _ in range(count)]
+
+    class Nested(sim.Model):
+        small: Box = Box(1)
+        large: Box = Box(3)
+
+    model = Nested()
+
+    @model.process
+    def run(env: Nested):
+        sim.suspend()
+
+    exp = model.experiment(small__leaves__w=[7.0],
+                           large__leaves__w=[1.0, 2.0, 4.0],
+                           replications=1, duration=1.0, warmup=0.0)
+    assert exp.run() == 0
+    assert exp["small__leaves__out"][0] == 14.0
+    assert exp["large__leaves__out"][0].tolist() == [2.0, 4.0, 8.0]
+
+
+def test_item_function_shared_between_lone_component_and_collection():
+    class Node(sim.Component):
+        v: sim.Param
+        out: sim.Output
+
+        @sim.function
+        def get(self) -> float:
+            return self.v
+
+        @sim.collect
+        def report(self, env):
+            self.out = self.get()
+
+    class Mixed(sim.Model):
+        lone: Node = Node()
+        many: list[Node] = [Node(), Node()]
+
+    model = Mixed()
+
+    @model.process
+    def run(env: Mixed):
+        sim.suspend()
+
+    exp = model.experiment(lone__v=9.0, many__v=[1.0, 2.0],
+                           replications=1, duration=1.0, warmup=0.0)
+    assert exp.run() == 0
+    assert exp["lone__out"][0] == 9.0
+    assert exp["many__out"][0].tolist() == [1.0, 2.0]
+
+
+def test_polymorphic_collections_of_unequal_length_dispatch_correctly():
+    class Base(sim.Component):
+        w: sim.Param
+        out: sim.Output
+
+        @sim.function
+        def value(self) -> float:
+            return self.w
+
+        @sim.collect
+        def report(self, env):
+            self.out = self.value()
+
+    class Twice(Base):
+        @sim.function
+        def value(self) -> float:
+            return 2.0 * self.w
+
+    class Thrice(Base):
+        @sim.function
+        def value(self) -> float:
+            return 3.0 * self.w
+
+    class Fleet(sim.Model):
+        short: list[Base] = [Twice()]
+        long: list[Base] = [Twice(), Thrice(), Base()]
+        picked: sim.Output
+
+    model = Fleet()
+
+    @model.process
+    def run(env: Fleet):
+        env.picked = env.long[1].value()
+        sim.suspend()
+
+    exp = model.experiment(short__w=[5.0], long__w=[1.0, 2.0, 4.0],
+                           replications=1, duration=1.0, warmup=0.0)
+    assert exp.run() == 0
+    assert exp["short__out"][0] == 10.0
+    assert exp["long__out"][0].tolist() == [2.0, 6.0, 4.0]
+    assert exp["picked"][0] == 6.0
 
 
 def test_component_function_rejects_invalid_signatures_and_calls():
@@ -3027,6 +3289,125 @@ def test_component_refs_table_errors_are_rejected():
         MixedCollections()
 
 
+def test_component_refs_table_accepts_a_single_item_collection():
+    # A collection of one stores its fields unindexed, so the resolved item
+    # index is None; the table still addresses item 0.
+    class Router(sim.Component):
+        sent: sim.State
+        inbox: sim.Store
+        targets: sim.Refs[RefNode]
+
+        def __init__(self, targets=()):
+            self.targets = tuple(targets)
+
+        @sim.process
+        def route(self, env):
+            while True:
+                item = self.inbox.take()
+                self.sent += 1
+                self.targets[item % 1].inbox.put(item)   # dynamic index
+
+        @sim.process
+        def probe(self, env):
+            self.targets[0].inbox.put(999)               # constant index
+            sim.suspend()
+
+    solo = [RefNode()]
+
+    class Single(sim.Model):
+        nodes: list[RefNode] = solo
+        router: Router = Router(targets=tuple(solo))
+
+    model = Single()
+
+    @model.process
+    def feed(env: Single):
+        for i in range(6):
+            env.router.inbox.put(i)
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=5)
+    assert exp.run() == 0
+    assert exp.trials["router__sent"][0] == 6
+    # the one-item collection flattens to a scalar field
+    assert int(exp.trials["nodes__got"][0]) == 7
+
+    # an out-of-range constant index is still caught
+    class OutOfRange(sim.Component):
+        targets: sim.Refs[RefNode]
+
+        def __init__(self, targets=()):
+            self.targets = tuple(targets)
+
+        @sim.process
+        def go(self, env):
+            self.targets[1].inbox.put(1)
+            sim.suspend()
+
+    other = [RefNode()]
+
+    class TooFar(sim.Model):
+        nodes: list[RefNode] = other
+        router: OutOfRange = OutOfRange(targets=tuple(other))
+
+    with pytest.raises(ValueError, match="out of range"):
+        TooFar().experiment(replications=1, duration=1.0)
+
+
+def test_component_refs_tables_may_differ_in_length_per_instance():
+    class Router(sim.Component):
+        seen: sim.State
+        targets: sim.Refs[RefNode]
+
+        def __init__(self, targets=()):
+            self.targets = tuple(targets)
+
+        @sim.process
+        def go(self, env):
+            self.targets[0].inbox.put(1)
+            self.seen += self.targets[0].tag
+            sim.suspend()
+
+    pool = [RefNode(tag=10), RefNode(tag=20), RefNode(tag=30)]
+
+    class Fleet(sim.Model):
+        nodes: list[RefNode] = pool
+        routers: list[Router] = [
+            Router(targets=(pool[2],)),               # a one-entry table
+            Router(targets=(pool[0], pool[1])),
+        ]
+
+    model = Fleet()
+
+    @model.process
+    def run(env: Fleet):
+        sim.suspend()
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=5)
+    assert exp.run() == 0
+    assert exp.trials["routers__seen"][0].tolist() == [30, 10]
+    assert exp.trials["nodes__got"][0].tolist() == [1, 0, 1]
+
+
+def test_component_refs_table_rejects_a_lone_component_by_name():
+    class Router(sim.Component):
+        targets: sim.Refs[RefNode]
+
+        def __init__(self, targets=()):
+            self.targets = tuple(targets)
+
+        @sim.process
+        def go(self, env):
+            self.targets[0].inbox.put(1)
+            sim.suspend()
+
+    with pytest.raises(ValueError, match="'sink' is a lone component"):
+        class LoneTarget(sim.Model):
+            sink: RefNode = RefNode()
+            router: Router = Router(targets=(sink,))
+
+        LoneTarget()
+
+
 def test_component_ref_usage_errors_are_rejected():
     left, right = RefNode(), RefNode()
     left.downstream = right
@@ -3086,3 +3467,350 @@ def test_component_ref_usage_errors_are_rejected():
         def dynamic(env: Hetero):
             for j in range(2):
                 env.nodes[j].downstream.inbox.put(j)
+
+
+def test_component_function_indexes_a_collection_by_loop_variable():
+    # The index is bound inside the function, so it cannot be resolved at
+    # the call site: the whole flattened field is threaded in instead.
+    class Item(sim.Component):
+        cost: sim.Param
+
+    class Owner(sim.Component):
+        n: sim.Const[int]
+        items: list[Item] = [Item(), Item(), Item()]
+        by_argument: sim.Output
+        by_loop: sim.Output
+        by_local: sim.Output
+        by_while: sim.Output
+        cheapest: sim.Output
+
+        def __init__(self):
+            self.n = 3
+
+        @sim.function
+        def cost_of(self, index: int) -> float:
+            return self.items[index].cost
+
+        @sim.function
+        def total(self) -> float:
+            acc = 0.0
+            for index in range(self.n):
+                acc += self.items[index].cost
+            return acc
+
+        @sim.function
+        def second(self) -> float:
+            index = 1
+            return self.items[index].cost
+
+        @sim.function
+        def total_while(self) -> float:
+            acc = 0.0
+            index = 0
+            while index < 3:
+                acc += self.items[index].cost
+                index += 1
+            return acc
+
+        @sim.function
+        def cheapest_index(self) -> int:
+            best = 0
+            best_cost = self.items[0].cost
+            for index in range(self.n):
+                cost = self.items[index].cost
+                if cost < best_cost:
+                    best_cost = cost
+                    best = index
+            return best
+
+        @sim.process
+        def run(self, env):
+            self.by_argument = self.cost_of(1)
+            self.by_loop = self.total()
+            self.by_local = self.second()
+            self.by_while = self.total_while()
+            self.cheapest = float(self.cheapest_index())
+            sim.suspend()
+
+    class Shop(sim.Model):
+        owner: Owner = Owner()
+
+    model = Shop()
+    exp = model.experiment(owner__items__cost=[4.0, 1.0, 2.0],
+                           replications=1, duration=1.0, warmup=0.0)
+    assert exp.run() == 0
+    assert exp["owner__by_argument"][0] == 1.0
+    assert exp["owner__by_loop"][0] == 7.0
+    assert exp["owner__by_local"][0] == 1.0
+    assert exp["owner__by_while"][0] == 7.0
+    assert exp["owner__cheapest"][0] == 1.0
+
+
+def test_component_function_loop_index_works_across_call_contexts():
+    class Leg(sim.Component):
+        w: sim.Param
+
+    class Group(sim.Component):
+        legs: list[Leg] = [Leg(), Leg()]
+        from_process: sim.Output
+        from_collect: sim.Output
+        from_nested: sim.Output
+
+        @sim.function
+        def total(self) -> float:
+            acc = 0.0
+            for i in range(2):
+                acc += self.legs[i].w
+            return acc
+
+        @sim.function
+        def doubled(self) -> float:
+            # a function whose callee carries the array dependency
+            return 2.0 * self.total()
+
+        @sim.process
+        def run(self, env):
+            self.from_process = self.total()
+            self.from_nested = self.doubled()
+            sim.suspend()
+
+        @sim.collect
+        def report(self, env):
+            self.from_collect = self.total()
+
+    # a collection of owners exercises the runtime receiver index alongside
+    # the loop index, over a nested (offset) collection field
+    class Net(sim.Model):
+        groups: list[Group] = [Group(), Group(), Group()]
+        from_model: sim.Output
+
+    model = Net()
+
+    @model.process
+    def driver(env: Net):
+        env.from_model = env.groups[2].total()
+        sim.suspend()
+
+    exp = model.experiment(
+        groups__legs__w=[1.0, 2.0, 10.0, 20.0, 100.0, 200.0],
+        replications=1, duration=1.0, warmup=0.0)
+    assert exp.run() == 0
+    assert exp["groups__from_process"][0].tolist() == [3.0, 30.0, 300.0]
+    assert exp["groups__from_collect"][0].tolist() == [3.0, 30.0, 300.0]
+    assert exp["groups__from_nested"][0].tolist() == [6.0, 60.0, 600.0]
+    assert exp["from_model"][0] == 300.0
+
+
+def test_component_function_loop_index_reads_int_state_field():
+    class Bin(sim.Component):
+        level: sim.State
+
+    class Shelf(sim.Component):
+        bins: list[Bin] = [Bin(), Bin(), Bin()]
+        total: sim.Output
+
+        @sim.function
+        def total_level(self) -> int:
+            acc = 0
+            for i in range(3):
+                acc += self.bins[i].level
+            return acc
+
+        @sim.process
+        def run(self, env):
+            for i in range(3):
+                self.bins[i].level = i + 1
+            self.total = float(self.total_level())
+            sim.suspend()
+
+    class Store(sim.Model):
+        shelf: Shelf = Shelf()
+
+    model = Store()
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0)
+    assert exp.run() == 0
+    assert exp["shelf__total"][0] == 6.0
+
+
+def test_component_function_loop_index_over_polymorphic_collection():
+    class Base(sim.Component):
+        w: sim.Param
+
+    class Left(Base):
+        pass
+
+    class Right(Base):
+        pass
+
+    class Owner(sim.Component):
+        parts: list[Base] = [Left(), Right(), Left()]
+        total: sim.Output
+
+        @sim.function
+        def total_w(self) -> float:
+            acc = 0.0
+            for i in range(3):
+                acc += self.parts[i].w
+            return acc
+
+        @sim.process
+        def run(self, env):
+            self.total = self.total_w()
+            sim.suspend()
+
+    class Shop(sim.Model):
+        owner: Owner = Owner()
+
+    model = Shop()
+    exp = model.experiment(owner__parts__w=[1.0, 2.0, 4.0],
+                           replications=1, duration=1.0, warmup=0.0)
+    assert exp.run() == 0
+    assert exp["owner__total"][0] == 7.0
+
+
+def test_component_function_loop_index_restrictions_are_named():
+    # a field only some concrete types declare is stored packed, so a
+    # logical index computed inside the helper cannot address it
+    class Part(sim.Component):
+        pass
+
+    class Weighted(Part):
+        w: sim.Param
+
+    class Owner(sim.Component):
+        parts: list[Part] = [Weighted(), Part(), Weighted()]
+        total: sim.Output
+
+        @sim.function
+        def total_w(self) -> float:
+            acc = 0.0
+            for i in range(3):
+                acc += self.parts[i].w
+            return acc
+
+        @sim.process
+        def run(self, env):
+            self.total = self.total_w()
+            sim.suspend()
+
+    class Packed(sim.Model):
+        owner: Owner = Owner()
+
+    with pytest.raises(ValueError,
+                       match="every instance of 'owner__parts' to declare"):
+        Packed().experiment(owner__parts__w=[1.0, 2.0], duration=1.0)
+
+    # Const values live in a side table, not a flattened env field
+    class Sized(sim.Component):
+        k: sim.Const[int]
+
+        def __init__(self, k):
+            self.k = k
+
+    class ConstOwner(sim.Component):
+        parts: list[Sized] = [Sized(1), Sized(2)]
+        total: sim.Output
+
+        @sim.function
+        def total_k(self) -> int:
+            acc = 0
+            for i in range(2):
+                acc += self.parts[i].k
+            return acc
+
+        @sim.process
+        def run(self, env):
+            self.total = float(self.total_k())
+            sim.suspend()
+
+    class ConstModel(sim.Model):
+        owner: ConstOwner = ConstOwner()
+
+    with pytest.raises(ValueError, match="only supported for Param, Output"):
+        ConstModel().experiment(duration=1.0)
+
+    # mutation stays rejected whatever the index is
+    class Mutator(sim.Component):
+        parts: list[Weighted] = [Weighted(), Weighted()]
+        out: sim.Output
+
+        @sim.function
+        def bad(self) -> float:
+            for i in range(2):
+                self.parts[i].w = 1.0
+            return 0.0
+
+        @sim.process
+        def run(self, env):
+            self.out = self.bad()
+            sim.suspend()
+
+    class MutModel(sim.Model):
+        owner: Mutator = Mutator()
+
+    with pytest.raises(ValueError, match="cannot mutate component field"):
+        MutModel().experiment(owner__parts__w=[1.0, 2.0], duration=1.0)
+
+
+def test_local_model_classes_are_independent_declarations():
+    # Declaring a model inside a function is supported: nothing is keyed on
+    # the class qualified name, so building twice gives two distinct models.
+    class Leaf(sim.Component):
+        cost: sim.Param
+
+    def build(count):
+        class Owner(sim.Component):
+            n: sim.Const[int]
+            leaves: list[Leaf]
+            total: sim.Output
+
+            def __init__(self, k):
+                self.n = k
+                self.leaves = [Leaf() for _ in range(k)]
+
+            @sim.function
+            def summed(self) -> float:
+                acc = 0.0
+                for i in range(self.n):
+                    acc += self.leaves[i].cost
+                return acc
+
+            @sim.process
+            def run(self, env):
+                self.total = self.summed()
+                sim.suspend()
+
+        class Local(sim.Model):
+            owner: Owner = Owner(count)
+
+        return Local()
+
+    seen = []
+    for count, costs in ((1, [5.0]), (3, [1.0, 2.0, 4.0]), (2, [10.0, 20.0])):
+        model = build(count)
+        assert "<locals>" in type(model).__qualname__
+        exp = model.experiment(owner__leaves__cost=costs,
+                               replications=1, duration=1.0, warmup=0.0)
+        assert exp.run() == 0
+        seen.append(exp["owner__total"][0])
+    assert seen == [5.0, 7.0, 30.0]
+
+
+def test_string_annotation_naming_a_local_class_is_diagnosed():
+    def build():
+        class Holder(sim.Component):
+            size: sim.Param
+
+        class Local(sim.Model):
+            holder: "Holder" = Holder()   # noqa: F821 - the point of the test
+
+        return Local()
+
+    with pytest.raises(NameError, match="cannot resolve annotation 'Holder'"):
+        build()
+
+    # the message says why and what to do about it
+    with pytest.raises(NameError, match="module globals"):
+        build()
+    with pytest.raises(NameError, match="at module scope"):
+        build()

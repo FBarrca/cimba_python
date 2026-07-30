@@ -52,6 +52,7 @@ from ._declarations import (
     _FIELD_KINDS,
     _FieldDecl,
     _STANDARD_FIELDS,
+    class_type_hints,
 )
 from ._graph import (ProcessDAG, ProcessDAGBlock, ProcessDAGEdge,
                      ProcessDAGNode, infer_process_dag)
@@ -80,19 +81,23 @@ _UNBOUNDED = np.uint64(0xFFFFFFFFFFFFFFFF)
 # the cmb_process header, rounded up to the 8-byte record alignment.
 _PROC_DATA_OFFSET = (int(lib.cpy_process_sizeof()) + 7) & ~7
 
-# Native ``cmb_process`` names have a 32-byte buffer including the trailing
-# NUL. Logical Python names stay intact for fields, graphs, and diagnostics;
-# only the runtime display name is shortened when necessary.
-_NATIVE_PROCESS_NAME_BYTES = 31
+# Native ``cmb_process.name`` and ``cmi_resourcebase.name`` (every named
+# entity: Queue, Store, Resource, Pool, Condition, PQueues) are both 32-byte
+# buffers including the trailing NUL. Logical Python names stay intact for
+# fields, graphs, and diagnostics; only the runtime display name is shortened
+# when necessary. Passing an over-long name through instead trips
+# cmb_assert_release in cmi_resourcebase_set_name, which aborts the process --
+# no Python exception, no traceback.
+_NATIVE_NAME_BYTES = 31
 
 
-def _native_process_names(names: Iterable[str]) -> dict[str, str]:
-    """Return deterministic, unique names that fit cmb_process.name."""
+def _native_names(names: Iterable[str]) -> dict[str, str]:
+    """Return deterministic, unique names that fit a native name buffer."""
     result: dict[str, str] = {}
     used: set[str] = set()
     for name in names:
         encoded = name.encode("utf-8")
-        if len(encoded) <= _NATIVE_PROCESS_NAME_BYTES and name not in used:
+        if len(encoded) <= _NATIVE_NAME_BYTES and name not in used:
             candidate = name
         else:
             salt = 0
@@ -100,7 +105,7 @@ def _native_process_names(names: Iterable[str]) -> dict[str, str]:
                 digest = hashlib.sha256(
                     f"{salt}:{name}".encode("utf-8")).hexdigest()[:10]
                 suffix = f"__{digest}"
-                budget = _NATIVE_PROCESS_NAME_BYTES - len(suffix)
+                budget = _NATIVE_NAME_BYTES - len(suffix)
                 prefix = encoded[:budget].decode("utf-8", errors="ignore")
                 candidate = f"{prefix}{suffix}"
                 if candidate not in used:
@@ -147,7 +152,7 @@ class Struct:
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         fields = []
-        for fname, hint in get_type_hints(cls).items():
+        for fname, hint in class_type_hints(cls).items():
             if fname.startswith("_"):
                 continue
             if hint is float:
@@ -305,6 +310,15 @@ def _as_param_axis(
         f"parameter '{name}': expected a scalar, shape {shape}, or "
         f"(n, {', '.join(str(dim) for dim in shape)}) design rows; "
         f"got shape {arr.shape}")
+
+
+def _n_design_points(axes: Sequence[np.ndarray]) -> int:
+    """Design points in the cross product of the parameter axes; a
+    scalar parameter is a length-1 axis and contributes a factor of 1."""
+    n_points = 1
+    for axis in axes:
+        n_points *= axis.shape[0]
+    return n_points
 
 
 def _trace_generator_wants_index(fn: Callable[..., ArrayLike]) -> bool:
@@ -1696,12 +1710,16 @@ class Model:
         ns.update(carray=carray, addressof=addressof, np=np, CAP=_UNBOUNDED)
         for i, inner in enumerate(collect_inners):
             ns[f"COLLECT_{i}"] = inner
-        for e in self._entities:
-            for key, name in self._field_name_keys(e):
-                ns[key] = _b.cstring(name)
-        for f, n in self.pqueues.items():
-            for k in range(n):
-                ns[f"NAME_{f}_{k}"] = _b.cstring(f"{f}_{k}")
+        # Every named entity shares the 32-byte native name buffer with
+        # processes, so shorten these the same way rather than letting an
+        # over-long flattened name abort in cmi_resourcebase_set_name.
+        entity_keys = [key_name for e in self._entities
+                       for key_name in self._field_name_keys(e)]
+        entity_keys += [(f"NAME_{f}_{k}", f"{f}_{k}")
+                        for f, n in self.pqueues.items() for k in range(n)]
+        native_entity_names = _native_names(name for _key, name in entity_keys)
+        for key, name in entity_keys:
+            ns[key] = _b.cstring(native_entity_names[name])
         for pname, proc in proc_cfuncs.items():
             ns[f"NAME_{pname}"] = _b.cstring(
                 native_process_names[pname])
@@ -1928,7 +1946,7 @@ class Model:
 
         proc_cfuncs, pred_cfuncs, event_cfuncs, collect_inners = \
             self._compile_callbacks(rec)
-        native_process_names = _native_process_names(
+        native_process_names = _native_names(
             process.name for process in self._processes)
         spawn_descs = {
             p.name: np.array([proc_cfuncs[p.name].address,
@@ -1989,9 +2007,7 @@ class Model:
         param_values = self._resolve_param_values(param_values)
         if replications < 1:
             raise ValueError("replications must be >= 1")
-        n_points = 1
-        for axis in self._param_axes(param_values):
-            n_points *= axis.shape[0]
+        n_points = _n_design_points(self._param_axes(param_values))
         return _draw_trial_seeds(seed, n_points * replications)
 
     def experiment(self,
@@ -2032,11 +2048,7 @@ class Model:
             raise ValueError("replications must be >= 1")
 
         axes = self._param_axes(param_values)
-        axis_indexes = [
-            np.arange(axis.shape[0], dtype=np.int64) for axis in axes
-        ]
-        mesh = np.meshgrid(*axis_indexes, indexing="ij") if axes else []
-        n_points = mesh[0].size if mesh else 1
+        n_points = _n_design_points(axes)
         n_trials = n_points * replications
 
         trials = np.zeros(n_trials, dtype=compiled["dtype"])
@@ -2048,9 +2060,21 @@ class Model:
             trials[HISTORY_CAPTURE_TRIAL_FIELD] = np.arange(
                 n_trials, dtype=np.uint64)
             trials[HISTORY_CAPTURE_STORE_FIELD] = 0
-        for p, axis, indexes in zip(self.params, axes, mesh):
-            selected = axis[indexes.ravel()]
+        # Index each axis directly rather than meshgrid'ing all of them: the
+        # design points are a mixed-radix count over the axis sizes, which is
+        # exactly meshgrid(indexing="ij") ravel order. Singleton axes cost a
+        # broadcast instead of a mesh dimension, so numpy's 32-dimension
+        # ceiling no longer applies to the declared parameter count.
+        points = np.arange(n_points, dtype=np.int64)
+        stride = 1
+        for p, axis in zip(reversed(self.params), reversed(axes)):
+            size = axis.shape[0]
+            if size == 1:
+                selected = np.repeat(axis, n_points, axis=0)
+            else:
+                selected = axis[(points // stride) % size]
             trials[p] = np.repeat(selected, replications, axis=0)
+            stride *= size
         for o in self.outputs:
             trials[o] = np.nan
         for field, pred in compiled["preds"].items():

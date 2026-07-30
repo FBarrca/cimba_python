@@ -411,6 +411,109 @@ def test_experiment_summary():
         exp.summary("nope")
 
 
+def test_many_scalar_params_do_not_hit_a_mesh_dimension_limit():
+    # Scalar params are held fixed, so declaring more than numpy's
+    # 32-dimension meshgrid limit must still build a single design point.
+    n = 40
+    names = [f"p{i}" for i in range(n)]
+    Many = type("Many", (sim.Model,), {
+        "__annotations__": {**{p: sim.Param for p in names},
+                            "y": sim.Output},
+    })
+    model = Many()
+
+    @model.process
+    def p(env):
+        env.y = env.p0 + env.p39
+        sim.suspend()
+
+    fixed = {name: float(i) for i, name in enumerate(names)}
+    exp = model.experiment(duration=10.0, warmup=0.0, seed=3, **fixed)
+    assert exp.trials.size == 1
+    assert exp.swept == ()
+    for i, name in enumerate(names):
+        assert exp.trials[name][0] == float(i)
+    assert exp.run() == 0
+    assert exp["y"][0] == 39.0
+
+    # sweeping a couple of them keeps the cross product in params order:
+    # the last-declared param varies fastest.
+    swept = {**fixed, "p38": [1.0, 2.0], "p39": [10.0, 20.0, 30.0]}
+    exp = model.experiment(duration=10.0, warmup=0.0, seed=3, **swept)
+    assert exp.trials.size == 6
+    assert exp.swept == ("p38", "p39")
+    assert list(exp.trials["p38"]) == [1.0, 1.0, 1.0, 2.0, 2.0, 2.0]
+    assert list(exp.trials["p39"]) == [10.0, 20.0, 30.0, 10.0, 20.0, 30.0]
+    assert list(exp.trials["p7"]) == [7.0] * 6
+    assert len(model.trial_seeds(seed=3, **swept)) == 6
+
+
+def test_param_cross_product_order_and_degenerate_axes():
+    class Grid(sim.Model):
+        x: sim.Param
+        y: sim.Param
+        out: sim.Output
+
+    model = Grid()
+
+    @model.process
+    def p(env: Grid):
+        env.out = env.x
+        sim.suspend()
+
+    # design-point-major with replications innermost, x the outer axis
+    exp = model.experiment(x=[1.0, 2.0], y=[10.0, 20.0], replications=2,
+                           duration=1.0, warmup=0.0)
+    assert list(exp.trials["x"]) == [1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0]
+    assert list(exp.trials["y"]) == [10.0, 10.0, 20.0, 20.0,
+                                     10.0, 10.0, 20.0, 20.0]
+
+    # an empty axis still collapses the design to no trials
+    empty = model.experiment(x=[], y=[1.0, 2.0], duration=1.0, warmup=0.0)
+    assert empty.trials.size == 0
+
+
+def test_shaped_param_held_fixed_while_a_scalar_param_sweeps():
+    class Leg(sim.Component):
+        rate: sim.Param
+
+        @sim.process
+        def idle(self, env):
+            sim.suspend()
+
+    class Net(sim.Model):
+        x: sim.Param
+        legs: list[Leg] = [Leg(), Leg()]
+        y: sim.Output
+
+    model = Net()
+
+    @model.process
+    def p(env: Net):
+        env.y = env.legs[1].rate * env.x
+        sim.suspend()
+
+    # a shaped param given one row is a singleton axis, not a mesh dimension
+    exp = model.experiment(x=[1.0, 2.0], legs__rate=[3.0, 4.0],
+                           duration=10.0, warmup=0.0, seed=5)
+    assert exp.trials.size == 2
+    assert exp.swept == ("x",)
+    assert np.array_equal(exp.trials["legs__rate"], [[3.0, 4.0]] * 2)
+    assert exp.run() == 0
+    assert np.allclose(exp["y"], [4.0, 8.0])
+
+    # given design rows it sweeps, and x (declared first) is the outer axis
+    exp = model.experiment(x=[1.0, 3.0],
+                           legs__rate=[[1.0, 1.0], [1.0, 2.0]],
+                           duration=10.0, warmup=0.0, seed=5)
+    assert exp.trials.size == 4
+    assert exp.swept == ("x", "legs__rate")
+    assert list(exp.trials["x"]) == [1.0, 1.0, 3.0, 3.0]
+    assert np.array_equal(exp.trials["legs__rate"][:, 1], [1.0, 2.0, 1.0, 2.0])
+    assert exp.run() == 0
+    assert np.allclose(exp["y"], [1.0, 2.0, 3.0, 6.0])
+
+
 def test_experiment_summary_single_point():
     class Single(sim.Model):
         y: sim.Output
