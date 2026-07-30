@@ -477,7 +477,9 @@ def test_component_function_reads_params_and_returns_value():
         env.order = env.policy.decide(env.level)
 
     source = model._processes[0].fn.__cimba_source__
-    assert "_CIMBA_FUNCTION_Policy_decide_" in source
+    # the call site names the helper per declaration, not per class, so
+    # same-class declarations with different signatures cannot collide
+    assert "_CIMBA_FUNCTION_policy__decide_" in source
     assert "env.policy__threshold" in source
     assert "env.policy__target" in source
     (spec,) = model._component_functions.values()
@@ -752,6 +754,174 @@ def test_component_function_classes_and_cache_are_independent():
     assert exp.run() == 0
     assert exp["added"][0] == 7.0
     assert exp["multiplied"][0] == 12.0
+
+
+def test_item_functions_compile_across_collections_of_unequal_length():
+    # A single-instance collection lowers a helper with no receiver index
+    # while a multi-instance one does, so the two must not share a symbol.
+    class Item(sim.Component):
+        factor: sim.Param
+        own: sim.Output
+
+        @sim.function
+        def scaled(self, wanted: float) -> float:
+            return wanted * self.factor
+
+        @sim.collect
+        def report(self, env):
+            self.own = self.scaled(10.0)
+
+    class Owner(sim.Component):
+        n: sim.Const[int]
+        items: list[Item]
+        total: sim.Output
+
+        def __init__(self, count):
+            self.n = count
+            self.items = [Item() for _ in range(count)]
+
+        @sim.process
+        def run(self, env):
+            acc = 0.0
+            for i in range(self.n):
+                acc += self.items[i].scaled(2.0)
+            self.total = acc
+            sim.suspend()
+
+    class Supply(sim.Model):
+        one: Owner = Owner(1)
+        two: Owner = Owner(2)
+        three: Owner = Owner(3)
+
+    model = Supply()
+    symbols = [spec.symbol for spec in model._component_functions.values()]
+    assert len(symbols) == len(set(symbols))
+
+    exp = model.experiment(one__items__factor=[5.0],
+                           two__items__factor=[2.0, 3.0],
+                           three__items__factor=[1.0, 10.0, 100.0],
+                           replications=1, duration=1.0, warmup=0.0)
+    assert exp.run() == 0
+    assert exp["one__total"][0] == 10.0
+    assert exp["two__total"][0] == 10.0
+    assert exp["three__total"][0] == 222.0
+    assert exp["one__items__own"][0] == 50.0
+    assert exp["two__items__own"][0].tolist() == [20.0, 30.0]
+    assert exp["three__items__own"][0].tolist() == [10.0, 100.0, 1000.0]
+
+
+def test_item_function_calls_item_function_across_unequal_collections():
+    class Leaf(sim.Component):
+        w: sim.Param
+        out: sim.Output
+
+        @sim.function
+        def base(self) -> float:
+            return self.w
+
+        @sim.function
+        def doubled(self) -> float:
+            return 2.0 * self.base()
+
+        @sim.collect
+        def report(self, env):
+            self.out = self.doubled()
+
+    class Box(sim.Component):
+        leaves: list[Leaf]
+
+        def __init__(self, count):
+            self.leaves = [Leaf() for _ in range(count)]
+
+    class Nested(sim.Model):
+        small: Box = Box(1)
+        large: Box = Box(3)
+
+    model = Nested()
+
+    @model.process
+    def run(env: Nested):
+        sim.suspend()
+
+    exp = model.experiment(small__leaves__w=[7.0],
+                           large__leaves__w=[1.0, 2.0, 4.0],
+                           replications=1, duration=1.0, warmup=0.0)
+    assert exp.run() == 0
+    assert exp["small__leaves__out"][0] == 14.0
+    assert exp["large__leaves__out"][0].tolist() == [2.0, 4.0, 8.0]
+
+
+def test_item_function_shared_between_lone_component_and_collection():
+    class Node(sim.Component):
+        v: sim.Param
+        out: sim.Output
+
+        @sim.function
+        def get(self) -> float:
+            return self.v
+
+        @sim.collect
+        def report(self, env):
+            self.out = self.get()
+
+    class Mixed(sim.Model):
+        lone: Node = Node()
+        many: list[Node] = [Node(), Node()]
+
+    model = Mixed()
+
+    @model.process
+    def run(env: Mixed):
+        sim.suspend()
+
+    exp = model.experiment(lone__v=9.0, many__v=[1.0, 2.0],
+                           replications=1, duration=1.0, warmup=0.0)
+    assert exp.run() == 0
+    assert exp["lone__out"][0] == 9.0
+    assert exp["many__out"][0].tolist() == [1.0, 2.0]
+
+
+def test_polymorphic_collections_of_unequal_length_dispatch_correctly():
+    class Base(sim.Component):
+        w: sim.Param
+        out: sim.Output
+
+        @sim.function
+        def value(self) -> float:
+            return self.w
+
+        @sim.collect
+        def report(self, env):
+            self.out = self.value()
+
+    class Twice(Base):
+        @sim.function
+        def value(self) -> float:
+            return 2.0 * self.w
+
+    class Thrice(Base):
+        @sim.function
+        def value(self) -> float:
+            return 3.0 * self.w
+
+    class Fleet(sim.Model):
+        short: list[Base] = [Twice()]
+        long: list[Base] = [Twice(), Thrice(), Base()]
+        picked: sim.Output
+
+    model = Fleet()
+
+    @model.process
+    def run(env: Fleet):
+        env.picked = env.long[1].value()
+        sim.suspend()
+
+    exp = model.experiment(short__w=[5.0], long__w=[1.0, 2.0, 4.0],
+                           replications=1, duration=1.0, warmup=0.0)
+    assert exp.run() == 0
+    assert exp["short__out"][0] == 10.0
+    assert exp["long__out"][0].tolist() == [2.0, 6.0, 4.0]
+    assert exp["picked"][0] == 6.0
 
 
 def test_component_function_rejects_invalid_signatures_and_calls():

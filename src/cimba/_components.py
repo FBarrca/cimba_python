@@ -3206,7 +3206,17 @@ class _ComponentFunctionBuilder:
                 receiver_name=receiver_name, method=method,
                 label=label).visit(node)
 
-            symbol = (
+            # Two names, because callers and the compiler want different
+            # things. `symbol` identifies the declaration: callers bind
+            # helpers into their namespace under it, and two collections of
+            # the same class can lower to helpers with different signatures
+            # (only a multi-instance one takes a receiver index), so sharing
+            # one name across declarations binds the wrong helper.
+            # `canonical` names the generated function itself and so decides
+            # source_key: keeping it per class/method lets structurally
+            # identical declarations share one compiled helper via the cache.
+            symbol = f"_CIMBA_FUNCTION_{graph_name}_{id(method):x}"
+            canonical = (
                 f"_CIMBA_FUNCTION_{decl.cls.__name__}_{method_name}_"
                 f"{id(method):x}"
                 + ("" if variant is None else f"_V{variant}"))
@@ -3222,7 +3232,7 @@ class _ComponentFunctionBuilder:
             lowered = lowerer.visit(node)
             if not isinstance(lowered, ast.FunctionDef):
                 raise TypeError(f"{label} lowering produced a non-function")
-            lowered.name = symbol
+            lowered.name = canonical
             lowered.decorator_list = []
             lowered.type_comment = None
             lowered.returns = None
@@ -3285,8 +3295,8 @@ class _ComponentFunctionBuilder:
                     lowered,
                     filename=f"<cimba component function "
                              f"'{decl.name}.{method_name}'>",
-                    fn_name=symbol,
-                    qualname=symbol,
+                    fn_name=canonical,
+                    qualname=canonical,
                     namespace=namespace,
                     like=method,
                 )
