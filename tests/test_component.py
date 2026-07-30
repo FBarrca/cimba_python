@@ -3197,6 +3197,125 @@ def test_component_refs_table_errors_are_rejected():
         MixedCollections()
 
 
+def test_component_refs_table_accepts_a_single_item_collection():
+    # A collection of one stores its fields unindexed, so the resolved item
+    # index is None; the table still addresses item 0.
+    class Router(sim.Component):
+        sent: sim.State
+        inbox: sim.Store
+        targets: sim.Refs[RefNode]
+
+        def __init__(self, targets=()):
+            self.targets = tuple(targets)
+
+        @sim.process
+        def route(self, env):
+            while True:
+                item = self.inbox.take()
+                self.sent += 1
+                self.targets[item % 1].inbox.put(item)   # dynamic index
+
+        @sim.process
+        def probe(self, env):
+            self.targets[0].inbox.put(999)               # constant index
+            sim.suspend()
+
+    solo = [RefNode()]
+
+    class Single(sim.Model):
+        nodes: list[RefNode] = solo
+        router: Router = Router(targets=tuple(solo))
+
+    model = Single()
+
+    @model.process
+    def feed(env: Single):
+        for i in range(6):
+            env.router.inbox.put(i)
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=5)
+    assert exp.run() == 0
+    assert exp.trials["router__sent"][0] == 6
+    # the one-item collection flattens to a scalar field
+    assert int(exp.trials["nodes__got"][0]) == 7
+
+    # an out-of-range constant index is still caught
+    class OutOfRange(sim.Component):
+        targets: sim.Refs[RefNode]
+
+        def __init__(self, targets=()):
+            self.targets = tuple(targets)
+
+        @sim.process
+        def go(self, env):
+            self.targets[1].inbox.put(1)
+            sim.suspend()
+
+    other = [RefNode()]
+
+    class TooFar(sim.Model):
+        nodes: list[RefNode] = other
+        router: OutOfRange = OutOfRange(targets=tuple(other))
+
+    with pytest.raises(ValueError, match="out of range"):
+        TooFar().experiment(replications=1, duration=1.0)
+
+
+def test_component_refs_tables_may_differ_in_length_per_instance():
+    class Router(sim.Component):
+        seen: sim.State
+        targets: sim.Refs[RefNode]
+
+        def __init__(self, targets=()):
+            self.targets = tuple(targets)
+
+        @sim.process
+        def go(self, env):
+            self.targets[0].inbox.put(1)
+            self.seen += self.targets[0].tag
+            sim.suspend()
+
+    pool = [RefNode(tag=10), RefNode(tag=20), RefNode(tag=30)]
+
+    class Fleet(sim.Model):
+        nodes: list[RefNode] = pool
+        routers: list[Router] = [
+            Router(targets=(pool[2],)),               # a one-entry table
+            Router(targets=(pool[0], pool[1])),
+        ]
+
+    model = Fleet()
+
+    @model.process
+    def run(env: Fleet):
+        sim.suspend()
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=5)
+    assert exp.run() == 0
+    assert exp.trials["routers__seen"][0].tolist() == [30, 10]
+    assert exp.trials["nodes__got"][0].tolist() == [1, 0, 1]
+
+
+def test_component_refs_table_rejects_a_lone_component_by_name():
+    class Router(sim.Component):
+        targets: sim.Refs[RefNode]
+
+        def __init__(self, targets=()):
+            self.targets = tuple(targets)
+
+        @sim.process
+        def go(self, env):
+            self.targets[0].inbox.put(1)
+            sim.suspend()
+
+    with pytest.raises(ValueError, match="'sink' is a lone component"):
+        class LoneTarget(sim.Model):
+            sink: RefNode = RefNode()
+            router: Router = Router(targets=(sink,))
+
+        LoneTarget()
+
+
 def test_component_ref_usage_errors_are_rejected():
     left, right = RefNode(), RefNode()
     left.downstream = right

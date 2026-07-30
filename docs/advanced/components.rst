@@ -380,8 +380,9 @@ references it (values can also be attached post-declaration, e.g.
 ``Line.station_1.downstream = Line.station_2`` before instantiating).
 
 ``sim.Refs`` declares a routing table for runtime decisions. All entries must
-be items of a single component collection, so the lookup lowers to array
-indexing:
+be items of a single component collection -- a collection of one included, so a
+table need not be special-cased at its degenerate size -- and the lookup lowers
+to array indexing:
 
 .. code-block:: python
 

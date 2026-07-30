@@ -1367,14 +1367,21 @@ def _resolve_component_ref_decl(
     entries = [target for table in resolved for target in table]
     if entries:
         first = entries[0][0]
-        if (any(target[0] is not first for target in entries)
-                or first.count <= 1):
+        if any(target[0] is not first for target in entries):
             raise ValueError(
                 f"component '{decl.name}' refs table '{ref.name}' entries "
                 "must all be items of a single component collection")
+        if not first.collection:
+            raise ValueError(
+                f"component '{decl.name}' refs table '{ref.name}' entries "
+                f"must all be items of a single component collection; "
+                f"'{first.name}' is a lone component, not a collection")
         ref.table_decl = first
     ref.table_indices = tuple(
-        target[1] for table in resolved for target in table)
+        # A one-item collection stores its fields unindexed, so identity
+        # reports no item index for it; the table still addresses item 0.
+        0 if target[1] is None else target[1]
+        for table in resolved for target in table)
     ref.table_lengths, ref.table_offsets = _offsets_from_counts(
         len(table) for table in resolved)
 
