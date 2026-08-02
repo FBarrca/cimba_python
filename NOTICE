@@ -1,5 +1,5 @@
 cimba (Python wrapper)
-Copyright (c) 2026 FBarrca
+Copyright (c) 2026 Francisco Barragán Castro
 Licensed under the Apache License, Version 2.0 (see LICENSE).
 
 This product bundles, in compiled form within its binary wheels, the Cimba

@@ -15,7 +15,7 @@ else:
     release = "0.5.2"
     version = release
 
-copyright = "Asbjorn M. Bonvik 2025-26"
+copyright = "Francisco Barragán Castro 2025-26"
 
 extensions = [
     "sphinx.ext.autodoc",

@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
-authors = [{ name = "FBarrca", email = "franbarragan87@gmail.com" }]
+authors = [{ name = "Francisco Barragán Castro", email = "franbarragan87@gmail.com" }]
 keywords = ["simulation", "discrete-event-simulation", "cimba", "numba"]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
