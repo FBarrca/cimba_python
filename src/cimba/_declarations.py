@@ -162,7 +162,7 @@ class _Declarations:
 # --- Declaration markers --------------------------------------------------------
 
 if TYPE_CHECKING:
-    from typing import Union
+    from typing import Annotated
 
     import numpy as np
     from numpy.typing import NDArray
@@ -336,15 +336,12 @@ if TYPE_CHECKING:
     PQueues = Sequence[_PQueueHandle]
     #: the same-named @model.process, created at runtime by sim.spawn()
     Spawnable = int
-    #: reference to another declared component instance; Ref[Station]
-    #: type-checks as Station
-    Ref = Union
-    #: indexable table of component references; Refs[Station][i]
-    #: type-checks as Station
-    Refs = Sequence
-    #: per-instance constant read inside component code; Const[int]
-    #: type-checks as int
-    Const = Union
+    # These aliases erase to the usable field types for static checkers.  The
+    # runtime branch retains marker classes because declaration parsing needs
+    # their _RefHint and _ConstHint instances.
+    type Ref[T] = Annotated[T, "cimba component reference"]
+    type Refs[T] = Annotated[Sequence[T], "cimba component reference table"]
+    type Const[T] = Annotated[T, "cimba per-instance constant"]
 
     class _RefHint:
         target: Any

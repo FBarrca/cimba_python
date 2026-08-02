@@ -4,6 +4,37 @@ import pytest
 import cimba.sim as sim
 
 
+def test_component_marker_annotations_collect_runtime_hints():
+    class Supplier(sim.Component):
+        priority: sim.Const[int]
+
+        def __init__(self, priority):
+            self.priority = priority
+
+    class Consumer(sim.Component):
+        count: sim.Const[int]
+        supplier: sim.Ref[Supplier]
+        suppliers: sim.Refs[Supplier]
+
+        def __init__(self, count, supplier, suppliers):
+            self.count = count
+            self.supplier = supplier
+            self.suppliers = suppliers
+
+    first = Supplier(1)
+    second = Supplier(2)
+
+    class Network(sim.Model):
+        suppliers: list[Supplier] = [first, second]
+        consumer: Consumer = Consumer(3, first, (first, second))
+
+    consumer = next(decl for decl in Network()._component_decls
+                    if decl.name == "consumer")
+    assert consumer.decls.consts == {"count": int}
+    assert consumer.decls.refs == {"supplier": Supplier}
+    assert consumer.decls.ref_tables == {"suppliers": Supplier}
+
+
 def test_nested_component_uses_concrete_default_function_override():
     class Policy(sim.Component):
         @sim.function

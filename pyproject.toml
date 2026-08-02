@@ -39,7 +39,7 @@ Issues = "https://github.com/FBarrca/cimba_python/issues"
 "Upstream C library" = "https://github.com/ambonvik/cimba"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "pyright>=1.1"]
 # Build tools in the project venv for the no-build-isolation editable install
 # below. (build-system.requires covers isolated wheel builds.)
 build = ["meson-python>=0.16", "meson>=1.1", "ninja", "cffi>=1.15", "cython>=3.0"]

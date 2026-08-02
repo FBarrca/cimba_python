@@ -1,0 +1,5 @@
+{
+  "pythonVersion": "3.13",
+  "extraPaths": ["src"],
+  "include": ["tests/typecheck"]
+}
