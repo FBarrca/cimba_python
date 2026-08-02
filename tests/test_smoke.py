@@ -1116,9 +1116,14 @@ def test_process_struct_cross_access():
 
 
 def test_legacy_spawnable_declaration_explains_decorator_migration():
-    with pytest.raises(ValueError, match="spawnable=True"):
+    def declare_legacy_model():
         class Legacy(sim.Model):
             worker: sim.Spawnable
+
+        return Legacy()
+
+    with pytest.raises(ValueError, match="spawnable=True"):
+        declare_legacy_model()
 
 
 def test_spawn_and_despawn():
