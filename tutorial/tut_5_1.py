@@ -115,7 +115,6 @@ class AssemblyLine(sim.Model):
     final_number_in_system: sim.Output
 
     generated_parts: sim.State
-    part_lifecycle: sim.Spawnable
     system: sim.Queue
     cycle_time: sim.Dataset
     finished_parts: FinishedParts = FinishedParts()
@@ -149,7 +148,7 @@ def build_model(raw_dir: Path) -> AssemblyLine:
             part.part_id = env.generated_parts
             part.arrival_system = sim.now()
 
-    @model.process
+    @model.process(spawnable=True)
     def part_lifecycle(env: AssemblyLine, item: Part):
         env.system.put(1)
         item.station_entry = sim.now()

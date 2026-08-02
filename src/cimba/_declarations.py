@@ -334,8 +334,8 @@ if TYPE_CHECKING:
 
     #: indexable array of priority queues; default declares the count
     PQueues = Sequence[_PQueueHandle]
-    #: the same-named @model.process, created at runtime by sim.spawn()
-    Spawnable = int
+    class Spawnable:
+        """Legacy annotation retained only to report its migration error."""
     # These aliases erase to the usable field types for static checkers.  The
     # runtime branch retains marker classes because declaration parsing needs
     # their _RefHint and _ConstHint instances.
@@ -384,7 +384,8 @@ else:
     class Event(_Decl): ...
     class Processes(_Decl): ...
     class PQueues(_Decl): ...
-    class Spawnable(_Decl): ...
+    class Spawnable(_Decl):
+        """Legacy annotation retained only to report its migration error."""
 
     class Trace(_Decl):
         def __new__(cls, *args, **kwargs):
@@ -462,7 +463,6 @@ else:
                    Event: _FIELD_KINDS["event"],
                    Processes: _FIELD_KINDS["processes"],
                    PQueues: _FIELD_KINDS["pqueues"],
-                   Spawnable: _FIELD_KINDS["spawnable"],
                    Trace: _FIELD_KINDS["trace"]}
 
     _trace_data = ptr_caster(types.float64)
@@ -526,10 +526,16 @@ def _field_declarations(
     *,
     allow_symbolic_pqueues: bool = False,
     allow_refs: bool = False,
+    generated_spawnables: Iterable[str] = (),
 ) -> _Declarations:
     """Collect direct env field declarations from a Model/Component class."""
     decls = _Declarations()
     for fname, hint in class_type_hints(cls).items():
+        if hint is Spawnable:
+            raise ValueError(
+                f"field '{fname}': sim.Spawnable has been replaced by "
+                "@model.process(spawnable=True) or "
+                "@sim.process(spawnable=True)")
         if isinstance(hint, _RefHint):
             if not allow_refs:
                 raise ValueError(
@@ -589,4 +595,12 @@ def _field_declarations(
                     f"field '{fname}': only Queue/Pool/Store declarations "
                     "and Param declarations may carry a default")
             decls.add(_FieldDecl(fname, kind))
+    for fname in generated_spawnables:
+        existing = decls.fields.get(fname)
+        if existing is None:
+            decls.add(_FieldDecl(fname, _FIELD_KINDS["spawnable"]))
+        elif existing.kind.name != "spawnable":
+            raise ValueError(
+                f"spawnable process '{cls.__name__}.{fname}' conflicts "
+                f"with its {existing.kind.name} field declaration")
     return decls

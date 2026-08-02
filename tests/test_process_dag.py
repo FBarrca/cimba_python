@@ -77,7 +77,6 @@ def test_process_dag_mermaid_and_dot_output_are_stable():
 
 def test_process_dag_infers_spawn_store_pqueues_and_conditions():
     class Park(sim.Model):
-        visitor: sim.Spawnable
         departed: sim.Store
         ride_queues: sim.PQueues = sim.count(1)
         ready: sim.Condition
@@ -90,7 +89,7 @@ def test_process_dag_infers_spawn_store_pqueues_and_conditions():
         sim.spawn(env.visitor, env)
         env.ready.signal()
 
-    @model.process
+    @model.process(spawnable=True)
     def visitor(env: Park):
         env.ride_queues[0].put(sim.current(), 0)
         env.ready.wait_for(env.ready_pred)

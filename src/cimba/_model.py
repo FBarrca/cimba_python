@@ -52,6 +52,7 @@ from ._declarations import (
     _FIELD_KINDS,
     _FieldDecl,
     _STANDARD_FIELDS,
+    Spawnable,
     class_type_hints,
 )
 from ._graph import (ProcessDAG, ProcessDAGBlock, ProcessDAGEdge,
@@ -197,8 +198,8 @@ class _ProcDecl:
     struct: type[Struct] | None    # per-process fields, if any
     injected: bool                 # fn receives its own struct view
     spawnable: bool                # created by sim.spawn(), not at setup
-    spawn_field: str | None = None # env Spawnable field descriptor lands in
-    spawn_index: int | None = None # shaped Spawnable field element, if any
+    spawn_field: str | None = None # env spawn descriptor lands in
+    spawn_index: int | None = None # shaped descriptor element, if any
     process_field: str | None = None # env Processes field handles land in
     process_offset: int = 0        # first handle slot for this process
 
@@ -217,10 +218,10 @@ class _Compiled(TypedDict):
     procs: dict[str, Any]
     preds: dict[str, Any]
     user_events: dict[str, Any]
-    #: per-Spawnable-field descriptor arrays sim.spawn() reads:
+    #: per-spawn-descriptor arrays sim.spawn() reads:
     #: [cfunc address, name cstring, allocation size]
     spawns: dict[str, np.ndarray]
-    #: (Spawnable env field, optional shaped-field index, process name)
+    #: (spawn descriptor field, optional shaped-field index, process name)
     #: assignments applied to the experiment table.
     spawn_assignments: tuple[tuple[str, int | None, str], ...]
     #: njit collect dispatchers in execution order (components, then model)
@@ -548,6 +549,15 @@ class Model:
 
     _source: str
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        for name, annotation in vars(cls).get("__annotations__", {}).items():
+            if annotation is Spawnable:
+                raise ValueError(
+                    f"field '{name}': sim.Spawnable has been replaced by "
+                    "@model.process(spawnable=True) or "
+                    "@sim.process(spawnable=True)")
+
     def __init__(self, name: str | None = None, *,
                  params: Iterable[str] = (),
                  outputs: Iterable[str] = (),
@@ -765,7 +775,7 @@ class Model:
         self, decl: _ComponentDecl,
     ) -> None:
         """Lower and register one decl's process and collect methods.
-        Spawnable methods are always per-instance -- the spawn descriptor
+        Spawnable process methods are always per-instance -- the spawn descriptor
         is what identifies the instance at runtime."""
         components = self._component_bindings[decl.name]
         if decl.polymorphic:
@@ -787,10 +797,11 @@ class Model:
                             and representative
                             in decl.field_owners[method_name])
                         else None)
+                    spawnable = spec.spawnable or field_kind == "spawnable"
                     # Descriptor and handle slots are per logical instance;
                     # retain per-instance registration for these two field
                     # kinds while grouping ordinary scheduled processes.
-                    if field_kind in ("spawnable", "processes"):
+                    if spawnable or field_kind == "processes":
                         for position, index in enumerate(indices):
                             lowered = _lower_component_process(
                                 decl.process_names[index], decl, method_name,
@@ -802,7 +813,7 @@ class Model:
                                 component_functions=self._component_functions)
                             spawn_field = (
                                 decl.direct_field_map[method_name]
-                                if field_kind == "spawnable" else None)
+                                if spawnable else None)
                             spawn_index = None
                             if spawn_field is not None:
                                 owners = decl.field_owners[method_name]
@@ -870,6 +881,7 @@ class Model:
                     component, f"{decl.process_names[index]}.{method_name}")
                 for index, component in enumerate(components))
             field_kind = decl.decls.kind_of(method_name)
+            spawnable = spec.spawnable or field_kind == "spawnable"
 
             def lower_instance(index: int) -> Any:
                 return _lower_component_process(
@@ -880,7 +892,7 @@ class Model:
                     model_entity_fields=self.entity_fields,
                     component_functions=self._component_functions)
 
-            if field_kind == "spawnable":
+            if spawnable:
                 spawn_field = decl.direct_field_map[method_name]
                 for index in range(decl.count):
                     self.process(
@@ -1098,11 +1110,13 @@ class Model:
     @overload
     def process(self, fn: None = None, *, copies: int = 1,
                 priority: int = 0,
-                struct: "type[Struct] | None" = None
+                struct: "type[Struct] | None" = None,
+                spawnable: bool = False,
                 ) -> Callable[[_F], _F]: ...
 
     def process(self, fn=None, *, copies: int = 1, priority: int = 0,
-                struct=None, _spawn_field: str | None = None,
+                struct=None, spawnable: bool = False,
+                _spawn_field: str | None = None,
                 _spawn_index: int | None = None,
                 _process_field: str | None = None,
                 _process_offset: int = 0):
@@ -1112,13 +1126,14 @@ class Model:
         `def fn(env, vip: Visitor)` or `def fn(env, idx, vip: Visitor)`.
         copies=n starts n identical processes; priority sets the cimba
         process priority; struct= attaches the per-process fields without
-        the view parameter. A process named in a sim.Spawnable field is
-        not started at setup -- sim.spawn(env.<name>, env) creates it at
-        runtime. Component-owned sim.Spawnable fields bind to same-named
-        component process methods."""
+        the view parameter. spawnable=True leaves a process unstarted at
+        setup and publishes it as env.<name>, so sim.spawn(env.<name>, env)
+        creates it at runtime. Component processes use the same decorator
+        and publish their descriptor at the component path."""
         if fn is None:
             return lambda f: self.process(f, copies=copies,
                                           priority=priority, struct=struct,
+                                          spawnable=spawnable,
                                           _spawn_field=_spawn_field,
                                           _spawn_index=_spawn_index,
                                           _process_field=_process_field,
@@ -1177,9 +1192,11 @@ class Model:
             name in self._spawnable_fields
             and name not in self._component_spawnable_fields
         )
-        spawnable = public_spawnable or _spawn_field is not None
+        generated_spawnable = spawnable and not public_spawnable \
+            and _spawn_field is None
+        spawnable = spawnable or public_spawnable or _spawn_field is not None
         spawn_field = _spawn_field if _spawn_field is not None else (
-            name if public_spawnable else None)
+            name if spawnable else None)
         spawn_index = _spawn_index if _spawn_field is not None else None
         process_field = _process_field if _process_field is not None else (
             name if name in self._process_fields else None)
@@ -1187,6 +1204,7 @@ class Model:
         publishes_field = (
             process_field is not None
             or public_spawnable
+            or generated_spawnable
             or (spawn_field is not None and name == spawn_field)
         )
         if publishes_field:
@@ -1196,7 +1214,8 @@ class Model:
                 raise RuntimeError("model is already compiled")
             if any(p.name == name for p in self._processes):
                 raise ValueError(f"process '{name}' already registered")
-            if process_field is not None and process_field != name:
+            if ((process_field is not None and process_field != name)
+                    or generated_spawnable):
                 self._register_name(name, "process")
         else:
             self._register_name(name, "process")
@@ -1589,6 +1608,10 @@ class Model:
         fields += [(f, "<i8") for _n, _fn, f, _d in self._events
                    if f.startswith("_ev_")]
         fields += [self._field_spec(s, "<i8") for s in self._spawnable_fields]
+        fields += [(p.spawn_field, "<i8") for p in self._processes
+                   if p.spawnable and p.spawn_field is not None
+                   and p.spawn_field not in self._spawnable_fields
+                   and p.spawn_field not in self._component_spawnable_fields]
         process_fields_added: set[str] = set()
         for p in self._processes:
             if p.spawnable:

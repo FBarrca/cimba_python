@@ -22,7 +22,7 @@ what to do next.
 Dynamic processes
 -----------------
 
-A process named in a ``sim.Spawnable`` field is created at runtime with
+A process decorated with ``spawnable=True`` is created at runtime with
 ``sim.spawn(env.<name>, env, priority=0)``. The returned handle can be used to
 initialize its ``sim.Struct`` fields before it first runs. Finished spawned
 processes can be reclaimed with ``sim.despawn(handle)``. Component-owned

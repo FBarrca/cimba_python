@@ -213,6 +213,7 @@ class _ComponentProcessSpec:
 
     copies: int | str = 1
     priority: int = 0
+    spawnable: bool = False
 
     def resolve_copies(self, component: Component, label: str) -> int:
         """The copy count for one instance: the literal int, or the value
@@ -233,10 +234,11 @@ def process(fn: _F) -> _F: ...
 
 @overload
 def process(fn: None = None, *, copies: int | str = 1,
-            priority: int = 0) -> Callable[[_F], _F]: ...
+            priority: int = 0, spawnable: bool = False) -> Callable[[_F], _F]: ...
 
 
-def process(fn=None, *, copies: int | str = 1, priority: int = 0):
+def process(fn=None, *, copies: int | str = 1, priority: int = 0,
+            spawnable: bool = False):
     """Mark a ``Component`` method to be registered as a model process."""
     if isinstance(copies, int):
         if copies < 1:
@@ -245,6 +247,8 @@ def process(fn=None, *, copies: int | str = 1, priority: int = 0):
         _check_name(copies, "copies constant")
     else:
         raise TypeError("copies must be an int or the name of an int constant")
+    if spawnable and copies != 1:
+        raise ValueError("spawnable component processes cannot take copies")
 
     def decorate(f):
         if getattr(f, _COMPONENT_COLLECT_ATTR, False):
@@ -256,7 +260,7 @@ def process(fn=None, *, copies: int | str = 1, priority: int = 0):
                 f"'{f.__qualname__}' cannot be both a component process "
                 "and a component function")
         setattr(f, _COMPONENT_PROCESS_ATTR,
-                _ComponentProcessSpec(copies, priority))
+                _ComponentProcessSpec(copies, priority, spawnable))
         return f
 
     if fn is None:
@@ -547,8 +551,11 @@ class _ComponentDecl:
 # flattens every declared field into the model-level declarations dict.
 
 def _component_declarations(cls: type[Component]) -> _Declarations:
-    decls = _field_declarations(cls, allow_symbolic_pqueues=True,
-                                allow_refs=True)
+    decls = _field_declarations(
+        cls, allow_symbolic_pqueues=True, allow_refs=True,
+        generated_spawnables=(
+            name for name, _method, spec in _component_process_methods(cls)
+            if spec.spawnable))
     for field_decl in decls.fields.values():
         if not field_decl.kind.on_component:
             raise ValueError(
