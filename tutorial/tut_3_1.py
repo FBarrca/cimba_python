@@ -23,7 +23,7 @@ visitor's timers when boarding and resumes it after the ride.
 Translation notes (C -> cimba.sim):
 
 * Visitors are dynamic processes, as in C: arrivals sim.spawn()s one per
-  arrival through the sim.Spawnable `visitor` field and initializes its
+  arrival through the ``@sim.process(spawnable=True)`` `visitor` method and initializes its
   Visitor fields before it starts running (C's visitor_initialize). The
   per-visitor attributes are sim.Struct fields in the process's native
   allocation -- the Python form of the C tutorial deriving struct visitor
@@ -201,7 +201,6 @@ class VisitorFlow(sim.Component):
     reneges: sim.State
 
     # Entities
-    visitor: sim.Spawnable              # one spawned per arrival
     departed: sim.Store                 # finished visitors to reclaim
     d_park: sim.Dataset                 # time in park
     d_riding: sim.Dataset
@@ -228,7 +227,7 @@ class VisitorFlow(sim.Component):
         while True:
             sim.suspend()       # park entrance closed for today
 
-    @sim.process
+    @sim.process(spawnable=True)
     def visitor(self, env, vip: Visitor):
         me = sim.current()
         at = IDX_ENTRANCE

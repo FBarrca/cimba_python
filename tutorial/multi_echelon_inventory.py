@@ -220,7 +220,6 @@ class MultiEchelonInventory(sim.Model):
     base_lead_time: sim.Trace
     lead_time_delay: sim.Trace
 
-    shipment: sim.Spawnable
     completed_shipments: sim.Store
     lead_time_cursor: sim.State
 
@@ -237,7 +236,7 @@ class MultiEchelonInventory(sim.Model):
 model = MultiEchelonInventory("multi-echelon-inventory")
 
 
-@model.process
+@model.process(spawnable=True)
 def shipment(env: MultiEchelonInventory, shipment: Shipment):
     lead_time_delay = sim.Trace(env.lead_time_delay)
     base_lead_time = sim.Trace(env.base_lead_time)

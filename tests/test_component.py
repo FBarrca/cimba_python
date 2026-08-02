@@ -434,12 +434,11 @@ def test_polymorphic_subtype_spawnables_use_packed_descriptors():
     class Flow(Policy):
         amount: sim.Const[int]
         count: sim.State
-        worker: sim.Spawnable
 
         def __init__(self, amount):
             self.amount = amount
 
-        @sim.process
+        @sim.process(spawnable=True)
         def worker(self, env):
             self.count += self.amount
 
@@ -2332,15 +2331,48 @@ def test_nested_component_collection_pqueues_use_nested_offsets():
     assert exp.trials["zones__gates__hits"][0].tolist() == [0, 12, 0]
 
 
-def test_nested_component_owned_spawnable_runs_with_struct_view():
+def test_component_spawnable_process_uses_decorator():
+    class Flow(sim.Component):
+        count: sim.State
+
+        @sim.process(spawnable=True)
+        def visitor(self, env):
+            self.count += 1
+
+        @sim.process
+        def launch(self, env):
+            handle = sim.spawn(self.visitor, env)
+            sim.wait_process(handle)
+            sim.despawn(handle)
+            sim.suspend()
+
+    class Network(sim.Model):
+        flow: Flow = Flow()
+
+    model = Network()
+    assert model.dtype["flow__visitor"].shape == ()
+    assert [
+        (p.name, p.spawnable, p.spawn_field, p.spawn_index)
+        for p in model._processes
+    ] == [
+        ("flow__visitor", True, "flow__visitor", None),
+        ("flow__launch", False, None, None),
+    ]
+
+    exp = model.experiment(replications=1, duration=5.0, warmup=0.0,
+                           seed=28)
+    assert exp.run() == 0
+    assert exp.trials["flow__count"][0] == 1
+
+
+def test_nested_component_spawnable_uses_decorator_with_struct_view():
     class Visitor(sim.Struct):
         weight: float
 
     class Entrance(sim.Component):
         total: sim.FloatState
-        visitor: sim.Spawnable
 
-        @sim.process
+        @sim.process(spawnable=True)
         def visitor(self, env, vip: Visitor):
             self.total += vip.weight
 
@@ -2382,12 +2414,11 @@ def test_nested_component_owned_spawnable_runs_with_struct_view():
 def test_component_collection_owned_spawnables_get_per_item_descriptors():
     class Flow(sim.Component):
         count: sim.State
-        worker: sim.Spawnable
 
         def __init__(self, amount: int):
             self.amount = amount
 
-        @sim.process
+        @sim.process(spawnable=True)
         def worker(self, env):
             self.count += self.amount
 
@@ -2417,6 +2448,14 @@ def test_component_collection_owned_spawnables_get_per_item_descriptors():
                            seed=29)
     assert exp.run() == 0
     assert exp.trials["flows__count"][0].tolist() == [2, 5]
+
+
+def test_component_spawnable_process_rejects_multiple_copies():
+    with pytest.raises(ValueError, match="spawnable.*copies"):
+        class Flow(sim.Component):
+            @sim.process(copies=2, spawnable=True)
+            def visitor(self, env):
+                sim.suspend()
 
 
 def test_scalar_component_can_own_process_handles():
@@ -2568,9 +2607,8 @@ def test_nested_component_collection_can_own_process_handles():
 def test_model_process_can_spawn_component_collection_field():
     class Flow(sim.Component):
         count: sim.State
-        visitor: sim.Spawnable
 
-        @sim.process
+        @sim.process(spawnable=True)
         def visitor(self, env):
             self.count += 1
 
@@ -2596,9 +2634,8 @@ def test_model_process_can_spawn_component_collection_field():
 def test_model_process_can_spawn_nested_component_spawnable_path():
     class Entrance(sim.Component):
         count: sim.State
-        visitor: sim.Spawnable
 
-        @sim.process
+        @sim.process(spawnable=True)
         def visitor(self, env):
             self.count += 1
 
@@ -2646,9 +2683,7 @@ def test_component_process_supports_indexed_struct_injection():
 
 def test_component_owned_spawnable_process_dag_edges():
     class Flow(sim.Component):
-        worker: sim.Spawnable
-
-        @sim.process
+        @sim.process(spawnable=True)
         def worker(self, env):
             sim.suspend()
 
@@ -2670,72 +2705,15 @@ def test_component_owned_spawnable_process_dag_edges():
     } <= edges
 
 
-def test_component_spawnable_declaration_errors_are_rejected():
-    class MissingWorker(sim.Component):
+def test_component_spawnable_annotation_explains_decorator_migration():
+    class LegacyFlow(sim.Component):
         worker: sim.Spawnable
 
-    class MissingModel(sim.Model):
-        flow: MissingWorker = MissingWorker()
+    class LegacyModel(sim.Model):
+        flow: LegacyFlow = LegacyFlow()
 
-    missing = MissingModel()
-
-    @missing.process
-    def idle(env: MissingModel):
-        sim.suspend()
-
-    with pytest.raises(ValueError, match="flow__worker"):
-        missing.experiment()
-
-    class CopiesWorker(sim.Component):
-        worker: sim.Spawnable
-
-        @sim.process(copies=2)
-        def worker(self, env):
-            sim.suspend()
-
-    class CopiesModel(sim.Model):
-        flow: CopiesWorker = CopiesWorker()
-
-    with pytest.raises(ValueError, match="cannot take copies"):
-        CopiesModel()
-
-    class IndexedWorker(sim.Component):
-        worker: sim.Spawnable
-
-        @sim.process
-        def worker(self, env, idx):
-            sim.suspend()
-
-    class IndexedModel(sim.Model):
-        flow: IndexedWorker = IndexedWorker()
-
-    with pytest.raises(ValueError, match="copy index"):
-        IndexedModel()
-
-    class Tag(sim.Struct):
-        value: int
-
-    class MisplacedView(sim.Component):
-        worker: sim.Spawnable
-
-        @sim.process
-        def worker(self, env, tag: Tag, idx):
-            sim.suspend()
-
-    class MisplacedModel(sim.Model):
-        flow: MisplacedView = MisplacedView()
-
-    with pytest.raises(ValueError, match="last parameter"):
-        MisplacedModel()
-
-    class BadDefault(sim.Component):
-        worker: sim.Spawnable = object()
-
-    class BadDefaultModel(sim.Model):
-        flow: BadDefault = BadDefault()
-
-    with pytest.raises(ValueError, match="only Queue/Pool/Store"):
-        BadDefaultModel()
+    with pytest.raises(ValueError, match="spawnable=True"):
+        LegacyModel()
 
 
 def test_nested_component_declaration_and_namespace_errors_are_rejected():

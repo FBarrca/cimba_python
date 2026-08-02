@@ -10,7 +10,7 @@ subclass whose annotated fields are typed by their simulation role:
 ``Model``, ``Component``, ``Experiment``, ``Env``, ``Handle``, ``Param``,
 ``Output``, ``State``, ``FloatState``, ``Const``, ``Queue``, ``Resource``,
 ``Pool``, ``Store``, ``Dataset``, ``Condition``, ``Predicate``, ``Event``,
-``Processes``, ``PQueues``, ``Ref``, ``Refs``, ``Spawnable``, ``Struct``,
+``Processes``, ``PQueues``, ``Ref``, ``Refs``, ``Struct``,
 ``Trace``, ``capacity()``, ``count()``, ``process()``, ``collect()``,
 ``function()``.
 
@@ -65,11 +65,11 @@ recursive convention, for example ``env.attraction.queues.line`` becomes
 ``attraction__queues__line``. Nested component process methods are also lowered
 with their component path in the process name.
 
-Components may declare ``sim.Spawnable`` fields. A component-owned spawnable
-binds to a same-named ``@sim.process`` method on that component, and can be
+Components may declare a spawnable process with
+``@sim.process(spawnable=True)``. It can be
 spawned from component or model code with natural paths such as
 ``sim.spawn(self.visitor, env)`` or
-``sim.spawn(env.park.entrance.visitor, env)``. Spawnable component processes
+``sim.spawn(env.park.entrance.visitor, env)``. These component processes
 may receive a final ``sim.Struct`` view parameter.
 
 Components may reference other declared components with ``sim.Ref[Target]``

@@ -1167,7 +1167,6 @@ spent waiting, and so on.
         rides: int
 
     class VisitorFlow(sim.Component):
-        visitor: sim.Spawnable
         departed: sim.Store
         d_park: sim.Dataset
         d_rides: sim.Dataset
@@ -1188,15 +1187,13 @@ processes, departure cleanup, counters, and datasets. The attractions will form
 a component collection because the park has several repeated ride stations with
 the same structure but different constants.
 
-``sim.Spawnable`` means visitor processes are created dynamically. The arrival
+``@sim.process(spawnable=True)`` marks visitor processes as dynamic. The arrival
 process spawns a new visitor and initializes its fields before the visitor first
 runs:
 
 .. code-block:: python
 
     class VisitorFlow(sim.Component):
-        visitor: sim.Spawnable
-
         @sim.process
         def arrivals(self, env):
             while True:
@@ -1207,15 +1204,17 @@ runs:
                 vip.patience = random.triangular(0.5, 1.0, 1.5)
                 vip.priority = 5 if random.bernoulli(0.25) else 0
 
+        @sim.process(spawnable=True)
+        def visitor(self, env, vip: Visitor):
+            ...
+
 The visitor process receives its own view as the final annotated parameter on
 the component method:
 
 .. code-block:: python
 
     class VisitorFlow(sim.Component):
-        visitor: sim.Spawnable
-
-        @sim.process
+        @sim.process(spawnable=True)
         def visitor(self, env, vip: Visitor):
             me = sim.current()
             vip.entry_queue = sim.now()
@@ -1225,7 +1224,7 @@ the component method:
             if sig == sim.SUCCESS:
                 vip.rides += 1
 
-Here, ``self.visitor`` is the component-owned spawnable field, while the ride
+Here, ``self.visitor`` is the component-owned spawnable process descriptor, while the ride
 queues live on the attraction components. Model callbacks and component
 processes can still use natural dotted paths such as
 ``env.attractions[0].queues.line[0]``; Cimba lowers those paths to the flat
@@ -1241,7 +1240,6 @@ arrival generation, visitor behavior, departure cleanup, counters, and datasets:
         jockeys: sim.State
         reneges: sim.State
 
-        visitor: sim.Spawnable
         departed: sim.Store
         d_park: sim.Dataset
         d_riding: sim.Dataset
@@ -1254,7 +1252,7 @@ arrival generation, visitor behavior, departure cleanup, counters, and datasets:
             # spawn visitors until closing time
             ...
 
-        @sim.process
+        @sim.process(spawnable=True)
         def visitor(self, env, vip: Visitor):
             # walk, queue, balk, renege, jockey, ride, and leave
             ...
@@ -1622,7 +1620,6 @@ contents for the simulated world:
 
 
     class ShipTraffic(sim.Component):
-        ship: sim.Spawnable
         departed: sim.Store
         time_small: sim.Dataset
         time_large: sim.Dataset
@@ -1699,8 +1696,6 @@ and when it arrived:
         arrival: float
 
     class ShipTraffic(sim.Component):
-        ship: sim.Spawnable
-
         @sim.process
         def arrivals(self, env):
             mean_interarrival = 1.0 / env.arrival_rate
@@ -1713,6 +1708,11 @@ and when it arrived:
                 shp.max_wind = MAX_WIND[shp.size]
                 shp.min_depth = MIN_DEPTH[shp.size]
                 shp.arrival = sim.now()
+
+        @sim.process(spawnable=True)
+        def ship(self, env, shp: Ship):
+            # Wait for safe harbor conditions, then unload and depart.
+            ...
 
 The spawned process starts when the current process next blocks, so the arrival
 process can initialize the ship fields immediately after ``sim.spawn()``. This

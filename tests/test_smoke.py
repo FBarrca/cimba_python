@@ -1115,6 +1115,12 @@ def test_process_struct_cross_access():
     assert exp["s1"][0] == 1.5 + 0.01 * 99
 
 
+def test_legacy_spawnable_declaration_explains_decorator_migration():
+    with pytest.raises(ValueError, match="spawnable=True"):
+        class Legacy(sim.Model):
+            worker: sim.Spawnable
+
+
 def test_spawn_and_despawn():
     # Dynamic process creation, the tut_3_1.c visitor lifecycle:
     # spawn, initialize the struct before it runs, join, despawn.
@@ -1127,11 +1133,10 @@ def test_spawn_and_despawn():
         distinct: sim.Output
         done: sim.State
         acc: sim.FloatState
-        worker: sim.Spawnable
 
     model = Factory()
 
-    @model.process
+    @model.process(spawnable=True)
     def worker(env: Factory, it: Item):
         sim.hold(1.0)
         env.done += 1
@@ -1160,17 +1165,40 @@ def test_spawn_and_despawn():
     assert exp["total"][0] == 6.5
 
 
+def test_decorated_model_process_is_spawnable():
+    class Agent(sim.Struct):
+        value: int
+
+    class Model(sim.Model):
+        finished: sim.Output
+
+    model = Model()
+
+    @model.process(spawnable=True)
+    def agent(env, item: Agent):
+        env.finished = item.value
+
+    @model.process
+    def start(env):
+        item = Agent(sim.spawn(env.agent, env))
+        item.value = 3
+        sim.hold(0.0)
+
+    experiment = model.experiment()
+    assert experiment.run() == 0
+    assert experiment.trials["finished"][0] == 3
+
+
 def test_spawned_leftovers_reclaimed():
     # Spawned processes still alive at trial end are stopped and
     # reclaimed like the static ones, and despawn is idempotent.
     class Hive(sim.Model):
         spawned: sim.Output
         redespawn_ok: sim.Output
-        drone: sim.Spawnable
 
     model = Hive()
 
-    @model.process
+    @model.process(spawnable=True)
     def drone(env: Hive):
         sim.suspend()       # blocks forever; never despawned
 
@@ -1194,30 +1222,13 @@ def test_spawned_leftovers_reclaimed():
     assert exp.run() == 0   # rerun on the same compiled trial
 
 
-def test_spawnable_declaration_errors():
-    class Loose(sim.Model):
-        x: sim.Param
-        ghost: sim.Spawnable
+def test_spawnable_decorator_rejects_multiple_copies():
+    model = sim.Model()
 
-    model = Loose()
-
-    with pytest.raises(ValueError, match="cannot take copies"):
-        @model.process(copies=3)
+    with pytest.raises(ValueError, match="spawnable.*copies"):
+        @model.process(copies=3, spawnable=True)
         def ghost(env):
             sim.hold(1.0)
-
-    with pytest.raises(ValueError, match="copy index"):
-        @model.process
-        def ghost(env, idx):  # noqa: F811
-            sim.hold(1.0)
-
-    @model.process
-    def lonely(env):
-        sim.hold(1.0)
-
-    # the Spawnable field never got its @process
-    with pytest.raises(ValueError, match="ghost"):
-        model.experiment(x=1.0)
 
 
 def test_kwargs_model_still_works():

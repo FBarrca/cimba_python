@@ -39,7 +39,7 @@ Concept translation (cimba -> sim API):
                       sim.stop(), sim.wait_process(), sim.wait_event(),
                       sim.resume(), sim.timer_set()/sim.timer_add()/
                       sim.timer_cancel(); dynamic creation via
-                      sim.Spawnable fields, sim.spawn()/sim.despawn()
+                      @model.process(spawnable=True), sim.spawn()/sim.despawn()
     derived structs   sim.Struct subclasses; a process declares its own
                       fields with a final `vip: Visitor` parameter, and
                       Visitor(handle) views any such process's fields
@@ -105,9 +105,9 @@ nopython helpers whose component field reads are passed as flattened scalar
 arguments.
 Components may contain nested components; paths such as
 ``env.attraction.queues.line``
-flatten to names such as ``attraction__queues__line``. A component-owned
-``sim.Spawnable`` field binds to the same-named component process method and
-can be spawned with paths such as ``sim.spawn(self.visitor, env)`` or
+flatten to names such as ``attraction__queues__line``. A component process
+marked ``@sim.process(spawnable=True)`` can be spawned with paths such as
+``sim.spawn(self.visitor, env)`` or
 ``sim.spawn(env.flow.visitor, env)``.
 Component-owned ``sim.Processes`` fields likewise publish handles for
 same-named fixed component process methods; component collections flatten
@@ -149,7 +149,7 @@ __all__ = [
     "Handle",
     "Param", "Output", "State", "FloatState", "Queue", "Resource", "Pool",
     "Store", "Dataset", "Condition", "Predicate", "Event", "Processes",
-    "PQueues", "Ref", "Refs", "Const", "Spawnable", "Struct", "Trace",
+    "PQueues", "Ref", "Refs", "Const", "Struct", "Trace",
     "capacity",
     "collect", "count", "function", "process", "trace_rng",
     "ProcessDAG", "ProcessDAGBlock", "ProcessDAGNode", "ProcessDAGEdge",
@@ -226,8 +226,8 @@ if TYPE_CHECKING:
 
     def spawn(process: int, env: Env, priority: int = 0) -> Handle:
         """Create and start a new copy of a spawnable process; `process`
-        is a sim.Spawnable env field or a lowered component-owned
-        sim.Spawnable path. The new process only begins running once the
+        is the descriptor published by a process decorated with
+        ``spawnable=True``. The new process only begins running once the
         caller blocks, so its sim.Struct fields (zeroed at creation) can
         be initialized through the returned handle first."""
         ...
@@ -323,7 +323,7 @@ else:
     resume = _b.process_resume
     suspend = _b.process_yield
 
-    # Dynamic process creation: a sim.Spawnable env field points at a
+    # Dynamic process creation: a spawnable process descriptor points at a
     # static descriptor [cfunc address, name cstring, allocation size]
     # built at model compile time (see _model._compile). Live spawns are
     # tracked in a per-trial native registry, so leftovers are stopped

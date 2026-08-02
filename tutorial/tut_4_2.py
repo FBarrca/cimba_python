@@ -16,7 +16,7 @@ Translation notes (C -> cimba.sim):
   state and processes, HarborFacilities owns tugs/berths/radio/condition,
   and ShipTraffic owns arrivals, dynamic ships, departures, and datasets.
 * Ships are dynamic processes, as in C: arrivals sim.spawn()s one per
-  arrival through the component-owned sim.Spawnable `ship` field and
+  arrival through the component-owned ``@sim.process(spawnable=True)`` `ship` method and
   initializes its Ship fields before it starts running (C's
   ship_initialize). The per-ship attributes are sim.Struct fields in the
   process allocation -- the Python form of the C tutorial deriving struct
@@ -119,7 +119,6 @@ class HarborFacilities(sim.Component):
 
 
 class ShipTraffic(sim.Component):
-    ship: sim.Spawnable              # one spawned per arrival
     departed: sim.Store              # finished ships to reclaim
     time_small: sim.Dataset          # time in system
     time_large: sim.Dataset
@@ -137,7 +136,7 @@ class ShipTraffic(sim.Component):
             shp.min_depth = MIN_DEPTH[shp.size]
             shp.arrival = sim.now()
 
-    @sim.process
+    @sim.process(spawnable=True)
     def ship(self, env, shp: Ship):
         me = sim.current()
         if shp.size == LARGE:

@@ -4,7 +4,7 @@ Structs and Spawnables
 Core models often treat arrivals as counts. Agent-heavy models need each
 arrival to carry its own state: arrival time, priority, service choice,
 patience, or accumulated outcomes. Use ``sim.Struct`` for per-process fields
-and ``sim.Spawnable`` for processes created during a trial.
+and ``spawnable=True`` for processes created during a trial.
 
 Per-process fields
 ------------------
@@ -21,14 +21,13 @@ or ``float``:
 
 
    class Clinic(sim.Model):
-       patients: sim.Spawnable
        completed: sim.State
 
 
    model = Clinic("clinic")
 
 
-   @model.process
+   @model.process(spawnable=True)
    def patients(env: Clinic, patient: Patient):
        patient.wait_started = sim.now()
        # The process can use its own fields throughout the visit.
@@ -40,8 +39,8 @@ struct view.
 Dynamic process creation
 ------------------------
 
-Declare a ``sim.Spawnable`` field with the same name as the process that should
-be created dynamically:
+The ``patients`` process above is decorated with ``spawnable=True``. Spawn it
+from a regular process:
 
 .. code-block:: python
 
@@ -82,7 +81,6 @@ and have a cleanup process despawn them:
 .. code-block:: python
 
    class Clinic(sim.Model):
-       patients: sim.Spawnable
        departures: sim.Store
 
 
@@ -93,7 +91,7 @@ and have a cleanup process despawn them:
            sim.despawn(handle)
 
 
-   @model.process
+   @model.process(spawnable=True)
    def patients(env: Clinic, patient: Patient):
        # ... patient journey ...
        env.departures.put(sim.current())
@@ -104,25 +102,23 @@ explicit cleanup keeps long trials from accumulating completed agents.
 Component-owned spawnables
 --------------------------
 
-Components can own spawnable fields. This keeps dynamic agents close to the
+Components can own spawnable processes. This keeps dynamic agents close to the
 subsystem that creates them:
 
 .. code-block:: python
 
    class Intake(sim.Component):
-       patient: sim.Spawnable
-
        @sim.process
        def arrivals(self, env):
            handle = sim.spawn(self.patient, env)
            Patient(handle).arrival = sim.now()
 
-       @sim.process
+       @sim.process(spawnable=True)
        def patient(self, env, p: Patient):
            sim.hold(random.exponential(env.mean_service))
 
 Use this when the dynamic process is naturally part of a component. Use a
-model-level ``sim.Spawnable`` when the dynamic process crosses many domains.
+model-level ``@model.process(spawnable=True)`` when it crosses many domains.
 
 For a larger worked example with dynamic agents and resources, see
 :doc:`../tutorial`.
