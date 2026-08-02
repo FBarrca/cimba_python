@@ -16,6 +16,7 @@ builddir/
 
 # Test / tooling caches
 .pytest_cache/
+.worktrees/
 
 # Virtual environments
 .venv
