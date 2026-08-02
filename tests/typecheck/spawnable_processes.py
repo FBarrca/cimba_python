@@ -27,8 +27,10 @@ class Material(sim.Component):
     def reorder(self, env):
         direct = sim.spawn(self.replenishment, env)
         nested = sim.spawn(self.policy.allocate, env)
-        Shipment(direct)
-        Shipment(nested)
+        direct_shipment = Shipment(direct)
+        nested_shipment = Shipment(nested)
+        direct_shipment.amount = 1
+        nested_shipment.amount = 2
 
     @sim.process
     def ordinary(self, env):

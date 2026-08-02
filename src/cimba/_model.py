@@ -19,7 +19,7 @@ import hashlib
 import inspect
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import (TYPE_CHECKING, Any, TypedDict, TypeVar, get_type_hints,
+from typing import (TYPE_CHECKING, Any, Self, TypedDict, TypeVar, get_type_hints,
                     overload)
 
 import numpy as np
@@ -146,7 +146,7 @@ class Struct:
     if TYPE_CHECKING:
         def __init__(self, process: Handle) -> None: ...
 
-    def __new__(cls, *args: Any, **kwargs: Any) -> "Struct":
+    def __new__(cls, *args: Any, **kwargs: Any) -> Self:
         raise TypeError(f"{cls.__name__}(handle) views are only available "
                         "inside compiled model code")
 
