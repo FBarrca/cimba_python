@@ -135,7 +135,8 @@ from numba import types as _nbtypes
 from . import _bindings as _b
 from ._intrinsics import ptr_caster as _ptr_caster
 from ._intrinsics import record_addr as _record_addr
-from ._components import Component, collect, function, process
+from ._components import (Component, SpawnableProcess, collect, function,
+                          process)
 from ._declarations import (Condition, Const, Dataset, Env, Event, FloatState,
                             Handle, Output, Param, Pool, PQueues, Predicate,
                             Processes, Queue, Ref, Refs, Resource, Spawnable,
@@ -150,6 +151,7 @@ __all__ = [
     "Param", "Output", "State", "FloatState", "Queue", "Resource", "Pool",
     "Store", "Dataset", "Condition", "Predicate", "Event", "Processes",
     "PQueues", "Ref", "Refs", "Const", "Struct", "Trace",
+    "SpawnableProcess",
     "capacity",
     "collect", "count", "function", "process", "trace_rng",
     "ProcessDAG", "ProcessDAGBlock", "ProcessDAGNode", "ProcessDAGEdge",
@@ -224,7 +226,8 @@ if TYPE_CHECKING:
         """Resume a process stopped with sim.stop()."""
         ...
 
-    def spawn(process: int, env: Env, priority: int = 0) -> Handle:
+    def spawn(process: SpawnableProcess, env: Env,
+              priority: int = 0) -> Handle:
         """Create and start a new copy of a spawnable process; `process`
         is the descriptor published by a process decorated with
         ``spawnable=True``. The new process only begins running once the

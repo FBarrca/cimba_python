@@ -54,7 +54,8 @@ import textwrap
 import weakref
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, TypeVar, get_args, get_origin, get_type_hints, overload
+from typing import (Any, Literal, TypeVar, get_args, get_origin,
+                    get_type_hints, overload)
 
 import numpy as np
 from numba import njit, types
@@ -228,13 +229,28 @@ class _ComponentProcessSpec:
         return value
 
 
+class SpawnableProcess:
+    """Static marker for a process declared with ``spawnable=True``.
+
+    At runtime a decorated method remains the authoring function; the marker
+    exists solely so static checkers can distinguish dynamic spawn targets.
+    """
+
+
 @overload
 def process(fn: _F) -> _F: ...
 
 
 @overload
+def process(fn: None = None, *, copies: Literal[1] = 1,
+            priority: int = 0,
+            spawnable: Literal[True]) -> Callable[[_F], SpawnableProcess]: ...
+
+
+@overload
 def process(fn: None = None, *, copies: int | str = 1,
-            priority: int = 0, spawnable: bool = False) -> Callable[[_F], _F]: ...
+            priority: int = 0,
+            spawnable: Literal[False] = False) -> Callable[[_F], _F]: ...
 
 
 def process(fn=None, *, copies: int | str = 1, priority: int = 0,
