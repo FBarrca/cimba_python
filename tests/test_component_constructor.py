@@ -64,15 +64,74 @@ def test_component_constructor_rejects_unknown_and_runtime_fields():
         state: sim.State
         output: sim.Output
         queue: sim.Queue
-        target: sim.Ref[Leaf]
         child: Leaf
 
-    for name in ("state", "output", "queue", "target", "child"):
+    for name in ("state", "output", "queue", "child"):
         with pytest.raises(TypeError, match=f"field '{name}'.*runtime"):
             RuntimeFields(**{name: object()})
 
     with pytest.raises(TypeError, match="unexpected keyword argument 'other'"):
         RuntimeFields(other=1)
+
+
+def test_component_constructor_configures_refs_and_refs_tables():
+    class Supplier(sim.Component):
+        pass
+
+    first = Supplier()
+    second = Supplier()
+
+    class Dispatcher(sim.Component):
+        source: sim.Ref[Supplier]
+        routes: sim.Refs[Supplier]
+
+    configured_dispatcher = Dispatcher(source=first, routes=(first, second))
+
+    class Model(sim.Model):
+        suppliers: list[Supplier] = [first, second]
+        dispatcher: Dispatcher = configured_dispatcher
+
+    model = Model()
+    decl = next(item for item in model._component_decls
+                if item.name == "dispatcher")
+    source = decl.component_refs["source"]
+    routes = decl.component_refs["routes"]
+    assert source.raw == (first,)
+    assert source.targets[0][0].name == "suppliers"
+    assert routes.raw_tables == ((first, second),)
+    assert routes.table_lengths == (2,)
+
+
+def test_component_constructor_ref_defaults_and_validation_remain_model_time():
+    class Supplier(sim.Component):
+        pass
+
+    class Dispatcher(sim.Component):
+        source: sim.Ref[Supplier]
+        routes: sim.Refs[Supplier]
+
+    class EmptyModel(sim.Model):
+        dispatcher: Dispatcher = Dispatcher(source=None, routes=None)
+
+    empty = next(item for item in EmptyModel()._component_decls
+                 if item.name == "dispatcher")
+    assert empty.component_refs["source"].raw == (None,)
+    assert empty.component_refs["routes"].raw_tables == ((),)
+
+    class NotSupplier(sim.Component):
+        pass
+
+    with pytest.raises(TypeError, match="ref 'source' value must be a Supplier"):
+        class InvalidModel(sim.Model):
+            dispatcher: Dispatcher = Dispatcher(source=NotSupplier())
+
+        InvalidModel()
+
+    with pytest.raises(TypeError, match="refs table 'routes' value must"):
+        class InvalidTableModel(sim.Model):
+            dispatcher: Dispatcher = Dispatcher(routes=object())
+
+        InvalidTableModel()
 
 
 def test_component_constructor_honors_subclass_annotation_override():
@@ -87,12 +146,13 @@ def test_component_constructor_honors_subclass_annotation_override():
 
 
 def test_custom_constructor_forwards_declaration_values():
-    class Supplier:
+    class Supplier(sim.Component):
         pass
 
     source = Supplier()
 
     class SingleSource(sim.Component):
+        source: sim.Ref[Supplier]
         rate: sim.Param
 
         def __init__(self, source: Supplier, **kwargs):

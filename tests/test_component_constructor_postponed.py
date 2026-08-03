@@ -12,10 +12,23 @@ class PostponedBase(sim.Component):
 
 class PostponedPolicy(PostponedBase):
     lot_size: sim.Const[float] = 100.0
+    source: sim.Ref[PostponedSupplier]
+    routes: sim.Refs[PostponedSupplier]
+
+
+class PostponedSupplier(sim.Component):
+    pass
+
+
+postponed_first = PostponedSupplier()
+postponed_second = PostponedSupplier()
 
 
 class PostponedModel(sim.Model):
-    policy: PostponedPolicy = PostponedPolicy(count="4", lot_size=250)
+    suppliers: list[PostponedSupplier] = [postponed_first, postponed_second]
+    policy: PostponedPolicy = PostponedPolicy(
+        count="4", lot_size=250, source=postponed_first,
+        routes=(postponed_first, postponed_second))
 
 
 def test_component_constructor_resolves_postponed_inherited_annotations():
@@ -27,3 +40,5 @@ def test_component_constructor_resolves_postponed_inherited_annotations():
                 if item.name == "policy")
     assert decl.constants["count"] == (4,)
     assert decl.constants["lot_size"] == (250.0,)
+    assert decl.component_refs["source"].targets[0][0].name == "suppliers"
+    assert decl.component_refs["routes"].table_lengths == (2,)

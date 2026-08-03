@@ -163,10 +163,11 @@ class Component:
 
         Component subclasses with their own constructor arguments should
         forward declaration values explicitly with
-        ``super().__init__(**kwargs)``.  Runtime fields such as states, queues,
-        references, and
-        nested components remain constructor-owned by the subclass and are
-        rejected here when passed to the base constructor.
+        ``super().__init__(**kwargs)``. Runtime fields such as states, queues,
+        and nested components remain constructor-owned by the subclass and
+        are rejected here when passed to the base constructor. Ref/Refs values
+        are assigned directly and validated when the model declaration tree
+        is built.
         """
         configurable, runtime = _component_constructor_fields(type(self))
         converted: dict[str, Any] = {}
@@ -178,12 +179,16 @@ class Component:
                     raise TypeError(
                         f"{cls_name} field '{name}' is a runtime declaration "
                         "and cannot be configured by Component.__init__; "
-                        "only Param and Const fields are configurable")
+                        "only Param, Const, Ref, and Refs fields are "
+                        "configurable")
                 raise TypeError(
                     f"{cls_name}.__init__() got an unexpected keyword "
                     f"argument '{name}'")
 
             kind, expected = declaration
+            if kind in ("ref", "refs"):
+                converted[name] = value
+                continue
             if kind == "param":
                 try:
                     converted[name] = _param_default(
@@ -222,20 +227,24 @@ class Component:
 
 def _component_constructor_fields(
     cls: type[Component],
-) -> tuple[dict[str, tuple[str, type]], set[str]]:
+) -> tuple[dict[str, tuple[str, Any]], set[str]]:
     """Return configurable and runtime declarations for ``cls``.
 
     ``class_type_hints`` supplies the same inherited, resolved annotation view
-    used by model declaration building.  Only Param and Const declarations are
-    accepted by the base constructor; other Cimba declarations and nested
-    components are tracked separately so they get a useful rejection rather
-    than being reported as unknown keywords.
+    used by model declaration building. Param, Const, Ref, and Refs
+    declarations are accepted by the base constructor; other Cimba
+    declarations and nested components are tracked separately so they get a
+    useful rejection rather than being reported as unknown keywords.
     """
-    configurable: dict[str, tuple[str, type]] = {}
+    configurable: dict[str, tuple[str, Any]] = {}
     runtime: set[str] = set()
     for name, hint in class_type_hints(cls).items():
         if isinstance(hint, _ConstHint):
             configurable[name] = ("const", hint.type)
+            continue
+        if isinstance(hint, _RefHint):
+            configurable[name] = ("refs" if hint.table else "ref",
+                                   hint.target)
             continue
         try:
             kind = _DECL_KINDS.get(hint)

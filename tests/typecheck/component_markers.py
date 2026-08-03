@@ -27,3 +27,14 @@ class Configurable(sim.Component):
 
 configured = Configurable(lot_size=250)
 assert configured.lot_size == 250
+
+
+class DirectRefs(sim.Component):
+    source: sim.Ref[Supplier]
+    routes: sim.Refs[Supplier]
+
+
+direct_refs = DirectRefs(
+    source=Supplier(priority=3),
+    routes=(Supplier(priority=4), Supplier(priority=5)),
+)

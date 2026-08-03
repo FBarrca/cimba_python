@@ -49,10 +49,10 @@ fields directly with keywords:
 ``Const[T]`` values are converted with ``T(value)`` (so the example stores
 ``250.0``), while ``Param`` values must be real scalars and are normalized to
 ``float``. Inherited declarations and postponed annotations are supported.
-Only ``Param`` and ``Const`` declarations are accepted by the base
-constructor; runtime fields such as states, queues, references, and nested
-components must still be assigned by a custom constructor. Custom constructors
-forward declaration keywords explicitly:
+The base constructor also accepts ``Ref`` and ``Refs`` declarations. Runtime
+fields such as states, queues, and nested components must still be assigned by
+a custom constructor. Custom constructors forward declaration keywords
+explicitly:
 
 .. code-block:: python
 
@@ -410,6 +410,21 @@ references it (values can also be attached post-declaration, e.g.
 be items of a single component collection -- a collection of one included, so a
 table need not be special-cased at its degenerate size -- and the lookup lowers
 to array indexing:
+
+The base component constructor can configure both kinds of reference directly;
+references are assigned as provided and validated when the model declaration
+tree is built:
+
+.. code-block:: python
+
+   class Dispatcher(sim.Component):
+       source: sim.Ref[Supplier]
+       routes: sim.Refs[Supplier]
+
+   dispatcher = Dispatcher(
+       source=supplier,
+       routes=(supplier_a, supplier_b),
+   )
 
 .. code-block:: python
 
