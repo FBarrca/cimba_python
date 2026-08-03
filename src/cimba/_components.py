@@ -1431,6 +1431,10 @@ def _collection_offsets_symbol(component: str) -> str:
     return f"_CIMBA_OFF_{component}"
 
 
+def _collection_lengths_symbol(component: str) -> str:
+    return f"_CIMBA_LEN_{component}"
+
+
 def _component_slots_symbol(component: str) -> str:
     return f"_CIMBA_COMPSLOT_{component}"
 
@@ -1457,6 +1461,10 @@ def _ref_table_symbol(component: str, name: str) -> str:
 
 def _ref_offsets_symbol(component: str, name: str) -> str:
     return f"_CIMBA_REFOFF_{component}__{name}"
+
+
+def _ref_lengths_symbol(component: str, name: str) -> str:
+    return f"_CIMBA_REFLEN_{component}__{name}"
 
 
 def _lowering_namespace(
@@ -1497,6 +1505,9 @@ def _lowering_namespace(
             if decl.collection and len(decl.parent_offsets) > 1:
                 namespace[_collection_offsets_symbol(decl.name)] = np.asarray(
                     decl.parent_offsets, dtype=np.int64)
+            if decl.collection and len(decl.parent_lengths) > 1:
+                namespace[_collection_lengths_symbol(decl.name)] = np.asarray(
+                    decl.parent_lengths, dtype=np.int64)
             if decl.parent_slots:
                 namespace[_component_slots_symbol(decl.name)] = np.asarray(
                     decl.parent_slots, dtype=np.int64)
@@ -1512,6 +1523,9 @@ def _lowering_namespace(
                     if len(ref.table_offsets) > 1:
                         namespace[_ref_offsets_symbol(decl.name, name)] = \
                             np.asarray(ref.table_offsets, dtype=np.int64)
+                    if len(ref.table_lengths) > 1:
+                        namespace[_ref_lengths_symbol(decl.name, name)] = \
+                            np.asarray(ref.table_lengths, dtype=np.int64)
                     continue
                 targets = [t for t in ref.targets if t is not None]
                 stack.extend(target_decl for target_decl, _index in targets)
@@ -1630,9 +1644,8 @@ class _RefTableAccess:
 
 
 class _ComponentPathLowerer(ast.NodeTransformer):
-    #: When set (method lowering with a runtime instance index), indexing
-    #: a Refs table with an unknown instance requires uniform per-instance
-    #: lengths, so constant indices stay bounds-checkable.
+    #: When set (method lowering with a runtime instance index), literal
+    #: indices into a Refs table are checked against every possible instance.
     strict_ref_tables = False
 
     def __init__(
@@ -1644,6 +1657,7 @@ class _ComponentPathLowerer(ast.NodeTransformer):
         self.env_name = env_name
         self.component_functions = component_functions or {}
         self.called_functions: set[str] = set()
+        self._ref_loop_tables: list[tuple[str, str, str | None, str]] = []
 
     # -- path roots, defined by the subclasses -------------------------------
 
@@ -1664,6 +1678,56 @@ class _ComponentPathLowerer(ast.NodeTransformer):
         if access.possible_indices is not None:
             return access.possible_indices
         return tuple(range(access.decl.count))
+
+    @staticmethod
+    def _ref_table_key(table: _RefTableAccess) -> tuple[str, str, str | None]:
+        index = table.parent.index
+        return (
+            table.parent.decl.name,
+            table.name,
+            None if index is None else ast.dump(index),
+        )
+
+    def _length_expr(
+        self,
+        values: Sequence[int],
+        index: ast.expr | None,
+        symbol: str,
+        what: str,
+    ) -> ast.expr:
+        return self._instance_table_expr(values, index, symbol, what)
+
+    def _lower_len_call(self, node: ast.Call) -> ast.expr | None:
+        """Lower ``len`` for a resolved component collection or Refs table."""
+        if (not isinstance(node.func, ast.Name)
+                or node.func.id != "len"
+                or len(node.args) != 1
+                or node.keywords):
+            return None
+        collection = self._collection_ref(node.args[0])
+        if collection is not None:
+            return ast.copy_location(
+                self._length_expr(
+                    collection.decl.parent_lengths,
+                    collection.index,
+                    _collection_lengths_symbol(collection.decl.name),
+                    "component collection",
+                ),
+                node,
+            )
+        table = self._ref_table_ref(node.args[0])
+        if table is not None:
+            return ast.copy_location(
+                self._length_expr(
+                    table.ref.table_lengths,
+                    table.parent.index,
+                    _ref_lengths_symbol(table.parent.decl.name,
+                                        table.name),
+                    "Refs table",
+                ),
+                node,
+            )
+        return None
 
     # -- path resolution -------------------------------------------------------
 
@@ -1886,17 +1950,28 @@ class _ComponentPathLowerer(ast.NodeTransformer):
                 f"{self._callback_label()} indexes {table.text}, which has "
                 "no entries")
         if parent_pos is None and self.strict_ref_tables:
-            lengths = ref.table_lengths
-            if len(set(lengths)) > 1:
+            lengths = tuple(
+                ref.table_lengths[position]
+                for position in self._possible_positions(table.parent)
+            )
+            loop_bound = (
+                isinstance(item_index, ast.Name)
+                and (*self._ref_table_key(table), item_index.id)
+                in self._ref_loop_tables
+            )
+            if len(set(lengths)) > 1 and not loop_bound:
                 raise ValueError(
                     f"{self._callback_label()} indexes {table.text}, whose "
                     "per-instance lengths differ")
             if (isinstance(item_index, ast.Constant)
                     and type(item_index.value) is int
-                    and not 0 <= item_index.value < lengths[0]):
+                    and any(
+                        not 0 <= item_index.value < ref.table_lengths[position]
+                        for position in self._possible_positions(table.parent)
+                    )):
                 raise ValueError(
                     f"{self._callback_label()} index {item_index.value} is "
-                    f"out of range for {table.text} (length {lengths[0]})")
+                    f"out of range for {table.text} (lengths {lengths})")
         if parent_pos is not None:
             offset: ast.expr = ast.Constant(ref.table_offsets[parent_pos])
         else:
@@ -2291,7 +2366,48 @@ class _ComponentPathLowerer(ast.NodeTransformer):
 
     # -- node visitors -----------------------------------------------------------
 
+    def visit_For(self, node: ast.For) -> ast.AST:
+        """Track the canonical ``range(len(refs))`` loop bound.
+
+        The runtime table offset makes dynamic indexing valid for the
+        current owner even when different owners have different table
+        lengths.  The marker is intentionally scoped to the loop body so
+        an index variable used after the loop does not inherit that proof.
+        """
+        loop_ref: tuple[str, str, str | None, str] | None = None
+        if (isinstance(node.target, ast.Name)
+                and isinstance(node.iter, ast.Call)
+                and isinstance(node.iter.func, ast.Name)
+                and node.iter.func.id == "range"
+                and len(node.iter.args) == 1
+                and not node.iter.keywords
+                and isinstance(node.iter.args[0], ast.Call)):
+            length_call = node.iter.args[0]
+            if (isinstance(length_call.func, ast.Name)
+                    and length_call.func.id == "len"
+                    and len(length_call.args) == 1
+                    and not length_call.keywords):
+                table = self._ref_table_ref(length_call.args[0])
+                if table is not None:
+                    decl_name, table_name, parent_key = \
+                        self._ref_table_key(table)
+                    loop_ref = (decl_name, table_name, parent_key,
+                                node.target.id)
+
+        node.target = self.visit(node.target)
+        node.iter = self.visit(node.iter)
+        if loop_ref is not None:
+            self._ref_loop_tables.append(loop_ref)
+        node.body = [self.visit(statement) for statement in node.body]
+        if loop_ref is not None:
+            self._ref_loop_tables.pop()
+        node.orelse = [self.visit(statement) for statement in node.orelse]
+        return node
+
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        lowered_len = self._lower_len_call(node)
+        if lowered_len is not None:
+            return lowered_len
         if (isinstance(node.func, ast.Name) and node.func.id == "getattr"
                 and node.args):
             target = (self._namespace_ref(node.args[0])
@@ -2989,6 +3105,9 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
                 f"field {access.text} ({kind})")
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        lowered_len = self._lower_len_call(node)
+        if lowered_len is not None:
+            return lowered_len
         if isinstance(node.func, ast.Attribute):
             receiver = self._namespace_ref(node.func.value)
             if receiver is not None:
@@ -3309,6 +3428,13 @@ class _ComponentFunctionBuilder:
                         method.__closure__ or ())
                 )
             )
+            length_table_key = tuple(
+                (name, tuple(int(item) for item in value.tolist()))
+                for name, value in namespace.items()
+                if (name.startswith("_CIMBA_LEN_")
+                    or name.startswith("_CIMBA_REFLEN_"))
+                and isinstance(value, np.ndarray)
+            )
             cache_key = (
                 decl.class_at(instance_indices[0]),
                 decl.specialization_key(instance_indices[0]),
@@ -3316,6 +3442,7 @@ class _ComponentFunctionBuilder:
                 source_key,
                 str(signature),
                 closure_key,
+                length_table_key,
                 tuple(id(value)
                       for value in lowerer.helper_namespace.values()),
             )

@@ -107,18 +107,19 @@ for itself, so a function can weigh a whole collection and return its choice:
 .. code-block:: python
 
    class Buyer(sim.Component):
-       supplier_count: sim.Const[int]
        suppliers: list[Supplier] = [Supplier(), Supplier(), Supplier()]
 
        @sim.function
        def cheapest(self) -> int:
            best = 0
-           for i in range(self.supplier_count):
+           for i in range(len(self.suppliers)):
                if self.suppliers[i].price < self.suppliers[best].price:
                    best = i
            return best
 
-Reading a field at a self-computed index requires every instance of the
+Collection lengths are known when the model is built, so compiled code can use
+``len`` directly; a manually synchronized ``sim.Const[int]`` count field is not
+needed. Reading a field at a self-computed index requires every instance of the
 collection to declare that field, and the field must be a ``Param``,
 ``Output``, ``State``, or ``FloatState`` -- scalar ``Const`` values live in a
 side table and have to be indexed by a function argument. Both restrictions are

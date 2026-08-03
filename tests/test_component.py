@@ -3397,6 +3397,155 @@ def test_component_refs_tables_may_differ_in_length_per_instance():
     assert exp.trials["nodes__got"][0].tolist() == [1, 0, 1]
 
 
+def test_len_component_collection_works_in_functions_and_processes():
+    class Supplier(sim.Component):
+        price: sim.Param
+
+        def __init__(self, price):
+            self.price = price
+
+    class Buyer(sim.Component):
+        suppliers: list[Supplier]
+        total: sim.Output
+        function_total: sim.Output
+
+        def __init__(self, prices):
+            self.suppliers = [Supplier(price) for price in prices]
+
+        @sim.function
+        def total_price(self) -> float:
+            total = 0.0
+            for index in range(len(self.suppliers)):
+                total += self.suppliers[index].price
+            return total
+
+        @sim.process
+        def run(self, env):
+            total = 0.0
+            for index in range(len(self.suppliers)):
+                total += self.suppliers[index].price
+            self.total = total
+            self.function_total = self.total_price()
+            sim.suspend()
+
+    class Shop(sim.Model):
+        buyers: list[Buyer] = [Buyer((1.0, 2.0)),
+                               Buyer((3.0, 4.0, 5.0))]
+
+    model = Shop()
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0)
+    assert exp.run() == 0
+    assert exp.trials["buyers__total"][0].tolist() == [3.0, 12.0]
+    assert exp.trials["buyers__function_total"][0].tolist() == [3.0, 12.0]
+
+
+def test_len_component_collection_works_in_model_callback():
+    class Item(sim.Component):
+        value: sim.Param
+
+        def __init__(self, value):
+            self.value = value
+
+    class Shop(sim.Model):
+        items: list[Item] = [Item(2.0), Item(5.0)]
+        total: sim.Output
+
+    model = Shop()
+
+    @model.process
+    def sum_items(env: Shop):
+        total = 0.0
+        for index in range(len(env.items)):
+            total += env.items[index].value
+        env.total = total
+        sim.suspend()
+
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0)
+    assert exp.run() == 0
+    assert exp["total"][0] == 7.0
+
+
+def test_len_refs_supports_unequal_shared_tables_and_zero_entries():
+    class Target(sim.Component):
+        score: sim.Param
+
+        def __init__(self, score):
+            self.score = score
+
+    class Router(sim.Component):
+        routes: sim.Refs[Target]
+        total: sim.Output
+
+        def __init__(self, routes=()):
+            self.routes = tuple(routes)
+
+        @sim.function
+        def route_total(self) -> float:
+            total = 0.0
+            for index in range(len(self.routes)):
+                total += self.routes[index].score
+            return total
+
+        @sim.process
+        def run(self, env):
+            self.total = self.route_total()
+            sim.suspend()
+
+    first = Target(10.0)
+    second = Target(20.0)
+
+    class Fleet(sim.Model):
+        targets: list[Target] = [first, second]
+        routers: list[Router] = [Router(), Router((first, second))]
+
+    model = Fleet()
+    exp = model.experiment(replications=1, duration=1.0, warmup=0.0)
+    assert exp.run() == 0
+    assert exp.trials["routers__total"][0].tolist() == [0.0, 30.0]
+
+
+def test_len_refs_function_cache_keeps_model_specific_lengths():
+    class Target(sim.Component):
+        score: sim.Param
+
+        def __init__(self, score):
+            self.score = score
+
+    class Router(sim.Component):
+        routes: sim.Refs[Target]
+        total: sim.Output
+
+        def __init__(self, routes=()):
+            self.routes = tuple(routes)
+
+        @sim.function
+        def route_total(self) -> float:
+            total = 0.0
+            for index in range(len(self.routes)):
+                total += self.routes[index].score
+            return total
+
+        @sim.process
+        def run(self, env):
+            self.total = self.route_total()
+            sim.suspend()
+
+    def run_model(routes, scores):
+        target_items = [Target(score) for score in scores]
+
+        class Fleet(sim.Model):
+            targets: list[Target] = target_items
+            routers: list[Router] = [Router(tuple(target_items[:routes]))]
+
+        model = Fleet()
+        exp = model.experiment(replications=1, duration=1.0, warmup=0.0)
+        assert exp.run() == 0
+        return exp.trials["routers__total"][0]
+
+    assert run_model(1, (7.0, 100.0)) == 7.0
+    assert run_model(2, (3.0, 5.0)) == 8.0
+
+
 def test_component_refs_table_rejects_a_lone_component_by_name():
     class Router(sim.Component):
         targets: sim.Refs[RefNode]
