@@ -34,9 +34,35 @@ Inside the method, ``self.waiting`` and ``self.completed`` refer to the
 component-owned fields for this trial.
 
 Component parameters can also carry defaults. A class default applies to every
-instance unless its constructor assigns an instance-specific value. For a
-component collection, every item must provide a default or the flattened
-parameter remains required as a whole. Experiment arguments such as
+instance unless its constructor assigns an instance-specific value. Components
+without a custom constructor can configure declared ``Param`` and ``Const``
+fields directly with keywords:
+
+.. code-block:: python
+
+   class FixedLot(sim.Component):
+       lot_size: sim.Const[float] = 100.0
+
+   class Inventory(sim.Model):
+       policy: FixedLot = FixedLot(lot_size=250)
+
+``Const[T]`` values are converted with ``T(value)`` (so the example stores
+``250.0``), while ``Param`` values must be real scalars and are normalized to
+``float``. Inherited declarations and postponed annotations are supported.
+Only ``Param`` and ``Const`` declarations are accepted by the base
+constructor; runtime fields such as states, queues, references, and nested
+components must still be assigned by a custom constructor. Custom constructors
+forward declaration keywords explicitly:
+
+.. code-block:: python
+
+   class SingleSource(SupplierPolicy):
+       def __init__(self, source: Supplier, **kwargs):
+           super().__init__(**kwargs)
+           self.source = source
+
+For a component collection, every item must provide a default or the
+flattened parameter remains required as a whole. Experiment arguments such as
 ``desks__service_rate=[0.2, 0.3]`` override the flattened defaults.
 
 Primitive per-instance settings can be marked explicitly with ``sim.Const``.

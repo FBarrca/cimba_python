@@ -19,3 +19,11 @@ class Consumer(sim.Component):
         supplier: Supplier = self.supplier
         first: Supplier = self.suppliers[0]
         return self.count + supplier.priority + first.priority
+
+
+class Configurable(sim.Component):
+    lot_size: sim.Const[float] = 100.0
+
+
+configured = Configurable(lot_size=250)
+assert configured.lot_size == 250

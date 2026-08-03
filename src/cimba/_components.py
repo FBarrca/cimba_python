@@ -67,8 +67,9 @@ from ._dataset.methods import (
     lower_env_dataset_method_calls,
 )
 from ._declarations import (_DECL_KINDS, _MISSING, _check_name,
-                            _Declarations, _field_declarations, _FieldDecl,
-                            _param_default, class_type_hints)
+                            _ConstHint, _Declarations, _RefHint,
+                            _field_declarations, _FieldDecl, _param_default,
+                            class_type_hints)
 from ._timeseries.methods import (
     HISTORY_GETTER_NAMES,
     lower_env_history_method_calls,
@@ -157,6 +158,58 @@ class Component:
     ``Station(..., inbox=station_1.outbox)``.
     """
 
+    def __init__(self, **values: Any) -> None:
+        """Configure declared ``Param`` and ``Const`` fields.
+
+        Component subclasses with their own constructor arguments should
+        forward declaration values explicitly with
+        ``super().__init__(**kwargs)``.  Runtime fields such as states, queues,
+        references, and
+        nested components remain constructor-owned by the subclass and are
+        rejected here when passed to the base constructor.
+        """
+        configurable, runtime = _component_constructor_fields(type(self))
+        converted: dict[str, Any] = {}
+        cls_name = type(self).__name__
+        for name, value in values.items():
+            declaration = configurable.get(name)
+            if declaration is None:
+                if name in runtime:
+                    raise TypeError(
+                        f"{cls_name} field '{name}' is a runtime declaration "
+                        "and cannot be configured by Component.__init__; "
+                        "only Param and Const fields are configurable")
+                raise TypeError(
+                    f"{cls_name}.__init__() got an unexpected keyword "
+                    f"argument '{name}'")
+
+            kind, expected = declaration
+            if kind == "param":
+                try:
+                    converted[name] = _param_default(
+                        value, f"component '{cls_name}' Param '{name}'")
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise TypeError(
+                        f"component '{cls_name}' Param '{name}' must be a "
+                        "real scalar") from exc
+                continue
+
+            expected_name = getattr(expected, "__name__", repr(expected))
+            try:
+                coerced = expected(value)
+            except Exception as exc:
+                raise TypeError(
+                    f"component '{cls_name}' Const '{name}' could not be "
+                    f"converted to {expected_name}") from exc
+            if type(coerced) is not expected:
+                raise TypeError(
+                    f"component '{cls_name}' Const '{name}' must convert to "
+                    f"exactly {expected_name}, got "
+                    f"{type(coerced).__name__}")
+            converted[name] = coerced
+
+        self.__dict__.update(converted)
+
     def __getattr__(self, name: str) -> "_FieldRef":
         if name.startswith("_"):
             raise AttributeError(name)
@@ -165,6 +218,39 @@ class Component:
             raise AttributeError(
                 f"'{type(self).__name__}' object has no attribute '{name}'")
         return _FieldRef(self, name, kind)
+
+
+def _component_constructor_fields(
+    cls: type[Component],
+) -> tuple[dict[str, tuple[str, type]], set[str]]:
+    """Return configurable and runtime declarations for ``cls``.
+
+    ``class_type_hints`` supplies the same inherited, resolved annotation view
+    used by model declaration building.  Only Param and Const declarations are
+    accepted by the base constructor; other Cimba declarations and nested
+    components are tracked separately so they get a useful rejection rather
+    than being reported as unknown keywords.
+    """
+    configurable: dict[str, tuple[str, type]] = {}
+    runtime: set[str] = set()
+    for name, hint in class_type_hints(cls).items():
+        if isinstance(hint, _ConstHint):
+            configurable[name] = ("const", hint.type)
+            continue
+        try:
+            kind = _DECL_KINDS.get(hint)
+        except TypeError:
+            kind = None
+        if kind is not None:
+            if kind.name == "param":
+                configurable[name] = ("param", float)
+            else:
+                runtime.add(name)
+            continue
+        if (isinstance(hint, _RefHint) or _is_component_class(hint)
+                or _collection_item_class(hint) is not None):
+            runtime.add(name)
+    return configurable, runtime
 
 
 @dataclass(frozen=True)
