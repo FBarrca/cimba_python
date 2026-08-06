@@ -163,6 +163,28 @@ def _compile_cfunc_worker(connection) -> None:
         connection.close()
 
 
+def _compile_complexity(function: Callable[..., Any]) -> int:
+    """Estimate callback cost, including lazy Numba callees it closes over."""
+    seen: set[int] = set()
+
+    def visit(candidate) -> int:
+        py_func = getattr(candidate, "py_func", candidate)
+        if not inspect.isfunction(py_func) or id(py_func) in seen:
+            return 0
+        seen.add(id(py_func))
+        score = len(py_func.__code__.co_code)
+        if py_func.__closure__ is not None:
+            for cell in py_func.__closure__:
+                score += visit(cell.cell_contents)
+        for name in py_func.__code__.co_names:
+            value = py_func.__globals__.get(name)
+            if hasattr(value, "py_func"):
+                score += visit(value)
+        return score
+
+    return visit(function)
+
+
 def _compile_cfuncs(
     jobs: Sequence[tuple[Any, Callable[..., Any]]],
     *,
@@ -187,6 +209,15 @@ def _compile_cfuncs(
         return [_compile_parallel_cfunc(signature, function)
                 for signature, function in jobs]
 
+    # Populate Numba's registries and native runtime before forking.  These
+    # tables are copy-on-write state, so every compiler worker can inherit the
+    # setup instead of repeating it on its first callback.
+    from numba.core.registry import cpu_target
+    from numba.core.runtime import nrt
+    cpu_target.target_context.refresh()
+    nrt.rtsys.initialize(cpu_target.target_context)
+    cpu_target.target_context.codegen()
+
     callbacks: list[Any] = [None] * len(jobs)
     use_warm_parent = warm_parent and len(jobs) > 4
     if use_warm_parent:
@@ -194,7 +225,7 @@ def _compile_cfuncs(
         # Give the parent the cheapest job while workers take substantive work.
         warm_index = min(
             range(len(jobs)),
-            key=lambda index: len(jobs[index][1].__code__.co_code),
+            key=lambda index: _compile_complexity(jobs[index][1]),
         )
         warm_signature, warm_function = jobs[warm_index]
         remaining = [
@@ -204,7 +235,7 @@ def _compile_cfuncs(
     # Start expensive-looking jobs first so the pipe scheduler can fill gaps
     # with short callbacks as workers finish.
     remaining.sort(
-        key=lambda index: len(jobs[index][1].__code__.co_code),
+        key=lambda index: _compile_complexity(jobs[index][1]),
         reverse=True,
     )
 
