@@ -1313,6 +1313,40 @@ def test_component_process_copies_and_priority_are_registered():
     assert proc.indexed
 
 
+def test_component_process_and_data_lifecycle_callbacks_reuse_class_aot():
+    class Worker(sim.Component):
+        count: sim.State
+
+        @sim.process
+        def run(self, env):
+            self.count += 1
+
+    class Network(sim.Model):
+        worker: Worker = Worker()
+
+    cache = Network.__dict__["_cimba_component_aot"]
+    assert cache is not None
+
+    model = Network()
+    procs, lifecycle = model._aot_component_callbacks()
+    assert procs["worker__run"] is cache["procs"]["worker__run"]
+    assert lifecycle == cache["lifecycle"]
+
+    model.experiment(replications=1, duration=1.0, warmup=0.0)
+    assert model._compiled["procs"]["worker__run"] is procs["worker__run"]
+    assert model._compiled["events"][:3] == tuple(
+        lifecycle[index] for index in range(3)
+    )
+
+    # A constructor-added entity shifts the class data layout and changes
+    # entity setup, so both AOT groups must be rejected safely.
+    extended = Network(queues=["extra"])
+    extended_procs, extended_lifecycle = \
+        extended._aot_component_callbacks()
+    assert extended_procs == {}
+    assert extended_lifecycle == {}
+
+
 def test_component_process_dag_uses_lowered_source():
     class Network(sim.Model):
         retailer: Warehouse = Warehouse(R=20, B=50)

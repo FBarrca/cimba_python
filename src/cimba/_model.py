@@ -3,8 +3,9 @@
 A ``Model`` collects declared entities, parameters, outputs, and process
 functions, then compiles everything on first ``experiment()``:
 
-* each process body is compiled to a ``cfunc`` whose address cimba can start
-  as a stackful fiber;
+* component process bodies and data-only lifecycle callbacks are compiled once
+  at model-class definition when their layout is stable; instance-specific
+  callbacks are compiled on the first experiment;
 * trial lifecycle functions are generated as Python source (see
   ``_trial_source``) and compiled to ``cfunc`` callbacks: together they create
   entities, schedule the recording window, start processes, run the event
@@ -19,6 +20,7 @@ import copy
 import hashlib
 import inspect
 import textwrap
+import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import (TYPE_CHECKING, Any, Self, TypedDict, TypeVar, get_type_hints,
@@ -84,10 +86,16 @@ _TRIAL_INITIALIZE_FIELD = "_cimba_trial_initialize"
 _TRIAL_ENTITIES_FIELD = "_cimba_trial_entities"
 _TRIAL_PROCESSES_FIELD = "_cimba_trial_processes"
 _TRIAL_TEARDOWN_FIELD = "_cimba_trial_teardown"
+_TRIAL_STOP_FIELD = "_cimba_trial_stop"
 
 
 def _process_callback_field(name: str) -> str:
     return f"_cimba_fn_{name}"
+
+
+def _collect_callback_field(index: int) -> str:
+    return f"_cimba_collect_{index}"
+
 
 # Offset of derived-struct fields inside an extended process allocation:
 # the cmb_process header, rounded up to the 8-byte record alignment.
@@ -183,6 +191,53 @@ def _compile_complexity(function: Callable[..., Any]) -> int:
         return score
 
     return visit(function)
+
+
+def _callback_function_key(function: Callable[..., Any]) -> str:
+    """Fingerprint lowered code and compile-time values used by AOT reuse."""
+    digest = hashlib.sha256()
+    seen: set[int] = set()
+
+    def add(value) -> None:
+        if id(value) in seen:
+            return
+        if inspect.isfunction(value) or hasattr(value, "py_func"):
+            py_func = getattr(value, "py_func", value)
+            if not inspect.isfunction(py_func):
+                return
+            seen.add(id(value))
+            code = py_func.__code__
+            digest.update(code.co_code)
+            digest.update(repr(code.co_consts).encode())
+            digest.update(repr(code.co_names).encode())
+            source = getattr(py_func, "__cimba_source__", None)
+            if source is not None:
+                digest.update(source.encode())
+            if py_func.__closure__ is not None:
+                for cell in py_func.__closure__:
+                    add(cell.cell_contents)
+            for name in code.co_names:
+                if name in py_func.__globals__:
+                    add(py_func.__globals__[name])
+        elif isinstance(value, np.ndarray):
+            seen.add(id(value))
+            digest.update(value.dtype.str.encode())
+            digest.update(repr(value.shape).encode())
+            digest.update(np.ascontiguousarray(value).tobytes())
+        elif isinstance(value, np.generic):
+            digest.update(value.dtype.str.encode())
+            digest.update(value.tobytes())
+        elif isinstance(value, (tuple, list)):
+            seen.add(id(value))
+            for item in value:
+                add(item)
+        elif isinstance(value, (str, bytes, int, float, bool, type(None))):
+            digest.update(repr(value).encode())
+        elif inspect.isclass(value) and hasattr(value, "_dtype"):
+            digest.update(repr(value._dtype.descr).encode())
+
+    add(function)
+    return digest.hexdigest()
 
 
 def _compile_cfuncs(
@@ -428,6 +483,7 @@ class _Compiled(TypedDict):
     procs: dict[str, Any]
     preds: dict[str, Any]
     user_events: dict[str, Any]
+    collect_callbacks: dict[int, Any]
     #: per-spawn-descriptor arrays sim.spawn() reads:
     #: [cfunc address, name cstring, allocation size]
     spawns: dict[str, np.ndarray]
@@ -746,8 +802,9 @@ class Model:
     annotations (Param, Output, Queue, Resource, Pool, Store, Dataset,
     Condition, State, Predicate) -- the subclass then types `env` in
     process bodies. Entity names may also be passed as keyword lists for
-    quick untyped models. Process functions are registered with
-    @model.process; compilation happens once, on first experiment()."""
+    quick untyped models. Stable component callbacks are compiled once for the
+    model class; callbacks added to an instance compile on its first
+    experiment()."""
 
     # Standard trial-record fields, readable as env attributes in process
     # bodies (plain annotations, not declaration markers).
@@ -758,6 +815,7 @@ class Model:
     seed: int
 
     _source: str
+    _cimba_component_aot: dict[str, Any] | None = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -767,6 +825,64 @@ class Model:
                     f"field '{name}': sim.Spawnable has been replaced by "
                     "@model.process(spawnable=True) or "
                     "@sim.process(spawnable=True)")
+        cls._cimba_component_aot = None
+        aot_started = time.perf_counter()
+        try:
+            prototype = object.__new__(cls)
+            Model.__init__(prototype, f"{cls.__name__}__component_aot")
+            component_processes = prototype._component_process_count
+            if component_processes:
+                callback_dtype = prototype._callback_dtype
+                rec = from_dtype(callback_dtype)
+                trial_ptr = types.CPointer(rec)
+                collect_inners = [
+                    njit(fn) for fn, _count in prototype._collects
+                ]
+                native_names = _native_names(
+                    process.name for process in prototype._processes)
+                namespace = prototype._codegen_namespace(
+                    collect_inners, native_names)
+                source = prototype._trial_source(prototype.dtype)
+                exec(compile(
+                    source, f"<cimba model '{prototype.name}'>", "exec"),
+                    namespace)
+                procs, _preds, _events, lifecycle = \
+                    prototype._compile_callbacks(
+                        rec,
+                        [
+                            (types.void(trial_ptr, types.intp),
+                             namespace["_recording_event"]),
+                            (types.void(trial_ptr),
+                             namespace["_trial_initialize"]),
+                            (types.void(trial_ptr),
+                             namespace["_trial_entities"]),
+                        ],
+                        warm_parent=True,
+                    )
+                cls._cimba_component_aot = {
+                    "dtype": callback_dtype,
+                    "names": tuple(
+                        process.name
+                        for process in prototype._processes
+                    ),
+                    "process_keys": tuple(
+                        _callback_function_key(process.fn)
+                        for process in prototype._processes
+                    ),
+                    "procs": procs,
+                    "lifecycle": dict(enumerate(lifecycle)),
+                    "lifecycle_key": prototype._aot_lifecycle_key(source),
+                    "seconds": time.perf_counter() - aot_started,
+                    # Worker-loaded object code can retain addresses of
+                    # lowering tables. Keep the prototype functions and their
+                    # globals alive for the lifetime of the class.
+                    "keepalive": prototype,
+                }
+        except Exception:
+            # A component may reference globals declared later in its module,
+            # or a custom model may require instance-time setup. Preserve the
+            # existing first-experiment compilation path in those cases.
+            cls._cimba_component_aot = None
 
     def __init__(self, name: str | None = None, *,
                  params: Iterable[str] = (),
@@ -880,6 +996,7 @@ class Model:
             self._component_roots.values())
         self._bind_components()
         self._register_component_processes()
+        self._component_process_count = len(self._processes)
 
     def _bind_components(self) -> None:
         for decl in self._component_decls:
@@ -900,6 +1017,39 @@ class Model:
                     component, f"{decl.name}[{index}]",
                     collection=decl.name, index=index)
             self._bind_component_children(decl, components)
+
+    def _aot_component_callbacks(
+        self,
+    ) -> tuple[dict[str, Any], dict[int, Any]]:
+        cache = type(self).__dict__.get("_cimba_component_aot")
+        if cache is None:
+            return {}, {}
+        count = self._component_process_count
+        if tuple(process.name for process in self._processes[:count]) \
+                != cache["names"]:
+            return {}, {}
+        if tuple(
+            _callback_function_key(process.fn)
+            for process in self._processes[:count]
+        ) != cache["process_keys"]:
+            return {}, {}
+        current_dtype = self._callback_dtype
+        cached_dtype = cache["dtype"]
+        current_fields = current_dtype.fields or {}
+        cached_fields = cached_dtype.fields or {}
+        if any(
+            name not in current_fields
+            or current_fields[name][1] != cached_fields[name][1]
+            or current_fields[name][0] != cached_fields[name][0]
+            for name in (cached_dtype.names or ())
+        ):
+            return {}, {}
+        lifecycle = (
+            cache["lifecycle"]
+            if self._aot_lifecycle_key() == cache["lifecycle_key"]
+            else {}
+        )
+        return cache["procs"], lifecycle
 
     def _bind_component_metadata(
         self,
@@ -1804,12 +1954,8 @@ class Model:
             (_TRIAL_ENTITIES_FIELD, "<i8"),
             (_TRIAL_PROCESSES_FIELD, "<i8"),
             (_TRIAL_TEARDOWN_FIELD, "<i8"),
+            (_TRIAL_STOP_FIELD, "<i8"),
         ]
-        if self._history_captures or self._dataset_captures:
-            fields += [
-                (HISTORY_CAPTURE_TRIAL_FIELD, "<u8"),
-                (HISTORY_CAPTURE_STORE_FIELD, "<i8"),
-            ]
         for f in self._decls.by_kind("param", "output", "queue", "resource",
                                      "pool", "store", "dataset", "condition",
                                      "state", "fstate"):
@@ -1829,8 +1975,16 @@ class Model:
                    if p.spawnable and p.spawn_field is not None
                    and p.spawn_field not in self._spawnable_fields
                    and p.spawn_field not in self._component_spawnable_fields]
+        if self._history_captures or self._dataset_captures:
+            fields += [
+                (HISTORY_CAPTURE_TRIAL_FIELD, "<u8"),
+                (HISTORY_CAPTURE_STORE_FIELD, "<i8"),
+            ]
         fields += [(_process_callback_field(p.name), "<i8")
                    for p in self._processes if not p.spawnable]
+        fields += [(_collect_callback_field(index), "<i8")
+                   for index, (_fn, count) in enumerate(self._collects)
+                   if count == 1]
         process_fields_added: set[str] = set()
         for p in self._processes:
             if p.spawnable:
@@ -1852,11 +2006,55 @@ class Model:
                                (f"_cx_{p.name}_{i}_idx", "<i8")]
         return np.dtype(fields)
 
+    @property
+    def _callback_dtype(self) -> np.dtype:
+        """Stable data prefix used by callbacks that need no process slots."""
+        dtype = self.dtype
+        dtype_fields = dtype.fields or {}
+        runtime_names = {
+            _process_callback_field(process.name)
+            for process in self._processes if not process.spawnable
+        }
+        runtime_names.update(
+            process.process_field
+            for process in self._processes
+            if not process.spawnable and process.process_field is not None
+        )
+        runtime_names.update(
+            f"_p_{process.name}_{index}"
+            for process in self._processes if not process.spawnable
+            and process.process_field is None
+            for index in range(process.copies)
+        )
+        runtime_names.update(
+            f"_cx_{process.name}_{index}_{part}"
+            for process in self._processes if process.indexed
+            for index in range(process.copies)
+            for part in ("env", "idx")
+        )
+        boundary = min(
+            (dtype_fields[name][1] for name in runtime_names),
+            default=dtype.itemsize,
+        )
+        names = [
+            name for name in (dtype.names or ())
+            if dtype_fields[name][1] < boundary
+        ]
+        return np.dtype({
+            "names": names,
+            "formats": [dtype_fields[name][0] for name in names],
+            "offsets": [dtype_fields[name][1] for name in names],
+            "itemsize": boundary,
+        })
+
     # --- Compilation --------------------------------------------------------
     def _compile_callbacks(
         self,
         rec: Any,
         extra_jobs: Sequence[tuple[Any, Callable[..., Any]]] = (),
+        precompiled_procs: Mapping[str, Any] = {},
+        precompiled_extra: Mapping[int, Any] = {},
+        warm_parent: bool | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], list[Any]]:
         """njit-compile the registered process/predicate/event/collect
         functions and wrap all but collect in cfuncs cimba can call."""
@@ -1995,9 +2193,11 @@ class Model:
                 ) from exc
             raise exc
 
-        proc_cfuncs = {}
+        proc_cfuncs = dict(precompiled_procs)
         process_jobs = []
         for p in self._processes:
+            if p.name in proc_cfuncs:
+                continue
             try:
                 if p.indexed:
                     process_jobs.append((p, proc_sig_ix, make_proc_indexed(p)))
@@ -2005,15 +2205,22 @@ class Model:
                     process_jobs.append((p, proc_sig, make_proc_direct(p)))
             except Exception as exc:
                 raise_process_compile_error(p, exc)
+        pending_extra = [
+            (index, signature, function)
+            for index, (signature, function) in enumerate(extra_jobs)
+            if index not in precompiled_extra
+        ]
 
         try:
             callbacks = _compile_cfuncs(
                 [
                     *((signature, function)
                       for _p, signature, function in process_jobs),
-                    *extra_jobs,
+                    *((signature, function)
+                      for _index, signature, function in pending_extra),
                 ],
-                warm_parent=len(process_jobs) > 4,
+                warm_parent=(len(process_jobs) > 4
+                             if warm_parent is None else warm_parent),
             )
         except Exception:
             # Recompile in the parent so invalid user code retains its full
@@ -2027,7 +2234,7 @@ class Model:
                     raise_process_compile_error(p, exc)
             callbacks.extend(
                 _compile_parallel_cfunc(signature, function)
-                for signature, function in extra_jobs
+                for _index, signature, function in pending_extra
             )
         for (p, _signature, _function), callback in zip(
                 process_jobs, callbacks):
@@ -2039,8 +2246,67 @@ class Model:
                        for _n, fn, field in self._predicates}
         event_cfuncs = {field: make_event(njit(fn), takes_data)
                         for _n, fn, field, takes_data in self._events}
-        return (proc_cfuncs, pred_cfuncs, event_cfuncs,
-                callbacks[len(process_jobs):])
+        extra_callbacks = [None] * len(extra_jobs)
+        for index, callback in precompiled_extra.items():
+            extra_callbacks[index] = callback
+        for (index, _signature, _function), callback in zip(
+                pending_extra, callbacks[len(process_jobs):]):
+            extra_callbacks[index] = callback
+        return proc_cfuncs, pred_cfuncs, event_cfuncs, extra_callbacks
+
+    @staticmethod
+    def _direct_collect_callback(fn, index: int):
+        """Build a single-instance collect body with the native callback ABI."""
+        source = getattr(fn, "__cimba_source__", None)
+        if source is None:
+            source = inspect.getsource(fn)
+        tree = ast.parse(textwrap.dedent(source))
+        fn_node = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+        )
+        env_name = fn_node.args.args[0].arg
+        namespace = dict(fn.__globals__)
+        if fn.__closure__ is not None:
+            for name, cell in zip(fn.__code__.co_freevars, fn.__closure__):
+                namespace[name] = cell.cell_contents
+        namespace["carray"] = carray
+        wrapper = ast.FunctionDef(
+            name=f"_cimba_direct_collect_{index}",
+            args=ast.arguments(
+                posonlyargs=[],
+                args=[ast.arg(arg="ctxp")],
+                vararg=None,
+                kwonlyargs=[],
+                kw_defaults=[],
+                kwarg=None,
+                defaults=[],
+            ),
+            body=[
+                ast.Assign(
+                    targets=[ast.Name(id=env_name, ctx=ast.Store())],
+                    value=ast.Subscript(
+                        value=ast.Call(
+                            func=ast.Name(id="carray", ctx=ast.Load()),
+                            args=[ast.Name(id="ctxp", ctx=ast.Load()),
+                                  ast.Constant(value=1)],
+                            keywords=[],
+                        ),
+                        slice=ast.Constant(value=0),
+                        ctx=ast.Load(),
+                    ),
+                ),
+                *copy.deepcopy(fn_node.body),
+            ],
+            decorator_list=[],
+        )
+        module = ast.Module(body=[wrapper], type_ignores=[])
+        ast.fix_missing_locations(module)
+        exec(
+            compile(module, f"<cimba direct collect {index}>", "exec"),
+            namespace,
+        )
+        return namespace[wrapper.name]
 
     def _codegen_namespace(
         self,
@@ -2141,10 +2407,18 @@ class Model:
         # their own (e.g. a source that produced a fixed number of items)
         has_spawns = any(p.spawnable for p in self._processes)
         src += ["    else:"]
-        src += [f"        if process_status({h}) == 1:\n"
-                f"            process_stop({h}, 0)" for h in handles]
+        src += [
+            f"        call_void_callback(env['{_TRIAL_STOP_FIELD}'], "
+            "subject)"
+        ]
+        src += ["def _trial_stop(vtrl):",
+                "    env = carray(vtrl, 1)[0]"]
+        src += [f"    if process_status({h}) == 1:\n"
+                f"        process_stop({h}, 0)" for h in handles]
         if has_spawns:
-            src += ["        spawned_stop_all()"]
+            src += ["    spawned_stop_all()"]
+        if not handles and not has_spawns:
+            src += ["    pass"]
 
         src += ["def _trial_initialize(vtrl):",
                 "    env = carray(vtrl, 1)[0]",
@@ -2208,7 +2482,10 @@ class Model:
                 "    env = carray(vtrl, 1)[0]"]
         for k, (_fn, instances) in enumerate(self._collects):
             if instances == 1:
-                src += [f"    COLLECT_{k}(env)"]
+                src += [
+                    f"    call_void_callback("
+                    f"env['{_collect_callback_field(k)}'], vtrl)"
+                ]
             else:
                 src += [f"    COLLECT_{k}(env, {i})"
                         for i in range(instances)]
@@ -2238,6 +2515,21 @@ class Model:
                 f"    call_void_callback(env['{_TRIAL_TEARDOWN_FIELD}'], "
                 "vtrl)"]
         return "\n".join(src)
+
+    def _aot_lifecycle_key(self, source: str | None = None) -> tuple[str, ...]:
+        """Structural key for lifecycle callbacks safe to reuse by a class."""
+        if source is None:
+            source = self._trial_source(self.dtype)
+        reusable = {
+            "_recording_event",
+            "_trial_initialize",
+            "_trial_entities",
+        }
+        return tuple(
+            ast.dump(node, include_attributes=False)
+            for node in ast.parse(source).body
+            if isinstance(node, ast.FunctionDef) and node.name in reusable
+        )
 
     def _compile(self) -> _Compiled:
         if self._compiled is not None:
@@ -2319,6 +2611,11 @@ class Model:
         evt_sig = types.void(trial_ptr, types.intp)
 
         collect_inners = [njit(fn) for fn, _count in self._collects]
+        direct_collects = [
+            (index, self._direct_collect_callback(fn, index))
+            for index, (fn, count) in enumerate(self._collects)
+            if count == 1
+        ]
         native_process_names = _native_names(
             process.name for process in self._processes)
         ns = self._codegen_namespace(
@@ -2327,6 +2624,7 @@ class Model:
         exec(compile(self._source, f"<cimba model '{self.name}'>", "exec"),
              ns)
 
+        aot_procs, aot_lifecycle = self._aot_component_callbacks()
         proc_cfuncs, pred_cfuncs, event_cfuncs, lifecycle = \
             self._compile_callbacks(
                 rec,
@@ -2337,10 +2635,20 @@ class Model:
                     (types.void(trial_ptr), ns["_trial_processes"]),
                     (types.void(trial_ptr), ns["_trial_teardown"]),
                     (types.void(trial_ptr), ns["_trial"]),
+                    (types.void(trial_ptr), ns["_trial_stop"]),
+                    *((types.void(trial_ptr), function)
+                      for _index, function in direct_collects),
                 ],
+                aot_procs,
+                aot_lifecycle,
             )
         (recording_event, trial_initialize, trial_entities, trial_processes,
-         trial_teardown, trial) = lifecycle
+         trial_teardown, trial, trial_stop, *collect_callbacks) = lifecycle
+        compiled_collects = {
+            index: callback
+            for (index, _function), callback in zip(
+                direct_collects, collect_callbacks)
+        }
         spawn_descs = {
             p.name: np.array([proc_cfuncs[p.name].address,
                               _b.cstring(native_process_names[p.name]),
@@ -2363,10 +2671,12 @@ class Model:
                 trial_entities,
                 trial_processes,
                 trial_teardown,
+                trial_stop,
             ),
             "procs": proc_cfuncs,
             "preds": pred_cfuncs,
             "user_events": event_cfuncs,
+            "collect_callbacks": compiled_collects,
             "spawns": spawn_descs,
             "spawn_assignments": spawn_assignments,
             "collect": collect_inners,
@@ -2447,6 +2757,9 @@ class Model:
         trials[_TRIAL_ENTITIES_FIELD] = compiled["events"][2].address
         trials[_TRIAL_PROCESSES_FIELD] = compiled["events"][3].address
         trials[_TRIAL_TEARDOWN_FIELD] = compiled["events"][4].address
+        trials[_TRIAL_STOP_FIELD] = compiled["events"][5].address
+        for index, callback in compiled["collect_callbacks"].items():
+            trials[_collect_callback_field(index)] = callback.address
         for process in self._processes:
             if not process.spawnable:
                 trials[_process_callback_field(process.name)] = (
