@@ -57,6 +57,24 @@ def ptr_caster(pointee: Any) -> Callable[[int], Any]:
 
 
 @intrinsic
+def call_void_callback(typingctx, addr, ptr):
+    """Call a ``void (*)(T *)`` callback stored as an integer address."""
+    if not isinstance(addr, types.Integer):
+        raise TypeError("callback address must be an integer")
+    if not isinstance(ptr, types.CPointer):
+        raise TypeError("callback argument must be a typed pointer")
+
+    def codegen(context, builder, signature, args):
+        pointer_type = context.get_value_type(ptr)
+        function_type = ir.FunctionType(ir.VoidType(), [pointer_type])
+        function = builder.inttoptr(args[0], function_type.as_pointer())
+        builder.call(function, [args[1]])
+        return context.get_dummy_value()
+
+    return types.void(addr, ptr), codegen
+
+
+@intrinsic
 def store_get(typingctx, store):
     """Blocking objectqueue get returning (status, object)."""
     if not isinstance(store, types.Integer):

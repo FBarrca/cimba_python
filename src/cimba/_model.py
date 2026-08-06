@@ -3,20 +3,22 @@
 A ``Model`` collects declared entities, parameters, outputs, and process
 functions, then compiles everything on first ``experiment()``:
 
-* each process body is njit-compiled and wrapped in a ``cfunc`` whose
-  address cimba can start as a stackful fiber;
-* a trial function is generated as Python source (see ``_trial_source``),
-  compiled, and turned into a ``cfunc``: it creates the declared entities,
-  schedules the recording window, starts the processes, runs the event
-  queue, collects statistics, and tears everything down;
+* each process body is compiled to a ``cfunc`` whose address cimba can start
+  as a stackful fiber;
+* trial lifecycle functions are generated as Python source (see
+  ``_trial_source``) and compiled to ``cfunc`` callbacks: together they create
+  entities, schedule the recording window, start processes, run the event
+  queue, collect statistics, and tear everything down;
 * an ``Experiment`` is a structured numpy array with one record per trial
   (the ``env`` seen by process bodies) handed to ``cimba_run_experiment``,
   which runs trials in parallel across all cores.
 """
 
+import ast
 import copy
 import hashlib
 import inspect
+import textwrap
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import (TYPE_CHECKING, Any, Self, TypedDict, TypeVar, get_type_hints,
@@ -67,7 +69,7 @@ from ._history_capture import (
     lower_dataset_capture_methods,
     lower_history_capture_methods,
 )
-from ._intrinsics import addressof, ptr_caster
+from ._intrinsics import addressof, call_void_callback, ptr_caster
 from .random._lowering import lower_random_calls_in_function
 
 _F = TypeVar("_F", bound=Callable[..., Any])
@@ -77,6 +79,15 @@ _EXTERN_FUNCS = {name: obj for name, obj in vars(_b).items()
                  if isinstance(obj, types.ExternalFunction)}
 
 _UNBOUNDED = np.uint64(0xFFFFFFFFFFFFFFFF)
+_RECORDING_EVENT_FIELD = "_cimba_recording_event"
+_TRIAL_INITIALIZE_FIELD = "_cimba_trial_initialize"
+_TRIAL_ENTITIES_FIELD = "_cimba_trial_entities"
+_TRIAL_PROCESSES_FIELD = "_cimba_trial_processes"
+_TRIAL_TEARDOWN_FIELD = "_cimba_trial_teardown"
+
+
+def _process_callback_field(name: str) -> str:
+    return f"_cimba_fn_{name}"
 
 # Offset of derived-struct fields inside an extended process allocation:
 # the cmb_process header, rounded up to the 8-byte record alignment.
@@ -90,6 +101,174 @@ _PROC_DATA_OFFSET = (int(lib.cpy_process_sizeof()) + 7) & ~7
 # cmb_assert_release in cmi_resourcebase_set_name, which aborts the process --
 # no Python exception, no traceback.
 _NATIVE_NAME_BYTES = 31
+
+
+def _native_cfunc(signature):
+    """Build a callback without an unused Python-callable wrapper."""
+    return cfunc(signature, no_cpython_wrapper=True)
+
+
+def _compile_parallel_cfunc(signature, function):
+    """Compile one callback in either the parent or a forked worker."""
+    return _native_cfunc(signature)(function)
+
+
+class _LoadedCFunc:
+    """A callback from a fork-compiled library loaded into the parent."""
+
+    __slots__ = ("address", "library", "native_name")
+
+    def __init__(self, library, native_name: str):
+        self.library = library
+        self.native_name = native_name
+        self.address = library.get_pointer_to_function(native_name)
+
+
+def _load_compiled_library(state):
+    """Load one worker's linked object-code library into the parent."""
+    from numba.core.registry import cpu_target
+    from numba.core.runtime import nrt
+
+    nrt.rtsys.initialize(cpu_target.target_context)
+    return cpu_target.target_context.codegen().unserialize_library(state)
+
+
+_PARALLEL_CFUNC_JOBS: tuple[tuple[Any, Callable[..., Any]], ...] = ()
+
+
+def _compile_cfunc_job(index: int):
+    """Compile and serialize one callback in a forked worker."""
+    signature, function = _PARALLEL_CFUNC_JOBS[index]
+    callback = _compile_parallel_cfunc(signature, function)
+    return (
+        index,
+        callback._library.serialize_using_object_code(),
+        callback.native_name,
+    )
+
+
+def _compile_cfunc_worker(connection) -> None:
+    """Serve callback indexes over a pipe in a forked compiler process."""
+    try:
+        while True:
+            index = connection.recv()
+            if index is None:
+                return
+            try:
+                connection.send((True, _compile_cfunc_job(index)))
+            except BaseException as exc:
+                connection.send((False, f"{type(exc).__name__}: {exc}"))
+                return
+    finally:
+        connection.close()
+
+
+def _compile_cfuncs(
+    jobs: Sequence[tuple[Any, Callable[..., Any]]],
+    *,
+    warm_parent: bool = True,
+) -> list[Any]:
+    """Compile independent callbacks concurrently when ``fork`` is available."""
+    if len(jobs) < 2:
+        return [_compile_parallel_cfunc(signature, function)
+                for signature, function in jobs]
+    try:
+        import multiprocessing
+        import threading
+
+        # Forking from a non-main Python thread is unsafe, and the inherited
+        # job table below is intentionally single-owner. Keep that uncommon
+        # path functional with serial compilation.
+        if threading.current_thread() is not threading.main_thread():
+            raise ValueError
+
+        context = multiprocessing.get_context("fork")
+    except (ImportError, ValueError):
+        return [_compile_parallel_cfunc(signature, function)
+                for signature, function in jobs]
+
+    callbacks: list[Any] = [None] * len(jobs)
+    use_warm_parent = warm_parent and len(jobs) > 4
+    if use_warm_parent:
+        # A cfunc's first compiler initialization dominates small callbacks.
+        # Give the parent the cheapest job while workers take substantive work.
+        warm_index = min(
+            range(len(jobs)),
+            key=lambda index: len(jobs[index][1].__code__.co_code),
+        )
+        warm_signature, warm_function = jobs[warm_index]
+        remaining = [
+            index for index in range(len(jobs)) if index != warm_index]
+    else:
+        remaining = list(range(len(jobs)))
+    # Start expensive-looking jobs first so the pipe scheduler can fill gaps
+    # with short callbacks as workers finish.
+    remaining.sort(
+        key=lambda index: len(jobs[index][1].__code__.co_code),
+        reverse=True,
+    )
+
+    global _PARALLEL_CFUNC_JOBS
+    _PARALLEL_CFUNC_JOBS = tuple(jobs[index] for index in remaining)
+    # Cap concurrent LLVM instances to control memory and CPU contention. The
+    # parent counts as the sixth compiler when it participates.
+    worker_limit = 5 if use_warm_parent else 6
+    worker_count = min(worker_limit, len(remaining))
+    connections = []
+    processes = []
+    completed = False
+    try:
+        for _ in range(worker_count):
+            parent_connection, child_connection = context.Pipe()
+            process = context.Process(
+                target=_compile_cfunc_worker,
+                args=(child_connection,),
+            )
+            process.start()
+            child_connection.close()
+            connections.append(parent_connection)
+            processes.append(process)
+
+        next_job = worker_count
+        for connection, index in zip(connections, range(worker_count)):
+            connection.send(index)
+
+        if use_warm_parent:
+            callbacks[warm_index] = _compile_parallel_cfunc(
+                warm_signature, warm_function)
+
+        serialized = []
+        active = set(connections)
+        from multiprocessing.connection import wait
+        while active:
+            for connection in wait(active):
+                ok, payload = connection.recv()
+                if not ok:
+                    raise RuntimeError(
+                        f"parallel callback compilation failed: {payload}")
+                serialized.append(payload)
+                if next_job < len(remaining):
+                    connection.send(next_job)
+                    next_job += 1
+                else:
+                    connection.send(None)
+                    active.remove(connection)
+        completed = True
+    finally:
+        for connection in connections:
+            connection.close()
+        if not completed:
+            for process in processes:
+                if process.is_alive():
+                    process.terminate()
+        for process in processes:
+            process.join()
+        _PARALLEL_CFUNC_JOBS = ()
+    for local_index, state, native_name in serialized:
+        library = _load_compiled_library(state)
+        callbacks[remaining[local_index]] = _LoadedCFunc(
+            library, native_name)
+    return callbacks
 
 
 def _native_names(names: Iterable[str]) -> dict[str, str]:
@@ -214,7 +393,7 @@ class _Compiled(TypedDict):
     The callables are Numba cfunc/dispatcher objects (untyped upstream)."""
 
     trial: Any
-    events: tuple[Any, Any, Any]
+    events: tuple[Any, ...]
     procs: dict[str, Any]
     preds: dict[str, Any]
     user_events: dict[str, Any]
@@ -1587,7 +1766,14 @@ class Model:
     @property
     def dtype(self) -> np.dtype:
         # (name, format) or (name, format, shape) numpy field specs
-        fields: list[Any] = list(_STANDARD_FIELDS)
+        fields: list[Any] = [
+            *_STANDARD_FIELDS,
+            (_RECORDING_EVENT_FIELD, "<i8"),
+            (_TRIAL_INITIALIZE_FIELD, "<i8"),
+            (_TRIAL_ENTITIES_FIELD, "<i8"),
+            (_TRIAL_PROCESSES_FIELD, "<i8"),
+            (_TRIAL_TEARDOWN_FIELD, "<i8"),
+        ]
         if self._history_captures or self._dataset_captures:
             fields += [
                 (HISTORY_CAPTURE_TRIAL_FIELD, "<u8"),
@@ -1612,6 +1798,8 @@ class Model:
                    if p.spawnable and p.spawn_field is not None
                    and p.spawn_field not in self._spawnable_fields
                    and p.spawn_field not in self._component_spawnable_fields]
+        fields += [(_process_callback_field(p.name), "<i8")
+                   for p in self._processes if not p.spawnable]
         process_fields_added: set[str] = set()
         for p in self._processes:
             if p.spawnable:
@@ -1635,8 +1823,10 @@ class Model:
 
     # --- Compilation --------------------------------------------------------
     def _compile_callbacks(
-        self, rec: Any,
-    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], Any]:
+        self,
+        rec: Any,
+        extra_jobs: Sequence[tuple[Any, Callable[..., Any]]] = (),
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], list[Any]]:
         """njit-compile the registered process/predicate/event/collect
         functions and wrap all but collect in cfuncs cimba can call."""
         trial_ptr = types.CPointer(rec)
@@ -1647,29 +1837,41 @@ class Model:
         ev_sig = types.void(trial_ptr, types.intp)
         rec_from_addr = ptr_caster(rec)
 
-        def make_proc(inner, struct):
-            if struct is None:
-                @cfunc(proc_sig)
-                def proc(me, ctxp):
-                    inner(carray(ctxp, 1)[0])
-                    return 0
-            else:
-                @cfunc(proc_sig)
-                def proc(me, ctxp):
-                    inner(carray(ctxp, 1)[0], struct(me))
-                    return 0
-            return proc
+        def closure_namespace(fn):
+            namespace = dict(fn.__globals__)
+            if fn.__closure__ is not None:
+                for name, cell in zip(fn.__code__.co_freevars, fn.__closure__):
+                    namespace[name] = cell.cell_contents
+            return namespace
 
-        def make_proc_indexed(inner, struct):
+        def make_pred(inner):
+            @_native_cfunc(pred_sig)
+            def pred(cnd, prc, ctxp):
+                return inner(carray(ctxp, 1)[0])
+            return pred
+
+        def make_event(inner, takes_data):
+            if takes_data:
+                @_native_cfunc(ev_sig)
+                def ev(subject, data):
+                    inner(carray(subject, 1)[0], data)
+            else:
+                @_native_cfunc(ev_sig)
+                def ev(subject, data):
+                    inner(carray(subject, 1)[0])
+            return ev
+
+        def make_proc_indexed(p):
+            """Build the indexed-process adapter; workers compile its body."""
+            inner = njit(p.fn)
+            struct = p.struct if p.injected else None
             if struct is None:
-                @cfunc(proc_sig_ix)
                 def proc(me, ctxp):
                     pair = carray(ctxp, 2)
                     env = carray(rec_from_addr(pair[0]), 1)[0]
                     inner(env, pair[1])
                     return 0
             else:
-                @cfunc(proc_sig_ix)
                 def proc(me, ctxp):
                     pair = carray(ctxp, 2)
                     env = carray(rec_from_addr(pair[0]), 1)[0]
@@ -1677,60 +1879,153 @@ class Model:
                     return 0
             return proc
 
-        def make_pred(inner):
-            @cfunc(pred_sig)
-            def pred(cnd, prc, ctxp):
-                return inner(carray(ctxp, 1)[0])
-            return pred
+        def make_proc_direct(p):
+            """Build a non-indexed process body with the native callback ABI.
 
-        def make_event(inner, takes_data):
-            if takes_data:
-                @cfunc(ev_sig)
-                def ev(subject, data):
-                    inner(carray(subject, 1)[0], data)
-            else:
-                @cfunc(ev_sig)
-                def ev(subject, data):
-                    inner(carray(subject, 1)[0])
-            return ev
+            The previous path compiled the lowered process with ``njit`` and
+            then compiled a second callback whose only job was to unpack the
+            record pointer and call that dispatcher.  Non-indexed processes
+            can use the callback's record pointer directly, avoiding that
+            duplicate Numba compilation while retaining the same ABI.
+            """
+            source = getattr(p.fn, "__cimba_source__", None)
+            if source is None:
+                source = inspect.getsource(p.fn)
+            source = textwrap.dedent(source)
+            tree = ast.parse(source)
+            fn_node = next(
+                node for node in tree.body
+                if isinstance(node, ast.FunctionDef)
+            )
+            env_name = fn_node.args.args[0].arg
+            body = copy.deepcopy(fn_node.body)
+            prefix = [
+                ast.Assign(
+                    targets=[ast.Name(id=env_name, ctx=ast.Store())],
+                    value=ast.Subscript(
+                        value=ast.Call(
+                            func=ast.Name(id="carray", ctx=ast.Load()),
+                            args=[ast.Name(id="ctxp", ctx=ast.Load()),
+                                  ast.Constant(value=1)],
+                            keywords=[],
+                        ),
+                        slice=ast.Constant(value=0),
+                        ctx=ast.Load(),
+                    ),
+                ),
+            ]
+            namespace = closure_namespace(p.fn)
+            namespace["carray"] = carray
+            if p.struct is not None:
+                view_name = fn_node.args.args[-1].arg
+                prefix.append(
+                    ast.Assign(
+                        targets=[ast.Name(id=view_name, ctx=ast.Store())],
+                        value=ast.Call(
+                            func=ast.Name(
+                                id="_CIMBA_STRUCT_VIEW", ctx=ast.Load()),
+                            args=[ast.Name(id="me", ctx=ast.Load())],
+                            keywords=[],
+                        ),
+                    )
+                )
+                namespace["_CIMBA_STRUCT_VIEW"] = p.struct
+            wrapper = ast.FunctionDef(
+                name=f"_cimba_direct_{p.name}",
+                args=ast.arguments(
+                    posonlyargs=[],
+                    args=[ast.arg(arg="me"), ast.arg(arg="ctxp")],
+                    vararg=None,
+                    kwonlyargs=[],
+                    kw_defaults=[],
+                    kwarg=None,
+                    defaults=[],
+                ),
+                body=prefix + body + [
+                    ast.Return(value=ast.Constant(value=0))
+                ],
+                decorator_list=[],
+            )
+            ast.fix_missing_locations(wrapper)
+            module = ast.Module(body=[wrapper], type_ignores=[])
+            ast.fix_missing_locations(module)
+            exec(
+                compile(module, f"<cimba direct process '{p.name}'>", "exec"),
+                namespace,
+            )
+            return namespace[wrapper.name]
+
+        def raise_process_compile_error(p, exc):
+            calls = getattr(p.fn, "__cimba_function_calls__", ())
+            if calls:
+                raise TypeError(
+                    f"process '{p.name}' has an invalid call to "
+                    "component function(s): " + ", ".join(calls)
+                ) from exc
+            raise exc
 
         proc_cfuncs = {}
+        process_jobs = []
         for p in self._processes:
             try:
-                inner = njit(p.fn)
-                view = p.struct if p.injected else None
-                proc_cfuncs[p.name] = (
-                    make_proc_indexed(inner, view)
-                    if p.indexed else make_proc(inner, view))
+                if p.indexed:
+                    process_jobs.append((p, proc_sig_ix, make_proc_indexed(p)))
+                else:
+                    process_jobs.append((p, proc_sig, make_proc_direct(p)))
             except Exception as exc:
-                calls = getattr(
-                    p.fn, "__cimba_function_calls__", ())
-                if calls:
-                    raise TypeError(
-                        f"process '{p.name}' has an invalid call to "
-                        "component function(s): "
-                        + ", ".join(calls)
-                    ) from exc
-                raise
+                raise_process_compile_error(p, exc)
+
+        try:
+            callbacks = _compile_cfuncs(
+                [
+                    *((signature, function)
+                      for _p, signature, function in process_jobs),
+                    *extra_jobs,
+                ],
+                warm_parent=len(process_jobs) > 4,
+            )
+        except Exception:
+            # Recompile in the parent so invalid user code retains its full
+            # process-specific diagnostic instead of a worker traceback.
+            callbacks = []
+            for p, signature, function in process_jobs:
+                try:
+                    callbacks.append(
+                        _native_cfunc(signature)(function))
+                except Exception as exc:
+                    raise_process_compile_error(p, exc)
+            callbacks.extend(
+                _compile_parallel_cfunc(signature, function)
+                for signature, function in extra_jobs
+            )
+        for (p, _signature, _function), callback in zip(
+                process_jobs, callbacks):
+            proc_cfuncs[p.name] = callback
+
         # Predicates and events keyed by the env field that publishes
         # their compiled address
         pred_cfuncs = {field: make_pred(njit(fn))
                        for _n, fn, field in self._predicates}
         event_cfuncs = {field: make_event(njit(fn), takes_data)
                         for _n, fn, field, takes_data in self._events}
-        collect_inners = [njit(fn) for fn, _count in self._collects]
-        return proc_cfuncs, pred_cfuncs, event_cfuncs, collect_inners
+        return (proc_cfuncs, pred_cfuncs, event_cfuncs,
+                callbacks[len(process_jobs):])
 
     def _codegen_namespace(
         self,
-        proc_cfuncs: dict[str, Any],
         collect_inners: Sequence[Any],
         native_process_names: Mapping[str, str],
     ) -> dict[str, Any]:
         """Globals for the generated trial source: the extern bindings,
         interned entity/process name strings, and process cfunc addresses."""
         ns = dict(_EXTERN_FUNCS)
-        ns.update(carray=carray, addressof=addressof, np=np, CAP=_UNBOUNDED)
+        ns.update(
+            carray=carray,
+            addressof=addressof,
+            call_void_callback=call_void_callback,
+            np=np,
+            CAP=_UNBOUNDED,
+        )
         for i, inner in enumerate(collect_inners):
             ns[f"COLLECT_{i}"] = inner
         # Every named entity shares the 32-byte native name buffer with
@@ -1743,19 +2038,21 @@ class Model:
         native_entity_names = _native_names(name for _key, name in entity_keys)
         for key, name in entity_keys:
             ns[key] = _b.cstring(native_entity_names[name])
-        for pname, proc in proc_cfuncs.items():
+        for process in self._processes:
+            pname = process.name
             ns[f"NAME_{pname}"] = _b.cstring(
                 native_process_names[pname])
-            ns[f"F_{pname}"] = proc.address
         for p in self._processes:
             if p.struct is not None and not p.spawnable:
                 ns[f"SZ_{p.name}"] = np.uint64(p.alloc_size)
         return ns
 
     def _trial_source(self, dtype: np.dtype) -> str:
-        """Generate the trial function and the three recording-window event
-        callbacks as Python source (njit-compilable against the namespace
-        from _codegen_namespace)."""
+        """Generate trial lifecycle callbacks as Python source.
+
+        The functions are njit-compilable against the namespace produced by
+        :meth:`_codegen_namespace`.
+        """
 
         def cap_expr(cap, index: int | None = None,
                      slots: tuple[int, ...] | None = None):
@@ -1781,53 +2078,60 @@ class Model:
         recorded = [f for f in entity_fields if f.kind.recordable]
         handles = self._process_handles
 
-        src = ["def _start_rec(subject, obj):",
-               "    env = carray(subject, 1)[0]"]
+        src = ["def _recording_event(subject, obj):",
+               "    env = carray(subject, 1)[0]",
+               "    if obj == 0:"]
         for f in recorded:
-            src += [f"    {f.kind.binding}_recording_start({ref})"
+            src += [f"        {f.kind.binding}_recording_start({ref})"
                     for ref in self._field_refs(f.name)]
         for f, n in self.pqueues.items():
             for k in range(n):
                 src += [
-                    f"    priorityqueue_recording_start(env['{f}'][{k}])"
+                    f"        priorityqueue_recording_start(env['{f}'][{k}])"
                 ]
         # Datasets tally over the measurement window only
         for dataset in self.datasets:
-            src += [f"    dataset_reset({ref})"
+            src += [f"        dataset_reset({ref})"
                     for ref in self._field_refs(dataset)]
-        src += ["def _stop_rec(subject, obj):",
-                "    env = carray(subject, 1)[0]"]
+        if not (recorded or self.pqueues or self.datasets):
+            src += ["        pass"]
+        src += ["    elif obj == 1:"]
         for f in recorded:
-            src += [f"    {f.kind.binding}_recording_stop({ref})"
+            src += [f"        {f.kind.binding}_recording_stop({ref})"
                     for ref in self._field_refs(f.name)]
         for f, n in self.pqueues.items():
             for k in range(n):
                 src += [
-                    f"    priorityqueue_recording_stop(env['{f}'][{k}])"
+                    f"        priorityqueue_recording_stop(env['{f}'][{k}])"
                 ]
+        if not (recorded or self.pqueues):
+            src += ["        pass"]
         # Stop only processes still running; some may have finished on
         # their own (e.g. a source that produced a fixed number of items)
         has_spawns = any(p.spawnable for p in self._processes)
-        src = (src
-               + ["def _end_sim(subject, obj):",
-                  "    env = carray(subject, 1)[0]"]
-               + [f"    if process_status({h}) == 1:\n"
-                  f"        process_stop({h}, 0)" for h in handles]
-               + (["    spawned_stop_all()"] if has_spawns else []))
+        src += ["    else:"]
+        src += [f"        if process_status({h}) == 1:\n"
+                f"            process_stop({h}, 0)" for h in handles]
+        if has_spawns:
+            src += ["        spawned_stop_all()"]
 
-        src += ["def _trial(vtrl):",
-                "    arr = carray(vtrl, 1)",
-                "    env = arr[0]",
+        src += ["def _trial_initialize(vtrl):",
+                "    env = carray(vtrl, 1)[0]",
                 "    self_addr = addressof(vtrl)",
                 "    logger_apply_flags()",
                 "    event_queue_initialize(env['start_time'])",
                 "    random_initialize(env['seed'])",
                 "    t = env['start_time'] + env['warmup_s']",
-                "    event_schedule(EV_START, self_addr, 0, t, 0)",
+                f"    event_schedule(env['{_RECORDING_EVENT_FIELD}'], "
+                "self_addr, 0, t, 0)",
                 "    t = t + env['duration_s']",
-                "    event_schedule(EV_STOP, self_addr, 0, t, 0)",
+                f"    event_schedule(env['{_RECORDING_EVENT_FIELD}'], "
+                "self_addr, 1, t, 0)",
                 "    t = t + env['cooldown_s']",
-                "    event_schedule(EV_END, self_addr, 0, t, 0)"]
+                f"    event_schedule(env['{_RECORDING_EVENT_FIELD}'], "
+                "self_addr, 2, t, 0)"]
+        src += ["def _trial_entities(vtrl):",
+                "    env = carray(vtrl, 1)[0]"]
         for f in entity_fields:
             binding = f.kind.binding
             for i, ref in enumerate(self._field_refs(f.name)):
@@ -1845,6 +2149,9 @@ class Model:
                         f"    priorityqueue_initialize(h, NAME_{f}_{k}, "
                         "CAP)",
                         f"    env['{f}'][{k}] = h"]
+        src += ["def _trial_processes(vtrl):",
+                "    env = carray(vtrl, 1)[0]",
+                "    self_addr = addressof(vtrl)"]
         offsets = {n: off for n, (_dt, off) in dtype.fields.items()}
         for p in self._processes:
             if p.spawnable:
@@ -1862,10 +2169,12 @@ class Model:
                     src += ["    ctx = self_addr"]
                 src += [f"    p = {create}",
                         f"    process_initialize(p, NAME_{pname}, "
-                        f"F_{pname}, ctx, {p.priority})",
+                        f"env['{_process_callback_field(pname)}'], ctx, "
+                        f"{p.priority})",
                         "    process_start(p)",
                         f"    {self._handle_expr(p, i)} = p"]
-        src += ["    event_queue_execute()"]
+        src += ["def _trial_teardown(vtrl):",
+                "    env = carray(vtrl, 1)[0]"]
         for k, (_fn, instances) in enumerate(self._collects):
             if instances == 1:
                 src += [f"    COLLECT_{k}(env)"]
@@ -1885,7 +2194,18 @@ class Model:
                 src += [f"    priorityqueue_terminate(env['{f}'][{k}])",
                         f"    priorityqueue_destroy(env['{f}'][{k}])"]
         src += ["    event_queue_terminate()",
-                "    random_terminate()"]
+                "    random_terminate()",
+                "def _trial(vtrl):",
+                "    env = carray(vtrl, 1)[0]",
+                f"    call_void_callback(env['{_TRIAL_INITIALIZE_FIELD}'], "
+                "vtrl)",
+                f"    call_void_callback(env['{_TRIAL_ENTITIES_FIELD}'], "
+                "vtrl)",
+                f"    call_void_callback(env['{_TRIAL_PROCESSES_FIELD}'], "
+                "vtrl)",
+                "    event_queue_execute()",
+                f"    call_void_callback(env['{_TRIAL_TEARDOWN_FIELD}'], "
+                "vtrl)"]
         return "\n".join(src)
 
     def _compile(self) -> _Compiled:
@@ -1967,10 +2287,29 @@ class Model:
         trial_ptr = types.CPointer(rec)
         evt_sig = types.void(trial_ptr, types.intp)
 
-        proc_cfuncs, pred_cfuncs, event_cfuncs, collect_inners = \
-            self._compile_callbacks(rec)
+        collect_inners = [njit(fn) for fn, _count in self._collects]
         native_process_names = _native_names(
             process.name for process in self._processes)
+        ns = self._codegen_namespace(
+            collect_inners, native_process_names)
+        self._source = self._trial_source(dtype)
+        exec(compile(self._source, f"<cimba model '{self.name}'>", "exec"),
+             ns)
+
+        proc_cfuncs, pred_cfuncs, event_cfuncs, lifecycle = \
+            self._compile_callbacks(
+                rec,
+                [
+                    (evt_sig, ns["_recording_event"]),
+                    (types.void(trial_ptr), ns["_trial_initialize"]),
+                    (types.void(trial_ptr), ns["_trial_entities"]),
+                    (types.void(trial_ptr), ns["_trial_processes"]),
+                    (types.void(trial_ptr), ns["_trial_teardown"]),
+                    (types.void(trial_ptr), ns["_trial"]),
+                ],
+            )
+        (recording_event, trial_initialize, trial_entities, trial_processes,
+         trial_teardown, trial) = lifecycle
         spawn_descs = {
             p.name: np.array([proc_cfuncs[p.name].address,
                               _b.cstring(native_process_names[p.name]),
@@ -1983,24 +2322,17 @@ class Model:
             for p in self._processes
             if p.spawnable and p.spawn_field is not None
         )
-        ns = self._codegen_namespace(
-            proc_cfuncs, collect_inners, native_process_names)
-        self._source = self._trial_source(dtype)
-        exec(compile(self._source, f"<cimba model '{self.name}'>", "exec"),
-             ns)
-
-        start_rec = cfunc(evt_sig)(ns["_start_rec"])
-        stop_rec = cfunc(evt_sig)(ns["_stop_rec"])
-        end_sim = cfunc(evt_sig)(ns["_end_sim"])
-        ns["EV_START"] = start_rec.address
-        ns["EV_STOP"] = stop_rec.address
-        ns["EV_END"] = end_sim.address
-        trial = cfunc(types.void(trial_ptr))(ns["_trial"])
 
         # Keep every compiled artifact alive for the model's lifetime
         self._compiled = {
             "trial": trial,
-            "events": (start_rec, stop_rec, end_sim),
+            "events": (
+                recording_event,
+                trial_initialize,
+                trial_entities,
+                trial_processes,
+                trial_teardown,
+            ),
             "procs": proc_cfuncs,
             "preds": pred_cfuncs,
             "user_events": event_cfuncs,
@@ -2079,6 +2411,16 @@ class Model:
         trials["warmup_s"] = warmup
         trials["duration_s"] = duration
         trials["cooldown_s"] = cooldown
+        trials[_RECORDING_EVENT_FIELD] = compiled["events"][0].address
+        trials[_TRIAL_INITIALIZE_FIELD] = compiled["events"][1].address
+        trials[_TRIAL_ENTITIES_FIELD] = compiled["events"][2].address
+        trials[_TRIAL_PROCESSES_FIELD] = compiled["events"][3].address
+        trials[_TRIAL_TEARDOWN_FIELD] = compiled["events"][4].address
+        for process in self._processes:
+            if not process.spawnable:
+                trials[_process_callback_field(process.name)] = (
+                    compiled["procs"][process.name].address
+                )
         if self._history_captures or self._dataset_captures:
             trials[HISTORY_CAPTURE_TRIAL_FIELD] = np.arange(
                 n_trials, dtype=np.uint64)
