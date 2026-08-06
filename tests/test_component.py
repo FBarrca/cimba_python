@@ -1313,7 +1313,18 @@ def test_component_process_copies_and_priority_are_registered():
     assert proc.indexed
 
 
-def test_component_process_and_data_lifecycle_callbacks_reuse_class_aot():
+def test_component_process_and_data_lifecycle_callbacks_reuse_class_aot(
+    monkeypatch,
+):
+    import multiprocessing
+
+    def no_fork(_method):
+        raise ValueError("fork unavailable")
+
+    # Exercise the serial fallback used on Windows while defining the class,
+    # then reuse those artifacts during the first experiment.
+    monkeypatch.setattr(multiprocessing, "get_context", no_fork)
+
     class Worker(sim.Component):
         count: sim.State
 
