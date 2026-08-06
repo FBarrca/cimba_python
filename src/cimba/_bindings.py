@@ -266,10 +266,18 @@ logger_user_f64 = _extern("cpy_logger_user_f64", _void(_u32, _intp, _f64))
 
 
 _keepalive: list[object] = []
+_cstring_values: dict[int, str] = {}
 
 
 def cstring(s: str) -> int:
     """Address of a NUL-terminated copy of ``s``, kept alive forever."""
     buf = _ffi.new("char[]", s.encode())
     _keepalive.append(buf)
-    return int(_ffi.cast("intptr_t", buf))
+    address = int(_ffi.cast("intptr_t", buf))
+    _cstring_values[address] = s
+    return address
+
+
+def cstring_value(address: int) -> str | None:
+    """Return text owned by a process-local ``cstring`` address, if any."""
+    return _cstring_values.get(address)

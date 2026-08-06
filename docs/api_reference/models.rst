@@ -123,7 +123,9 @@ compiler versions, operating system, architecture, and CPU target. The cache
 is enabled by default. Set ``CIMBA_CACHE=0`` to disable both memory and disk
 reuse, or ``CIMBA_CACHE_DIR`` to choose the persistent cache directory. Cache
 entries are optimization-only: an absent, stale, or unreadable entry falls
-back to normal compilation.
+back to normal compilation. Process-local handles returned by
+``sim.log_text()`` are placed in a runtime sidecar, so callbacks that write
+logs or reports can safely reuse persisted object code in another process.
 
 Process graphs
 --------------

@@ -154,3 +154,4 @@ def test_persistent_callback_cache_hits_in_a_fresh_interpreter(tmp_path):
     assert warm["misses"] < cold["misses"]
     assert cold["callback_misses"] > 0
     assert warm["callback_hits"] > 0
+    assert warm["callback_misses"] == 0

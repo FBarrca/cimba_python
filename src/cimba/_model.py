@@ -51,6 +51,9 @@ from ._components import (
     _ComponentDecl,
     _component_collect_methods,
     _component_process_methods,
+    _closure_namespace,
+    _compile_lowered,
+    _function_def_from_source,
     _lower_component_collect,
     _lower_component_process,
     _lower_dataset_methods,
@@ -104,6 +107,7 @@ _COLLECT_DESCRIPTORS_FIELD = "_cimba_collect_descriptors"
 _COLLECT_DESCRIPTOR_COUNT_FIELD = "_cimba_collect_descriptor_count"
 _ENTITY_DESCRIPTORS_FIELD = "_cimba_entity_descriptors"
 _ENTITY_DESCRIPTOR_COUNT_FIELD = "_cimba_entity_descriptor_count"
+_RUNTIME_TEXT_HANDLES_FIELD = "_cimba_runtime_text_handles"
 
 _LIFECYCLE_ABI_FIELDS = [
     *_STANDARD_FIELDS,
@@ -125,12 +129,20 @@ _LIFECYCLE_ABI_FIELDS = [
     (_COLLECT_DESCRIPTOR_COUNT_FIELD, "<i8"),
     (_ENTITY_DESCRIPTORS_FIELD, "<i8"),
     (_ENTITY_DESCRIPTOR_COUNT_FIELD, "<i8"),
+    (_RUNTIME_TEXT_HANDLES_FIELD, "<i8"),
 ]
 _LIFECYCLE_ABI_DTYPE = np.dtype(_LIFECYCLE_ABI_FIELDS)
 _LIFECYCLE_ABI_RECORD = from_dtype(_LIFECYCLE_ABI_DTYPE)
 _LIFECYCLE_ABI_PTR = types.CPointer(_LIFECYCLE_ABI_RECORD)
 _INT64_FROM_ADDRESS = ptr_caster(types.int64)
 _FLOAT64_FROM_ADDRESS = ptr_caster(types.float64)
+
+
+@njit(inline="always")
+def _runtime_text_handle(table_address, slot):
+    """Read a process-local text pointer from a model sidecar table."""
+    return carray(_INT64_FROM_ADDRESS(table_address), slot + 1)[slot]
+
 
 _PROCESS_DESCRIPTOR_WIDTH = 8
 _PD_CALLBACK = 0
@@ -1069,6 +1081,7 @@ class _Compiled(TypedDict):
     process_handle_count: int
     entity_descriptors: np.ndarray
     entity_descriptor_count: int
+    runtime_text_handles: np.ndarray
     #: per-spawn-descriptor arrays sim.spawn() reads:
     #: [cfunc address, name cstring, allocation size]
     spawns: dict[str, np.ndarray]
@@ -1380,6 +1393,113 @@ def _spawnable_slot_label(field: str, index: int | None) -> str:
     return field if index is None else f"{field}[{index}]"
 
 
+def _runtime_text_expression(
+    value: Any,
+    register: Callable[[int], int],
+    env_name: str,
+) -> tuple[ast.expr, bool] | None:
+    """Convert constants containing ``log_text`` handles to sidecar reads."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        if _b.cstring_value(value) is not None:
+            slot = register(value)
+            return (
+                ast.Call(
+                    func=ast.Name(
+                        id="_CIMBA_RUNTIME_TEXT_HANDLE", ctx=ast.Load()),
+                    args=[
+                        ast.Subscript(
+                            value=ast.Name(
+                                id=env_name, ctx=ast.Load()),
+                            slice=ast.Constant(
+                                value=_RUNTIME_TEXT_HANDLES_FIELD),
+                            ctx=ast.Load(),
+                        ),
+                        ast.Constant(value=slot),
+                    ],
+                    keywords=[],
+                ),
+                True,
+            )
+        return ast.Constant(value=value), False
+    if isinstance(value, (str, bytes, float, bool, type(None))):
+        return ast.Constant(value=value), False
+    if isinstance(value, tuple):
+        items = [
+            _runtime_text_expression(item, register, env_name)
+            for item in value
+        ]
+        if any(item is None for item in items):
+            return None
+        converted = [item for item in items if item is not None]
+        return (
+            ast.Tuple(elts=[item[0] for item in converted], ctx=ast.Load()),
+            any(item[1] for item in converted),
+        )
+    if isinstance(value, list):
+        items = [
+            _runtime_text_expression(item, register, env_name)
+            for item in value
+        ]
+        if any(item is None for item in items):
+            return None
+        converted = [item for item in items if item is not None]
+        return (
+            ast.List(elts=[item[0] for item in converted], ctx=ast.Load()),
+            any(item[1] for item in converted),
+        )
+    if isinstance(value, Mapping):
+        keys = [
+            _runtime_text_expression(key, register, env_name)
+            for key in value
+        ]
+        values = [
+            _runtime_text_expression(item, register, env_name)
+            for item in value.values()
+        ]
+        if any(item is None for item in (*keys, *values)):
+            return None
+        converted_keys = [item for item in keys if item is not None]
+        converted_values = [item for item in values if item is not None]
+        return (
+            ast.Dict(
+                keys=[item[0] for item in converted_keys],
+                values=[item[0] for item in converted_values],
+            ),
+            any(item[1] for item in (*converted_keys, *converted_values)),
+        )
+    return None
+
+
+class _RuntimeTextHandleLowerer(ast.NodeTransformer):
+    """Replace captured process-local text pointers with sidecar lookups."""
+
+    def __init__(
+        self,
+        *,
+        namespace: Mapping[str, Any],
+        local_names: set[str],
+        register: Callable[[int], int],
+        env_name: str,
+    ) -> None:
+        self.namespace = namespace
+        self.local_names = local_names
+        self.register = register
+        self.env_name = env_name
+        self.changed = False
+
+    def visit_Name(self, node: ast.Name) -> ast.AST:
+        if (not isinstance(node.ctx, ast.Load)
+                or node.id in self.local_names
+                or node.id not in self.namespace):
+            return node
+        converted = _runtime_text_expression(
+            self.namespace[node.id], self.register, self.env_name)
+        if converted is None or not converted[1]:
+            return node
+        self.changed = True
+        return ast.copy_location(converted[0], node)
+
+
 class Model:
     """A simulation model. Subclass it and declare the env fields as
     annotations (Param, Output, Queue, Resource, Pool, Store, Dataset,
@@ -1533,6 +1653,8 @@ class Model:
         self._component_collects: list[tuple[Callable[..., Any], int]] = []
         self._compiled: _Compiled | None = None
         self._callback_cache_stats = CompilationCacheStats()
+        self._runtime_text_handles: list[int] = []
+        self._runtime_text_slots: dict[str, int] = {}
         self._component_functions = _build_component_functions(
             self._component_roots.values())
         self._bind_components()
@@ -1795,6 +1917,10 @@ class Model:
         for root in self._component_roots.values():
             for decl in root.walk():
                 self._register_component_decl_processes(decl)
+        self._component_collects = [
+            (self._lower_runtime_text_handles(fn), count)
+            for fn, count in self._component_collects
+        ]
 
     @staticmethod
     def _lower_shared_or_per_instance(
@@ -2125,6 +2251,73 @@ class Model:
             label=f"model '{self.name}' callback '{fn.__qualname__}'",
         )
 
+    def _register_runtime_text_handle(self, address: int) -> int:
+        """Register one local cstring address under a stable text slot."""
+        text = _b.cstring_value(address)
+        if text is None:
+            raise ValueError("runtime text handle is not owned by Cimba")
+        slot = self._runtime_text_slots.get(text)
+        if slot is not None:
+            return slot
+        slot = len(self._runtime_text_handles)
+        self._runtime_text_slots[text] = slot
+        self._runtime_text_handles.append(address)
+        return slot
+
+    def _lower_runtime_text_handles(self, fn: _F) -> _F:
+        """Move captured ``sim.log_text`` pointers into a runtime sidecar."""
+        namespace = _closure_namespace(fn)
+        try:
+            node = copy.deepcopy(_function_def_from_source(fn))
+        except (OSError, TypeError):
+            return fn
+        if not node.args.args:
+            return fn
+        env_name = node.args.args[0].arg
+        local_names = {
+            arg.arg
+            for arg in (
+                *node.args.posonlyargs,
+                *node.args.args,
+                *node.args.kwonlyargs,
+            )
+        }
+        local_names.update(
+            child.id
+            for child in ast.walk(node)
+            if isinstance(child, ast.Name)
+            and isinstance(child.ctx, (ast.Store, ast.Del))
+        )
+        lowerer = _RuntimeTextHandleLowerer(
+            namespace=namespace,
+            local_names=local_names,
+            register=self._register_runtime_text_handle,
+            env_name=env_name,
+        )
+        lowered = lowerer.visit(node)
+        if not lowerer.changed:
+            return fn
+        if not isinstance(lowered, ast.FunctionDef):
+            raise TypeError("runtime text lowering produced a non-function")
+        lowered.decorator_list = []
+        lowered.returns = None
+        lowered.type_comment = None
+        for arg in lowered.args.args:
+            arg.annotation = None
+            arg.type_comment = None
+        namespace["_CIMBA_RUNTIME_TEXT_HANDLE"] = _runtime_text_handle
+        return _compile_lowered(
+            lowered,
+            filename=(
+                f"<cimba runtime text callback "
+                f"'{self.name}.{fn.__name__}'>"
+            ),
+            fn_name=fn.__name__,
+            qualname=fn.__qualname__,
+            namespace=namespace,
+            like=fn,
+        )
+
     def _process_dag_blocks(
         self,
         entity_kinds: Mapping[str, str],
@@ -2303,6 +2496,7 @@ class Model:
         fn = self._lower_history_methods(fn)
         fn = self._lower_entity_methods(fn)
         fn = self._lower_random_calls(fn)
+        fn = self._lower_runtime_text_handles(fn)
         self._processes.append(_ProcDecl(name, fn, copies, priority,
                                          indexed, struct, injected,
                                          spawnable, spawn_field,
@@ -2430,6 +2624,7 @@ class Model:
         fn = self._lower_history_methods(fn)
         fn = self._lower_entity_methods(fn)
         fn = self._lower_random_calls(fn)
+        fn = self._lower_runtime_text_handles(fn)
         self._predicates.append((name, fn, field))
         return fn
 
@@ -2458,6 +2653,7 @@ class Model:
         fn = self._lower_history_methods(fn)
         fn = self._lower_entity_methods(fn, extra_fields={field: "event"})
         fn = self._lower_random_calls(fn)
+        fn = self._lower_runtime_text_handles(fn)
         self._events.append((name, fn, field, nargs == 2))
         return fn
 
@@ -2476,6 +2672,7 @@ class Model:
         fn = self._lower_history_methods(fn)
         fn = self._lower_entity_methods(fn)
         fn = self._lower_random_calls(fn)
+        fn = self._lower_runtime_text_handles(fn)
         self._collect = fn
         return fn
 
@@ -3095,7 +3292,7 @@ class Model:
 
     def _aot_lifecycle_key(self) -> tuple[str, ...]:
         """Version key for the layout-independent lifecycle callback ABI."""
-        return ("cimba-lifecycle-abi-v1",)
+        return ("cimba-lifecycle-abi-v2",)
 
     def _compile(self) -> _Compiled:
         if self._compiled is not None:
@@ -3183,7 +3380,7 @@ class Model:
         ]
         native_process_names = _native_names(
             process.name for process in self._processes)
-        self._source = "# fixed cimba lifecycle ABI v1"
+        self._source = "# fixed cimba lifecycle ABI v2"
 
         aot_procs, aot_lifecycle, aot_collects = \
             self._aot_component_callbacks()
@@ -3265,6 +3462,10 @@ class Model:
         )
         if collect_descriptors.size == 0:
             collect_descriptors = np.zeros(1, dtype=np.int64)
+        runtime_text_handles = np.asarray(
+            self._runtime_text_handles, dtype=np.int64)
+        if runtime_text_handles.size == 0:
+            runtime_text_handles = np.zeros(1, dtype=np.int64)
 
         # Keep every compiled artifact alive for the model's lifetime
         self._compiled = {
@@ -3288,6 +3489,7 @@ class Model:
             "process_handle_count": process_handle_count,
             "entity_descriptors": entity_descriptors,
             "entity_descriptor_count": entity_descriptor_count,
+            "runtime_text_handles": runtime_text_handles,
             "spawns": spawn_descs,
             "spawn_assignments": spawn_assignments,
             "dtype": dtype,
@@ -3401,6 +3603,8 @@ class Model:
             compiled["entity_descriptors"].ctypes.data
         trials[_ENTITY_DESCRIPTOR_COUNT_FIELD] = \
             compiled["entity_descriptor_count"]
+        trials[_RUNTIME_TEXT_HANDLES_FIELD] = \
+            compiled["runtime_text_handles"].ctypes.data
         if self._history_captures or self._dataset_captures:
             trials[HISTORY_CAPTURE_TRIAL_FIELD] = np.arange(
                 n_trials, dtype=np.uint64)
