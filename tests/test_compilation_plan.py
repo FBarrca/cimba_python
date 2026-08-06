@@ -155,3 +155,89 @@ def test_persistent_callback_cache_hits_in_a_fresh_interpreter(tmp_path):
     assert cold["callback_misses"] > 0
     assert warm["callback_hits"] > 0
     assert warm["callback_misses"] == 0
+
+
+def test_indexed_callback_cache_key_includes_record_layout(tmp_path):
+    script = tmp_path / "indexed_layout_cache.py"
+    script.write_text(
+        """
+import json
+import sys
+
+import numpy as np
+
+import cimba.sim as sim
+
+
+class Source(sim.Component):
+    demand: sim.Trace
+    total: sim.Output
+
+    @sim.process
+    def consume(self, env):
+        values = sim.Trace(self.demand)
+        total = 0.0
+        for value in values:
+            total += value
+        self.total = total
+
+
+annotations = {"sources": list[Source]}
+if int(sys.argv[1]):
+    annotations = {"extra": sim.State, **annotations}
+Network = type(
+    "Network",
+    (sim.Model,),
+    {
+        "__module__": __name__,
+        "__annotations__": annotations,
+        "sources": [Source(), Source()],
+    },
+)
+model = Network()
+experiment = model.experiment(
+    sources__demand=[
+        np.array([1.0, 2.0], dtype=np.float64),
+        np.array([3.0, 4.0], dtype=np.float64),
+    ],
+    replications=1,
+    duration=1.0,
+    warmup=0.0,
+    seed=41,
+)
+failures = experiment.run()
+status = Network.compilation_status()
+print(json.dumps({
+    "failures": failures,
+    "totals": experiment["sources__total"].tolist(),
+    "hits": status.cache_hits,
+    "misses": status.cache_misses,
+}))
+""".lstrip()
+    )
+    env = os.environ.copy()
+    env["CIMBA_CACHE"] = "1"
+    env["CIMBA_CACHE_DIR"] = str(tmp_path / "cache")
+    root = Path(__file__).resolve().parents[1]
+
+    results = []
+    for has_extra_output in (1, 0):
+        completed = subprocess.run(
+            [sys.executable, str(script), str(has_extra_output)],
+            cwd=root,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        results.append(json.loads(completed.stdout))
+
+    assert [result["failures"] for result in results] == [0, 0]
+    assert [result["totals"] for result in results] == [
+        [[3.0, 7.0]],
+        [[3.0, 7.0]],
+    ]
+    # Generic lifecycle callbacks still hit, but the record-specific indexed
+    # process must compile separately for the second layout.
+    assert results[1]["hits"] > 0
+    assert results[1]["misses"] > 0

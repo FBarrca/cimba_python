@@ -536,6 +536,9 @@ def _callback_function_key(function: Callable[..., Any]) -> str:
             digest.update(repr(code.co_names).encode())
             digest.update(repr(py_func.__defaults__).encode())
             digest.update(repr(py_func.__kwdefaults__).encode())
+            digest.update(
+                repr(getattr(py_func, "__cimba_cache_salt__", None)).encode()
+            )
             source = getattr(py_func, "__cimba_source__", None)
             if source is not None:
                 digest.update(source.encode())
@@ -574,7 +577,7 @@ def _callback_function_key(function: Callable[..., Any]) -> str:
     return digest.hexdigest()
 
 
-_CALLBACK_CACHE_FORMAT = 2
+_CALLBACK_CACHE_FORMAT = 3
 _MEMORY_CALLBACK_CACHE: dict[str, Any] = {}
 _MEMORY_CALLBACK_CACHE_LOCK = threading.RLock()
 _CALLBACK_PLATFORM_KEY: str | None = None
@@ -3027,6 +3030,15 @@ class Model:
                     env = carray(rec_from_addr(pair[0]), 1)[0]
                     inner(env, pair[1], struct(me))
                     return 0
+            # The public indexed-process ABI carries an int64 context pointer,
+            # not the model record type. The adapter nevertheless embeds a
+            # record-specific pointer cast, so its cache identity must include
+            # the complete record layout explicitly.
+            proc.__cimba_cache_salt__ = (
+                "indexed-record-v1",
+                rec.dtype.descr,
+                rec.dtype.itemsize,
+            )
             return proc
 
         def make_proc_direct(p):
