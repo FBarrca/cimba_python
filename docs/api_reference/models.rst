@@ -97,6 +97,34 @@ copy index: ``def visitor(env, idx, view: Visitor)``. ``Visitor(handle)``
 returns a read/write view of another process's fields when model code already
 has that process handle.
 
+Compilation plans and cache
+---------------------------
+
+Reusable component callbacks are planned from the first normally constructed
+model instance; importing a module or defining a model class does not construct
+a hidden prototype. ``Model.compilation_status()`` reports ``pending``,
+``ready``, ``failed``, or ``unavailable`` together with elapsed time, callback
+counts, persistent-cache hits/misses, and an error message when preparation
+failed. ``Model.compilation_plan()`` returns the immutable
+``sim.CompilationPlan`` after a plan has been built.
+After an instance compiles its remaining processes, predicates, events, and
+collectors, ``model.callback_cache_stats()`` reports their cache hits, misses,
+and writes separately from the reusable class preparation.
+
+The default ``__cimba_precompile__ = "eager"`` prepares reusable component
+callbacks during the first real model construction. A subclass can select
+``"lazy"`` to prepare them on its first experiment or ``"explicit"`` and call
+``Model.precompile(*constructor_args, **constructor_kwargs)`` itself. Explicit
+precompilation retries a previous failure, which is useful when callback
+globals are initialized later during module startup.
+
+Compiled native callbacks are cached by code, signature, record layout,
+compiler versions, operating system, architecture, and CPU target. The cache
+is enabled by default. Set ``CIMBA_CACHE=0`` to disable both memory and disk
+reuse, or ``CIMBA_CACHE_DIR`` to choose the persistent cache directory. Cache
+entries are optimization-only: an absent, stale, or unreadable entry falls
+back to normal compilation.
+
 Process graphs
 --------------
 

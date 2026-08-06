@@ -44,6 +44,19 @@ jobs:
       - name: Run tests
         run: uv run pytest
 
+      - name: Check component compilation cache
+        run: >-
+          uv run python benchmark/component_compilation.py
+          --runs 2 --scenario synthetic --scales 10 --cache warm --check
+          --json build/component-compilation-linux.json
+
+      - name: Upload component benchmark
+        uses: actions/upload-artifact@v7
+        with:
+          name: component-compilation-linux
+          path: build/component-compilation-linux.json
+          if-no-files-found: error
+
   test-windows:
     name: Test Windows
     runs-on: windows-2025
@@ -84,6 +97,19 @@ jobs:
             Write-Output "::error title=Windows pytest failed::$message"
           }
           exit $pytestExit
+
+      - name: Check component compilation cache
+        run: >-
+          uv run python benchmark/component_compilation.py
+          --runs 2 --scenario synthetic --scales 10 --cache warm --check
+          --json build/component-compilation-windows.json
+
+      - name: Upload component benchmark
+        uses: actions/upload-artifact@v7
+        with:
+          name: component-compilation-windows
+          path: build/component-compilation-windows.json
+          if-no-files-found: error
 
   test-macos:
     name: Test macOS (Apple Silicon)
@@ -126,6 +152,19 @@ jobs:
 
       - name: Run tests
         run: uv run pytest
+
+      - name: Check component compilation cache
+        run: >-
+          uv run python benchmark/component_compilation.py
+          --runs 2 --scenario synthetic --scales 10 --cache warm --check
+          --json build/component-compilation-macos-arm64.json
+
+      - name: Upload component benchmark
+        uses: actions/upload-artifact@v7
+        with:
+          name: component-compilation-macos-arm64
+          path: build/component-compilation-macos-arm64.json
+          if-no-files-found: error
 
   build:
     name: Build distributions

@@ -22,3 +22,25 @@ Run the current Python benchmarks from the repository root:
 uv run python benchmark/mm1.py
 uv run python benchmark/mm1_multi.py
 ```
+
+## Component compilation
+
+`component_compilation.py` measures compilation in fresh Python interpreters.
+It reports median and median absolute deviation for import, model definition,
+model construction/precompilation, first experiment, and cached experiment.
+The two tutorial models are complemented by synthetic component collections at
+1, 10, 100, and 1,000 instances; the synthetic model includes indexed and
+structured processes, a spawnable process, predicates, events, and
+multi-instance collectors.
+
+```bash
+uv run python benchmark/component_compilation.py
+uv run python benchmark/component_compilation.py --cache cold --json cold.json
+uv run python benchmark/component_compilation.py --cache warm --json warm.json
+```
+
+Every JSON result contains the raw samples and Python, operating-system, CPU,
+Cimba, NumPy, Numba, and LLVM metadata. CI runs a two-process warm-cache smoke
+benchmark natively on Linux, Windows, and Apple silicon; `--check` makes that
+job fail if compilation is unsuccessful or the second process records no
+persistent-cache hit.

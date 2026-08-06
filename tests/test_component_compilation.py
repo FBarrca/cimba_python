@@ -3,8 +3,9 @@
 Run with ``uv run pytest tests/test_component_compilation.py -s -q`` to see
 the measurements.  This is intentionally a reporting benchmark rather than
 a threshold-based performance test: compiler and CPU differences make a fixed
-limit unsuitable for the test suite. Class-definition AOT and the remaining
-first-experiment compilation are reported separately so work is not hidden.
+limit unsuitable for the test suite. Reusable class precompilation and the
+remaining first-experiment compilation are reported separately so work is not
+hidden.
 """
 
 import time
@@ -78,8 +79,8 @@ def test_component_compilation_benchmark(tmp_path):
         assert model._compiled is not None
         assert experiment.trials.dtype == cached_experiment.trials.dtype
         component_nodes, component_instances = _component_counts(model)
-        aot = type(model).__dict__.get("_cimba_component_aot")
-        aot_seconds = 0.0 if aot is None else aot["seconds"]
+        status = type(model).compilation_status()
+        aot_seconds = status.seconds if status.state == "ready" else 0.0
         measurements.append(
             (
                 name,
@@ -94,7 +95,7 @@ def test_component_compilation_benchmark(tmp_path):
 
     print("\nCimba representative component compilation benchmark")
     print(
-        "model           | nodes | instances | class AOT | model build | "
+        "model           | nodes | instances | precompile | model build | "
         "first experiment | cached experiment"
     )
     print(

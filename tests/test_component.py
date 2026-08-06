@@ -1321,41 +1321,65 @@ def test_component_process_and_data_lifecycle_callbacks_reuse_class_aot(
     def no_fork(_method):
         raise ValueError("fork unavailable")
 
-    # Exercise the serial fallback used on Windows while defining the class,
-    # then reuse those artifacts during the first experiment.
+    # Exercise the serial fallback used on Windows while planning from the
+    # first real model, then reuse those artifacts during the experiment.
     monkeypatch.setattr(multiprocessing, "get_context", no_fork)
+    monkeypatch.setenv("CIMBA_CACHE", "0")
 
     class Worker(sim.Component):
         count: sim.State
+        total: sim.Output
 
         @sim.process
         def run(self, env):
             self.count += 1
 
+        @sim.collect
+        def report(self, env):
+            self.total = self.count
+
     class Network(sim.Model):
         worker: Worker = Worker()
 
-    cache = Network.__dict__["_cimba_component_aot"]
-    assert cache is not None
+    assert Network.compilation_status().state == "pending"
+    assert Network.compilation_plan() is None
 
     model = Network()
-    procs, lifecycle = model._aot_component_callbacks()
-    assert procs["worker__run"] is cache["procs"]["worker__run"]
-    assert lifecycle == cache["lifecycle"]
+    status = Network.compilation_status()
+    plan = Network.compilation_plan()
+    compiled = Network.__dict__["_cimba_component_compiled"]
+    assert status.state == "ready"
+    assert status.error is None
+    assert plan is not None
+    assert compiled is not None
+    assert plan.process_names == ("worker__run",)
+    assert plan.callback_count == 6
+
+    procs, lifecycle, collects = model._aot_component_callbacks()
+    assert procs["worker__run"] is dict(compiled.procs)["worker__run"]
+    assert lifecycle == {
+        0: compiled.lifecycle[0],
+        1: compiled.lifecycle[1],
+        2: compiled.lifecycle[2],
+        4: compiled.lifecycle[3],
+    }
+    assert collects == {0: compiled.collects[0]}
 
     model.experiment(replications=1, duration=1.0, warmup=0.0)
     assert model._compiled["procs"]["worker__run"] is procs["worker__run"]
     assert model._compiled["events"][:3] == tuple(
-        lifecycle[index] for index in range(3)
-    )
+        lifecycle[index] for index in range(3))
+    assert model._compiled["events"][4] is lifecycle[4]
+    assert model._compiled["collect_callbacks"][0] is collects[0]
 
     # A constructor-added entity shifts the class data layout and changes
     # entity setup, so both AOT groups must be rejected safely.
     extended = Network(queues=["extra"])
-    extended_procs, extended_lifecycle = \
+    extended_procs, extended_lifecycle, extended_collects = \
         extended._aot_component_callbacks()
     assert extended_procs == {}
     assert extended_lifecycle == {}
+    assert extended_collects == {}
 
 
 def test_component_process_dag_uses_lowered_source():
