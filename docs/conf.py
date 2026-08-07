@@ -12,7 +12,7 @@ if version_match:
     release = version_match.group(1)
     version = release
 else:
-    release = "0.5.9"
+    release = "0.5.10"
     version = release
 
 copyright = "Francisco Barragán Castro 2025-26"

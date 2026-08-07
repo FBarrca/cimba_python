@@ -36,7 +36,7 @@ __all__ = [
 ]
 
 #: Version of this Python wrapper (distinct from the native Cimba version).
-__version__ = "0.5.9"
+__version__ = "0.5.10"
 
 
 def version() -> str:
