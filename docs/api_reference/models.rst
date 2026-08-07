@@ -52,7 +52,7 @@ have been removed without compatibility aliases. Move each callback into the
    model = Clinic("clinic")
 
    @model.process
-   def arrivals(env: Clinic):
+   def arrivals(self: Clinic):
        ...
 
 .. code-block:: python
@@ -60,7 +60,7 @@ have been removed without compatibility aliases. Move each callback into the
    # Now
    class Clinic(sim.Model):
        @sim.process
-       def arrivals(env: "Clinic"):
+       def arrivals(self: "Clinic"):
            ...
 
    model = Clinic("clinic")
@@ -76,8 +76,9 @@ Components
 
 Components group related declarations and process methods. Methods decorated
 with top-level ``@sim.process`` are lowered into ordinary model processes at
-model construction, and model callbacks can read component fields with
-``env.retailer.orders``. Component fields are exposed in experiments with
+model construction, and model callbacks use ``self`` as the root trial
+environment; they can read component fields with ``self.retailer.orders``.
+Component fields are exposed in experiments with
 flattened names such as ``retailer__orders``. Methods decorated with
 top-level ``@sim.collect`` run once per instance at the end of each trial,
 before the model-level ``@sim.collect`` callback, typically assigning the
@@ -92,6 +93,24 @@ outputs, state, and explicitly declared ``sim.Const`` values, including through
 nested components and ``Ref``/``Refs`` paths, but cannot mutate fields or call
 scheduling and entity operations.
 
+The root model may own the same kind of helper. Its first argument is ``self``,
+which represents the root trial environment view. Model callbacks call it
+through ``self.<name>(...)``; component callbacks call it through
+``env.<name>(...)``:
+
+.. code-block:: python
+
+   class Inventory(sim.Model):
+       stock: sim.State
+
+       @sim.function
+       def shortage(self: "Inventory", demand: float) -> float:
+           return max(0.0, demand - float(self.stock))
+
+Root helpers may read scalar model fields and component scalar namespaces and
+may call other root or component functions. They follow the same annotation,
+read-only, and non-recursion rules as component functions.
+
 Components may contain other components, and flattened names follow the same
 recursive convention, for example ``env.attraction.queues.line`` becomes
 ``attraction__queues__line``. Nested component process methods are also lowered
@@ -103,6 +122,8 @@ spawned from component or model code with natural paths such as
 ``sim.spawn(self.visitor, env)`` or
 ``sim.spawn(env.park.entrance.visitor, env)``. These component processes
 may receive a final ``sim.Struct`` view parameter.
+They may also pass ``struct=SomeStruct`` to attach storage without injecting a
+view; if both forms are used they must name the same struct type.
 
 Components may reference other declared components with ``sim.Ref[Target]``
 fields and routing tables of collection items with ``sim.Refs[Target]``,
@@ -113,10 +134,10 @@ letting method bodies route through paths such as
 
 Fixed repeated structures can be declared with standard ``list[Component]``
 annotations, for example ``attractions: list[Attraction] = [...]``. Model
-callbacks can use indexed access such as ``env.attractions[i].queues[j]``;
+callbacks can use indexed access such as ``self.attractions[i].queues[j]``;
 runtime fields remain flattened, for example ``attractions__queues``. Nested
 collections are linearized behind the scenes, so
-``env.campus.zones[i].gates[j].queue`` remains valid model source while the
+``self.campus.zones[i].gates[j].queue`` remains valid model source while the
 trial table stores a one-dimensional ``campus__zones__gates__queue`` field.
 
 Per-process fields
@@ -124,8 +145,8 @@ Per-process fields
 
 Declare a ``sim.Struct`` subclass with ``float`` and ``int`` annotations. A
 process can receive its own field view as a final annotated parameter:
-``def visitor(env, view: Visitor)``. Multi-copy processes can also receive the
-copy index: ``def visitor(env, idx, view: Visitor)``. ``Visitor(handle)``
+``def visitor(self, view: Visitor)``. Multi-copy processes can also receive the
+copy index: ``def visitor(self, idx, view: Visitor)``. ``Visitor(handle)``
 returns a read/write view of another process's fields when model code already
 has that process handle.
 
@@ -257,7 +278,7 @@ that schema to ``model.experiment().results``::
 
 Unparameterized models continue to use the general dynamic result namespace.
 
-If a model-level collector declares ``env.<entity>.history().capture()``,
+If a model-level collector declares ``self.<entity>.history().capture()``,
 ``exp.history("field", trial=i)`` returns that trial's raw time-series rows as
 a NumPy array with columns ``time``, ``value``, and ``duration``.
 ``exp.histories("field")`` returns one such array per trial, aligned with the
@@ -265,7 +286,7 @@ experiment row order. For fields owned by a component collection, indexed
 captures return one inner array per collection item; use
 ``exp.history("field", trial=i, index=j)`` to select one item.
 
-If a model-level collector declares ``env.<dataset>.capture()``,
+If a model-level collector declares ``self.<dataset>.capture()``,
 ``exp.dataset("field", trial=i)`` returns that trial's raw dataset samples as a
 one-dimensional NumPy array. ``exp.datasets("field")`` returns one array per
 trial, also aligned with the experiment row order.

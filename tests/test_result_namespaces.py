@@ -15,14 +15,14 @@ def test_nested_output_namespace_preserves_flattened_array():
         customers_served: sim.Output
 
         @sim.process
-        def idle(env: "QueueModel"):
+        def idle(self):
             sim.suspend()
 
         @sim.collect
-        def collect(env: "QueueModel"):
-            env.customers_served = 3.0
-            env.counters[0].mean_queue_length = 1.0
-            env.counters[1].mean_queue_length = 2.0
+        def collect(self):
+            self.customers_served = 3.0
+            self.counters[0].mean_queue_length = 1.0
+            self.counters[1].mean_queue_length = 2.0
 
     model = QueueModel()
 
@@ -56,11 +56,11 @@ def test_dynamic_output_names_remain_available_through_string_api():
         pass
 
         @sim.collect
-        def collect(env: "ModelWithLegacyOutput"):
-            env.dynamic_value = 2.0
+        def collect(self):
+            self.dynamic_value = 2.0
 
         @sim.process
-        def idle(env: "ModelWithLegacyOutput"):
+        def idle(self):
             sim.suspend()
 
     model = ModelWithLegacyOutput(outputs=["dynamic_value"])
@@ -84,14 +84,14 @@ def test_dataset_namespace_matches_existing_plural_accessor():
         count: sim.Output
 
         @sim.process
-        def driver(env: "Samples"):
-            env.waits.add(1.0)
-            env.waits.add(2.0)
+        def driver(self):
+            self.waits.add(1.0)
+            self.waits.add(2.0)
 
         @sim.collect
-        def collect(env: "Samples"):
-            env.count = float(env.waits.count())
-            env.waits.capture()
+        def collect(self):
+            self.count = float(self.waits.count())
+            self.waits.capture()
 
     model = Samples()
 
@@ -117,16 +117,16 @@ def test_component_results_merge_outputs_datasets_and_histories():
         station: Station = Station()
 
         @sim.process
-        def driver(env: "Clinic"):
-            env.station.samples.add(4.0)
-            env.station.queue.put(1)
+        def driver(self):
+            self.station.samples.add(4.0)
+            self.station.queue.put(1)
             sim.suspend()
 
         @sim.collect
-        def collect(env: "Clinic"):
-            env.station.score = 4.0
-            env.station.samples.capture()
-            env.station.queue.history().capture()
+        def collect(self):
+            self.station.score = 4.0
+            self.station.samples.capture()
+            self.station.queue.history().capture()
 
     model = Clinic()
 
@@ -154,17 +154,17 @@ def test_history_namespace_preserves_scalar_and_collection_shapes():
         counters: list[Counter] = [Counter(), Counter()]
 
         @sim.process
-        def driver(env: "QueueModel"):
-            env.q.put(1)
-            env.counters[0].line.put(1)
-            env.counters[1].line.put(2)
+        def driver(self):
+            self.q.put(1)
+            self.counters[0].line.put(1)
+            self.counters[1].line.put(2)
             sim.hold(1.0)
 
         @sim.collect
-        def collect(env: "QueueModel"):
-            env.q.history().capture()
-            env.counters[0].line.history().capture()
-            env.counters[1].line.history().capture()
+        def collect(self):
+            self.q.history().capture()
+            self.counters[0].line.history().capture()
+            self.counters[1].line.history().capture()
 
     model = QueueModel()
 

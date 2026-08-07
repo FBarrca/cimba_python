@@ -34,23 +34,23 @@ class MM1Bench(sim.Model):
     obj_cnt: sim.State
 
     @sim.process
-    def arrival(env: "MM1Bench"):
+    def arrival(self):
         for _ in range(NUM_OBJECTS):
-            sim.hold(random.exponential(env.arr_mean))
-            env.queue.put(sim.f2i(sim.now()))
+            sim.hold(random.exponential(self.arr_mean))
+            self.queue.put(sim.f2i(sim.now()))
 
     @sim.process
-    def service(env: "MM1Bench"):
-        env.sum_wait = 0.0
+    def service(self):
+        self.sum_wait = 0.0
         while True:
-            job = env.queue.take()
-            sim.hold(random.exponential(env.srv_mean))
-            env.sum_wait = env.sum_wait + (sim.now() - sim.i2f(job))
-            env.obj_cnt = env.obj_cnt + 1
+            job = self.queue.take()
+            sim.hold(random.exponential(self.srv_mean))
+            self.sum_wait = self.sum_wait + (sim.now() - sim.i2f(job))
+            self.obj_cnt = self.obj_cnt + 1
 
     @sim.collect
-    def stats(env: "MM1Bench"):
-        env.avg_wait = env.sum_wait / env.obj_cnt
+    def stats(self):
+        self.avg_wait = self.sum_wait / self.obj_cnt
 
 
 mm1 = MM1Bench("mm1_bench")

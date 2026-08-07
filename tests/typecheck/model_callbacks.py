@@ -7,39 +7,63 @@ class Visitor(sim.Struct):
     value: int
 
 
+class Worker(sim.Component):
+    handles: sim.Processes
+    ready: sim.Predicate
+    alarm: sim.Event
+    result: sim.Output
+
+    @sim.process(field="handles", struct=Visitor)
+    def run(self, env: "Base") -> None:
+        self.result = env.adjust(1.0)
+
+    @sim.predicate(field="ready")
+    def is_ready(self, env: "Base") -> bool:
+        return self.result > 0
+
+    @sim.event(field="alarm")
+    def on_alarm(self, env: "Base", data: int) -> None:
+        self.result = float(data)
+
+
 class Base(sim.Model):
     workers: sim.Processes
     ready: sim.Predicate
     alarm: sim.Event
     result: sim.Output
+    nested: Worker = Worker()
+
+    @sim.function
+    def adjust(self: "Base", value: float) -> float:
+        return value + self.result
 
     @sim.process(copies=3, priority=1, field="workers")
-    def worker(env: "Base", index: int) -> None:
+    def worker(self: "Base", index: int) -> None:
         sim.hold(float(index))
 
     @sim.process(spawnable=True)
-    def visitor(env: "Base", state: Visitor) -> None:
-        env.result = state.value
+    def visitor(self: "Base", state: Visitor) -> None:
+        self.result = state.value
 
     @sim.predicate(field="ready")
-    def is_ready(env: "Base") -> bool:
-        return env.result > 0
+    def is_ready(self: "Base") -> bool:
+        return self.result > 0
 
     @sim.event(field="alarm")
-    def handle_alarm(env: "Base", data: int) -> None:
-        env.result = data
+    def handle_alarm(self: "Base", data: int) -> None:
+        self.result = data
 
     @sim.process
-    def launch(env: "Base") -> None:
-        handle: sim.Handle = sim.spawn(env.visitor, env)
+    def launch(self: "Base") -> None:
+        handle: sim.Handle = sim.spawn(self.visitor, self)
         Visitor(handle).value = 1
 
     @sim.collect
-    def stats(env: "Base") -> None:
-        env.result += 1
+    def stats(self: "Base") -> None:
+        self.result = self.adjust(self.result) + 1
 
 
 class Derived(Base):
     @sim.process
-    def launch(env: "Derived") -> None:
-        env.alarm.schedule(0.0, 2)
+    def launch(self: "Derived") -> None:
+        self.alarm.schedule(0.0, 2)

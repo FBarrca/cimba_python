@@ -264,6 +264,37 @@ class _DatasetCaptureLowerer(ast.NodeTransformer):
         return self.generic_visit(node)
 
 
+def lower_history_capture_calls(
+    node: ast.FunctionDef,
+    *,
+    model_name: str,
+    history_fields: Mapping[str, str],
+    indexed_history_fields: Mapping[str, int],
+    register: Callable[[str, str, int | None], int],
+    namespace: dict[str, Any] | None = None,
+) -> tuple[ast.FunctionDef, bool]:
+    if not node.args.args:
+        return node, False
+
+    env_name = node.args.args[0].arg
+    label = f"model '{model_name}' callback '{node.name}'"
+    lowerer = _HistoryCaptureLowerer(
+        env_name=env_name,
+        history_fields=history_fields,
+        indexed_history_fields=indexed_history_fields,
+        register=register,
+        label=label,
+    )
+    lowered = lowerer.visit(node)
+    if not isinstance(lowered, ast.FunctionDef):
+        raise TypeError("history capture lowering produced a non-function")
+    if lowerer.changed and namespace is not None:
+        namespace.update(timeseries_lowering_namespace())
+        namespace["_cimba_capture_history"] = \
+            _b.history_capture_store_capture
+    return lowered, lowerer.changed
+
+
 def lower_history_capture_methods(
     fn: _F,
     *,
@@ -282,22 +313,10 @@ def lower_history_capture_methods(
             f"model '{model_name}' callback '{fn.__qualname__}' needs "
             "inspectable source to use history capture"
         ) from exc
-    if not node.args.args:
-        return fn
-
-    env_name = node.args.args[0].arg
-    label = f"model '{model_name}' callback '{fn.__name__}'"
-    lowerer = _HistoryCaptureLowerer(
-        env_name=env_name,
-        history_fields=history_fields,
-        indexed_history_fields=indexed_history_fields,
-        register=register,
-        label=label,
-    )
-    lowered = lowerer.visit(node)
-    if not isinstance(lowered, ast.FunctionDef):
-        raise TypeError("history capture lowering produced a non-function")
-    if not lowerer.changed:
+    lowered, changed = lower_history_capture_calls(
+        node, model_name=model_name, history_fields=history_fields,
+        indexed_history_fields=indexed_history_fields, register=register)
+    if not changed:
         return fn
 
     lowered.decorator_list = []
@@ -321,6 +340,34 @@ def lower_history_capture_methods(
     return lowered_fn
 
 
+def lower_dataset_capture_calls(
+    node: ast.FunctionDef,
+    *,
+    model_name: str,
+    dataset_fields: set[str],
+    register: Callable[[str, str], int],
+    namespace: dict[str, Any] | None = None,
+) -> tuple[ast.FunctionDef, bool]:
+    if not node.args.args:
+        return node, False
+
+    env_name = node.args.args[0].arg
+    label = f"model '{model_name}' callback '{node.name}'"
+    lowerer = _DatasetCaptureLowerer(
+        env_name=env_name,
+        dataset_fields=dataset_fields,
+        register=register,
+        label=label,
+    )
+    lowered = lowerer.visit(node)
+    if not isinstance(lowered, ast.FunctionDef):
+        raise TypeError("dataset capture lowering produced a non-function")
+    if lowerer.changed and namespace is not None:
+        namespace["_cimba_capture_dataset"] = \
+            _b.dataset_capture_store_capture
+    return lowered, lowerer.changed
+
+
 def lower_dataset_capture_methods(
     fn: _F,
     *,
@@ -338,21 +385,10 @@ def lower_dataset_capture_methods(
             f"model '{model_name}' callback '{fn.__qualname__}' needs "
             "inspectable source to use dataset capture"
         ) from exc
-    if not node.args.args:
-        return fn
-
-    env_name = node.args.args[0].arg
-    label = f"model '{model_name}' callback '{fn.__name__}'"
-    lowerer = _DatasetCaptureLowerer(
-        env_name=env_name,
-        dataset_fields=dataset_fields,
-        register=register,
-        label=label,
-    )
-    lowered = lowerer.visit(node)
-    if not isinstance(lowered, ast.FunctionDef):
-        raise TypeError("dataset capture lowering produced a non-function")
-    if not lowerer.changed:
+    lowered, changed = lower_dataset_capture_calls(
+        node, model_name=model_name, dataset_fields=dataset_fields,
+        register=register)
+    if not changed:
         return fn
 
     lowered.decorator_list = []
@@ -375,4 +411,9 @@ def lower_dataset_capture_methods(
     return lowered_fn
 
 
-__all__ = ["lower_dataset_capture_methods", "lower_history_capture_methods"]
+__all__ = [
+    "lower_dataset_capture_calls",
+    "lower_dataset_capture_methods",
+    "lower_history_capture_calls",
+    "lower_history_capture_methods",
+]

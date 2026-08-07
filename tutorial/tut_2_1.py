@@ -93,31 +93,31 @@ class CheeseGame(sim.Model):
     rat: sim.Processes
 
     @sim.process(copies=NUM_MICE, field="mouse")
-    def mouse_process(env: "CheeseGame"):
+    def mouse_process(self):
         me = sim.current()
         held = 0
         while True:
             held, grabbed, stolen, preempted, interrupted = _forage_once(
-                env, me, 0, 1, 5, -10, 10, held)
-            env.m_grab = env.m_grab + grabbed
-            env.m_stol = env.m_stol + stolen
-            env.m_pre = env.m_pre + preempted
-            env.m_int = env.m_int + interrupted
+                self, me, 0, 1, 5, -10, 10, held)
+            self.m_grab = self.m_grab + grabbed
+            self.m_stol = self.m_stol + stolen
+            self.m_pre = self.m_pre + preempted
+            self.m_int = self.m_int + interrupted
 
     @sim.process(copies=NUM_RATS, field="rat")
-    def rat_process(env: "CheeseGame"):
+    def rat_process(self):
         me = sim.current()
         held = 0
         while True:
             held, grabbed, stolen, preempted, interrupted = _forage_once(
-                env, me, 1, 3, 10, -5, 15, held)
-            env.r_grab = env.r_grab + grabbed
-            env.r_stol = env.r_stol + stolen
-            env.r_pre = env.r_pre + preempted
-            env.r_int = env.r_int + interrupted
+                self, me, 1, 3, 10, -5, 15, held)
+            self.r_grab = self.r_grab + grabbed
+            self.r_stol = self.r_stol + stolen
+            self.r_pre = self.r_pre + preempted
+            self.r_int = self.r_int + interrupted
 
     @sim.process
-    def cat(env: "CheeseGame"):
+    def cat(self):
         while True:
             # Nobody interrupts a sleeping cat, disregard the signal
             sim.hold(random.exponential(5.0))
@@ -126,32 +126,32 @@ class CheeseGame(sim.Model):
                 sim.hold(random.exponential(1.0))
                 i = random.dice(0, NUM_MICE + NUM_RATS - 1)
                 if i < NUM_MICE:
-                    target = env.mouse[i]
+                    target = self.mouse[i]
                 else:
-                    target = env.rat[i - NUM_MICE]
+                    target = self.rat[i - NUM_MICE]
                 # Send it the generic signal or a random user-defined one
                 if random.bernoulli(0.5) == 1:
                     sim.interrupt(target, sim.INTERRUPTED, 0)
                 else:
                     sim.interrupt(target, random.dice(10, 100), 0)
-                env.chases = env.chases + 1
+                self.chases = self.chases + 1
                 # Flip a coin to decide whether to go back to sleep
                 if random.bernoulli(0.5) == 0:
                     break
 
     @sim.collect
-    def game_stats(env: "CheeseGame"):
-        env.mice_grabbed = env.m_grab
-        env.mice_stolen = env.m_stol
-        env.mice_preempted = env.m_pre
-        env.mice_interrupted = env.m_int
-        env.rats_grabbed = env.r_grab
-        env.rats_stolen = env.r_stol
-        env.rats_preempted = env.r_pre
-        env.rats_interrupted = env.r_int
-        env.cat_chases = env.chases
-        env.accounting_errors = env.acct_errors
-        env.cheese_in_use = env.cheese.mean_in_use()
+    def game_stats(self):
+        self.mice_grabbed = self.m_grab
+        self.mice_stolen = self.m_stol
+        self.mice_preempted = self.m_pre
+        self.mice_interrupted = self.m_int
+        self.rats_grabbed = self.r_grab
+        self.rats_stolen = self.r_stol
+        self.rats_preempted = self.r_pre
+        self.rats_interrupted = self.r_int
+        self.cat_chases = self.chases
+        self.accounting_errors = self.acct_errors
+        self.cheese_in_use = self.cheese.mean_in_use()
 
 
 @njit

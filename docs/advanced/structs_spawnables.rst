@@ -24,7 +24,7 @@ or ``float``:
        completed: sim.State
 
        @sim.process(spawnable=True)
-       def patients(env: "Clinic", patient: Patient):
+       def patients(self: "Clinic", patient: Patient):
            patient.wait_started = sim.now()
            # The process can use its own fields throughout the visit.
 
@@ -48,14 +48,14 @@ from a regular process:
        arrival_rate: sim.Param
 
        @sim.process(spawnable=True)
-       def patients(env: "Clinic", patient: Patient):
+       def patients(self: "Clinic", patient: Patient):
            patient.wait_started = sim.now()
 
        @sim.process
-       def arrivals(env: "Clinic"):
+       def arrivals(self: "Clinic"):
            while True:
-               sim.hold(random.exponential(1.0 / env.arrival_rate))
-               handle = sim.spawn(env.patients, env)
+               sim.hold(random.exponential(1.0 / self.arrival_rate))
+               handle = sim.spawn(self.patients, self)
                patient = Patient(handle)
                patient.arrival = sim.now()
                patient.acuity = 1 if random.uniform() < 0.2 else 0
@@ -74,12 +74,12 @@ Joining and reclaiming
 
    class Clinic(sim.Model):
        @sim.process(spawnable=True)
-       def patients(env: "Clinic", patient: Patient):
+       def patients(self: "Clinic", patient: Patient):
            sim.hold(1.0)
 
        @sim.process
-       def arrivals(env: "Clinic"):
-           handle = sim.spawn(env.patients, env)
+       def arrivals(self: "Clinic"):
+           handle = sim.spawn(self.patients, self)
            Patient(handle).arrival = sim.now()
            sim.wait_process(handle)
            sim.despawn(handle)
@@ -94,15 +94,15 @@ and have a cleanup process despawn them:
        departures: sim.Store
 
        @sim.process
-       def cleanup(env: "Clinic"):
+       def cleanup(self: "Clinic"):
            while True:
-               handle = env.departures.take()
+               handle = self.departures.take()
                sim.despawn(handle)
 
        @sim.process(spawnable=True)
-       def patients(env: "Clinic", patient: Patient):
+       def patients(self: "Clinic", patient: Patient):
            # ... patient journey ...
-           env.departures.put(sim.current())
+           self.departures.put(sim.current())
 
 Leftover spawned processes are stopped and reclaimed at the end of a trial, but
 explicit cleanup keeps long trials from accumulating completed agents.

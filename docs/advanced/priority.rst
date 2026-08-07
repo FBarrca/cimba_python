@@ -46,11 +46,11 @@ A process's own priority governs how it queues for a ``sim.Resource`` or
 
    class Clinic(sim.Model):
        @sim.process(priority=5)
-       def vip_patient(env: "Clinic"):
+       def vip_patient(self: "Clinic"):
            ...
 
        @sim.process
-       def regular_patient(env: "Clinic"):
+       def regular_patient(self: "Clinic"):
            me = sim.current()
            sim.set_priority(me, -2)
            ...
@@ -97,17 +97,17 @@ and the handle they return has its own ``.reprioritize(priority)``:
        close_shift: sim.Event
 
        @sim.event(field="log_snapshot")
-       def record_snapshot(env: "Clinic"):
+       def record_snapshot(self: "Clinic"):
            ...
 
        @sim.event(field="close_shift")
-       def handle_close(env: "Clinic"):
+       def handle_close(self: "Clinic"):
            ...
 
        @sim.process
-       def driver(env: "Clinic"):
-           env.log_snapshot.schedule(0.0, priority=-100)  # run last today
-           env.close_shift.schedule(480.0, priority=10)   # run first at t=480
+       def driver(self: "Clinic"):
+           self.log_snapshot.schedule(0.0, priority=-100)  # run last today
+           self.close_shift.schedule(480.0, priority=10)   # run first at t=480
 
 Event priority only matters when two or more events are due at *exactly* the
 same simulated time: the higher-priority one fires first, and among equal

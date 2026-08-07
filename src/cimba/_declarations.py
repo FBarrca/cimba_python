@@ -93,8 +93,8 @@ _KIND_LIST = [
     _FieldKind("dataset", "<i8", binding="dataset", named=False),
     _FieldKind("condition", "<i8", binding="condition", wirable=True,
                dag_entity=True),
-    _FieldKind("predicate", "<i8", on_component=False),
-    _FieldKind("event", "<i8", dag_entity=True, on_component=False),
+    _FieldKind("predicate", "<i8"),
+    _FieldKind("event", "<i8", dag_entity=True),
     _FieldKind("processes", "<i8"),
     # PQueues elements are created/recorded/destroyed per element, so the
     # trial codegen handles them apart from the scalar entity kinds.
@@ -559,20 +559,6 @@ def _field_declarations(
         if kind is None:
             continue
         default = getattr(cls, fname, _MISSING)
-        callback_binding = any(
-            getattr(default, marker, None) is not None
-            for marker in (
-                "__cimba_process__",
-                "__cimba_collect__",
-                "__cimba_predicate__",
-                "__cimba_event__",
-            )
-        )
-        if callback_binding and not allow_refs:
-            raise ValueError(
-                f"model callback '{cls.__name__}.{fname}' collides with a "
-                "declared field; use a differently named callback and "
-                "field= when binding callback fields")
         if kind.capacitated:
             if default is _MISSING:
                 default = None
@@ -593,16 +579,13 @@ def _field_declarations(
         elif kind.name == "param":
             param_default = (
                 _MISSING if default is _MISSING
-                else _param_default(default, f"Param field '{fname}'")
+                else (_MISSING if callable(default) else
+                      _param_default(default, f"Param field '{fname}'"))
             )
             decls.add(_FieldDecl(fname, kind, default=param_default))
         else:
-            # Component Processes fields retain their established same-name
-            # method binding. Model callback/field collisions were rejected
-            # above before the function could be mistaken for a field default.
-            method_binding = callback_binding
             if (default is not _MISSING and default is not None
-                    and not method_binding):
+                    and not callable(default)):
                 raise ValueError(
                     f"field '{fname}': only Queue/Pool/Store declarations "
                     "and Param declarations may carry a default")

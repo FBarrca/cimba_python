@@ -18,16 +18,16 @@ when Cimba should choose independent seeds for you. In model code, import
        queue: sim.Queue
 
        @sim.process
-       def arrivals(env: "Clinic"):
+       def arrivals(self: "Clinic"):
            while True:
-               sim.hold(random.exponential(env.mean_interarrival))
-               env.queue.put(1)
+               sim.hold(random.exponential(self.mean_interarrival))
+               self.queue.put(1)
 
        @sim.process
-       def server(env: "Clinic"):
+       def server(self: "Clinic"):
            while True:
-               env.queue.get(1)
-               sim.hold(random.gamma(shape=2.0, scale=env.mean_service / 2.0))
+               self.queue.get(1)
+               sim.hold(random.gamma(shape=2.0, scale=self.mean_service / 2.0))
 
    model = Clinic()
 
@@ -67,7 +67,7 @@ Keyword arguments are supported in compiled model callbacks and standalone
 
    class Clinic(sim.Model):
        @sim.process
-       def customer(env: "Clinic"):
+       def customer(self: "Clinic"):
            patience = random.triangular(min=0.5, mode=1.0, max=2.0)
            priority = 5 if random.bernoulli(p=0.25) else 0
            sim.hold(random.normal(mu=patience, sigma=0.1))
@@ -171,7 +171,7 @@ it convenient for arrays:
 
    class Park(sim.Model):
        @sim.process
-       def visitor(env: "Park"):
+       def visitor(self: "Park"):
            i = random.categorical(DESTINATION)
            sim.hold(WALK_TIME[i])
 

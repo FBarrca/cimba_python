@@ -19,18 +19,18 @@ callback:
        closed: sim.State
 
        @sim.event(field="close_shift")
-       def on_close_shift(env: "Clinic"):
-           env.closed = 1
-           sim.stop(env.arrivals[0], 0)
+       def on_close_shift(self: "Clinic"):
+           self.closed = 1
+           sim.stop(self.arrivals[0], 0)
 
        @sim.process(field="arrivals")
-       def arrival_loop(env: "Clinic"):
+       def arrival_loop(self: "Clinic"):
            while True:
                sim.hold(1.0)
 
        @sim.process
-       def supervisor(env: "Clinic"):
-           env.close_shift.schedule(480.0)
+       def supervisor(self: "Clinic"):
+           self.close_shift.schedule(480.0)
            sim.suspend()
 
 
@@ -57,15 +57,15 @@ An event can be used as a deadline that another process waits for:
        closed: sim.State
 
        @sim.event(field="close_shift")
-       def on_close_shift(env: "Clinic"):
-           env.closed = 1
+       def on_close_shift(self: "Clinic"):
+           self.closed = 1
 
        @sim.process
-       def reminder(env: "Clinic"):
-           handle = env.close_shift.schedule(480.0)
+       def reminder(self: "Clinic"):
+           handle = self.close_shift.schedule(480.0)
            sig = handle.wait_event()
            if sig == sim.SUCCESS:
-               env.closed = 1
+               self.closed = 1
 
 If the event is cancelled before it fires, ``.wait_event()`` returns a
 non-success signal. Check the signal when cancellation changes the model path.
@@ -83,7 +83,7 @@ timeouts, appointment no-shows, and retry deadlines:
 
    class Clinic(sim.Model):
        @sim.process(spawnable=True)
-       def patient(env: "Clinic", p: Patient):
+       def patient(self: "Clinic", p: Patient):
            me = sim.current()
            sim.timer_set(me, p.patience, TIMER_PATIENCE)
            sig = sim.suspend()

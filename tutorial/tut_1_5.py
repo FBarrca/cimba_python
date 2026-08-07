@@ -28,8 +28,8 @@ class MM1(sim.Model):
     station: MM1Station = MM1Station()
 
     @sim.collect
-    def collect_stats(env: "MM1"):
-        env.avg_queue_length = env.station.queue.mean_level()
+    def collect_stats(self):
+        self.avg_queue_length = self.station.queue.mean_level()
 
 
 def build_model() -> MM1:

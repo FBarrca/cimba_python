@@ -33,6 +33,34 @@ constructed, Cimba Python lowers those methods into ordinary model processes.
 Inside the method, ``self.waiting`` and ``self.completed`` refer to the
 component-owned fields for this trial.
 
+When a component publishes process handles, predicates, or events, bind its
+declared field explicitly and keep the callback name distinct. Bare predicates
+and events remain useful when only component code needs the handle: they
+generate ``self._pred_<name>`` and ``self._ev_<name>`` respectively.
+
+.. code-block:: python
+
+   class Gate(sim.Component):
+       workers: sim.Processes
+       ready: sim.Predicate
+       alarm: sim.Event
+
+       @sim.process(field="workers")
+       def run_worker(self, env):
+           ...
+
+       @sim.predicate(field="ready")
+       def is_ready(self, env) -> bool:
+           ...
+
+       @sim.event(field="alarm")
+       def on_alarm(self, env, data):
+           ...
+
+Component process signatures continue to be ``(self, env[, index])``. They
+may receive a final annotated ``sim.Struct`` view or use
+``@sim.process(struct=MyStruct)`` to allocate process storage without a view.
+
 Component parameters can also carry defaults. A class default applies to every
 instance unless its constructor assigns an instance-specific value. Components
 without a custom constructor can configure declared ``Param`` and ``Const``
@@ -107,8 +135,8 @@ as routing, replenishment, pricing, or admission rules:
        order: sim.Output
 
        @sim.process
-       def replenish(env: "Inventory"):
-           env.order = env.policy.decide(env.inventory)
+       def replenish(self: "Inventory"):
+           self.order = self.policy.decide(self.inventory)
 
    model = Inventory()
 
@@ -125,6 +153,26 @@ resource operations, controlling processes, scheduling events, or recursively
 calling component functions is rejected when the model is constructed. The
 generated helper runs in Numba nopython mode, while experiment parameters keep
 their normal flattened names such as ``policy__reorder_point``.
+
+Models can define a root helper with the same marker and a ``self`` receiver:
+
+.. code-block:: python
+
+   class Inventory(sim.Model):
+       policy: OrderPolicy = OrderPolicy()
+       service_level: sim.Param
+
+       @sim.function
+       def reorder(self: "Inventory", inventory: float) -> float:
+           return self.policy.decide(inventory) * self.service_level
+
+       @sim.process
+       def replenish(self: "Inventory"):
+           amount = self.reorder(12.0)
+
+Root helpers are callable from component callbacks too, using
+``env.reorder(...)``. They read the same scalar model/component namespace and
+follow the same no-mutation, no-scheduling, and no-recursion rules.
 
 A collection index may be a function argument or a value the function computes
 for itself, so a function can weigh a whole collection and return its choice:
@@ -158,6 +206,10 @@ top-level ``@sim.collect`` takes ``(self, env)`` and runs once per instance
 at the end of each trial, typically assigning the component's declared
 ``sim.Output`` fields:
 
+Each component class has at most one effective collector. A subclass replaces
+an inherited collector by decorating the same method name, or removes it with
+an undecorated override.
+
 .. code-block:: python
 
    class Desk(sim.Component):
@@ -186,11 +238,11 @@ the component outputs:
        desks: list[Desk] = [Desk(), Desk(), Desk()]
 
        @sim.collect
-       def clinic_stats(env: "Clinic"):
-           env.worst_queue = env.desks[0].avg_queue
+       def clinic_stats(self: "Clinic"):
+           self.worst_queue = self.desks[0].avg_queue
            for i in range(1, 3):
-               if env.desks[i].avg_queue > env.worst_queue:
-                   env.worst_queue = env.desks[i].avg_queue
+               if self.desks[i].avg_queue > self.worst_queue:
+                   self.worst_queue = self.desks[i].avg_queue
 
 Nested components
 -----------------
@@ -213,7 +265,7 @@ table of contents for the simulated world:
        staff_count: sim.Param
        intake: Intake = Intake()
 
-Model code can read nested paths such as ``env.intake.staff.capacity``. The
+Model code can read nested paths such as ``self.intake.staff.capacity``. The
 trial table stores flattened fields internally, but process source can stay
 close to the domain structure.
 
@@ -229,15 +281,15 @@ Use a ``list[ComponentType]`` declaration for fixed repeated subsystems:
        desks: list[Desk] = [Desk(), Desk(), Desk()]
 
        @sim.process
-       def router(env: "Clinic"):
+       def router(self: "Clinic"):
            target = 0
-           best = env.desks[0].waiting.level()
+           best = self.desks[0].waiting.level()
            for i in range(1, 3):
-               length = env.desks[i].waiting.level()
+               length = self.desks[i].waiting.level()
                if length < best:
                    target = i
                    best = length
-           env.desks[target].waiting.put(1)
+           self.desks[target].waiting.put(1)
 
 The collection length is fixed by the model class. This is a good fit for
 known departments, stations, gates, or desks. If the number of active entities
@@ -449,8 +501,8 @@ tree is built:
        dispatch: Dispatcher = Dispatcher(
            routes=(stations[0], stations[1], stations[2]))
 
-Model callbacks can follow references too (``env.dispatch.routes[1].inbox``,
-``env.stations[j].downstream.inbox``). A fixed ``sim.Ref`` may target any
+Model callbacks can follow references too (``self.dispatch.routes[1].inbox``,
+``self.stations[j].downstream.inbox``). A fixed ``sim.Ref`` may target any
 declared component; following a reference under a *dynamic* collection index
 requires every item to reference the same component declaration. Component
 methods that need mixed per-instance targets are lowered per instance instead.

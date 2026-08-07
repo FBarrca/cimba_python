@@ -236,18 +236,18 @@ class Harbor(sim.Model):
     traffic: ShipTraffic = ShipTraffic()
 
     @sim.predicate(field="harbormaster_called")
-    def should_call_harbormaster(env: "Harbor") -> bool:
+    def should_call_harbormaster(self) -> bool:
         return True
 
     @sim.collect
-    def harbor_stats(env: "Harbor"):
-        env.avg_time_small = env.traffic.time_small.mean()
-        env.avg_time_large = env.traffic.time_large.mean()
-        env.n_small = env.traffic.time_small.count()
-        env.n_large = env.traffic.time_large.count()
-        env.tug_util = env.facilities.tugs.mean_in_use()
-        env.berth_small_util = env.facilities.berths_small.mean_in_use()
-        env.berth_large_util = env.facilities.berths_large.mean_in_use()
+    def harbor_stats(self):
+        self.avg_time_small = self.traffic.time_small.mean()
+        self.avg_time_large = self.traffic.time_large.mean()
+        self.n_small = self.traffic.time_small.count()
+        self.n_large = self.traffic.time_large.count()
+        self.tug_util = self.facilities.tugs.mean_in_use()
+        self.berth_small_util = self.facilities.berths_small.mean_in_use()
+        self.berth_large_util = self.facilities.berths_large.mean_in_use()
 
 
 harbor = Harbor()

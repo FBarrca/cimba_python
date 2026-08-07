@@ -77,9 +77,9 @@ run:
        served: sim.State
 
        @sim.collect
-       def collect_stats(env: "Clinic"):
-           env.completed = float(env.served)
-           env.avg_waiting = env.waiting_room.mean_level()
+       def collect_stats(self: "Clinic"):
+           self.completed = float(self.served)
+           self.avg_waiting = self.waiting_room.mean_level()
 
 The collector is still part of the compiled model. It should read trial-local
 state and write ``sim.Output`` fields. Distribution statistics of dataset

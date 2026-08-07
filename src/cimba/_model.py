@@ -10,7 +10,7 @@ functions, then compiles everything on first ``experiment()``:
   schedule the recording window, start processes, run the event queue, collect
   statistics, and tear everything down without per-layout source generation;
 * an ``Experiment`` is a structured numpy array with one record per trial
-  (the ``env`` seen by process bodies) handed to ``cimba_run_experiment``,
+  (the ``self`` view seen by model callbacks) handed to ``cimba_run_experiment``,
   which runs trials in parallel across all cores.
 """
 
@@ -24,7 +24,6 @@ import pickle
 import platform
 import sys
 import tempfile
-import textwrap
 import threading
 import time
 import types as pytypes
@@ -44,28 +43,32 @@ from numba import carray, cfunc, from_dtype, njit, types
 from numba.extending import overload as _nb_overload
 
 from . import _bindings as _b
+from ._callbacks import (
+    _CallbackOwner,
+    _bind_callback_fields,
+    _callback_arg_count,
+    _callback_set,
+    _process_signature,
+)
 from ._cimba import ffi, lib
 from ._components import (
     Component,
-    _COLLECT_ATTR,
-    _EVENT_ATTR,
-    _PREDICATE_ATTR,
-    _PROCESS_ATTR,
     _build_component_functions,
+    _build_model_functions,
     _class_declarations,
     _ComponentDecl,
-    _component_collect_methods,
-    _component_process_methods,
+    _CallbackLoweringContext,
     _closure_namespace,
     _compile_lowered,
+    _compile_model_callback_lowering,
     _function_def_from_source,
     _lower_component_collect,
+    _lower_component_event,
+    _lower_component_predicate,
     _lower_component_process,
-    _lower_dataset_methods,
-    _lower_entity_methods,
-    _lower_history_methods,
-    _lower_model_component_refs,
-    _marked_methods,
+    _lower_model_callback_methods_in_node,
+    _lower_model_component_refs_in_node,
+    _model_lowering_namespace,
 )
 from ._declarations import (
     Handle,
@@ -87,11 +90,10 @@ from ._history_capture import (
     copy_capture_store,
     create_capture_store,
     destroy_capture_store,
-    lower_dataset_capture_methods,
-    lower_history_capture_methods,
+    lower_dataset_capture_calls,
+    lower_history_capture_calls,
 )
 from ._intrinsics import addressof, call_void_callback, ptr_caster
-from .random._lowering import lower_random_calls_in_function
 
 _F = TypeVar("_F", bound=Callable[..., Any])
 
@@ -941,7 +943,7 @@ class Struct:
 
         class Park(sim.Model):
             @sim.process(copies=4)
-            def visitor(env, vip: Visitor):
+            def visitor(self, vip: Visitor):
                 vip.patience = cimba.random.triangular(0.5, 1.0, 1.5)
 
     Each process copy then carries its own fields, zeroed at creation, in
@@ -1023,6 +1025,41 @@ class _ProcDecl:
 
 
 @dataclass(frozen=True)
+class _PredicateDecl:
+    name: str
+    fn: Callable[..., Any]
+    field: str
+    index: int | None = None
+
+    @property
+    def key(self) -> str | tuple[str, int]:
+        return self.field if self.index is None else (self.field, self.index)
+
+    @property
+    def label(self) -> str:
+        return (self.field if self.index is None
+                else f"{self.field}[{self.index}]")
+
+
+@dataclass(frozen=True)
+class _EventDecl:
+    name: str
+    fn: Callable[..., Any]
+    field: str
+    takes_data: bool
+    index: int | None = None
+
+    @property
+    def key(self) -> str | tuple[str, int]:
+        return self.field if self.index is None else (self.field, self.index)
+
+    @property
+    def label(self) -> str:
+        return (self.field if self.index is None
+                else f"{self.field}[{self.index}]")
+
+
+@dataclass(frozen=True)
 class CompilationPlan:
     """Immutable class callback compilation work derived from a real model.
 
@@ -1041,6 +1078,8 @@ class CompilationPlan:
     predicate_keys: tuple[str, ...]
     event_names: tuple[str, ...]
     event_keys: tuple[str, ...]
+    function_names: tuple[str, ...]
+    function_keys: tuple[str, ...]
     collect_keys: tuple[str, ...]
     lifecycle_key: tuple[str, ...]
     callback_count: int
@@ -1675,17 +1714,16 @@ def _build_result_namespace(
     )
 
 
-class Model(Generic[_ExperimentResultT]):
-    """A simulation model. Subclass it and declare the env fields as
+class Model(_CallbackOwner, Generic[_ExperimentResultT]):
+    """A simulation model. Subclass it and declare the root environment fields as
     annotations (Param, Output, Queue, Resource, Pool, Store, Dataset,
-    Condition, State, Predicate) -- the subclass then types `env` in
-    process bodies. Entity names may also be passed as keyword lists for
+    Condition, State, Predicate) -- model callbacks use their first argument,
+    conventionally ``self``, as that root trial environment view. Entity names
+    may also be passed as keyword lists for
     quick callback-free untyped models. Class-declared model and component
     callbacks are compiled from the first real model instance and reused by
     the class."""
 
-    # Standard trial-record fields, readable as env attributes in process
-    # bodies (plain annotations, not declaration markers).
     start_time: float
     warmup_s: float
     duration_s: float
@@ -1742,6 +1780,10 @@ class Model(Generic[_ExperimentResultT]):
             for n, cap in _as_capacity_dict(capacities).items():
                 decls.add(_FieldDecl(n, _FIELD_KINDS[kind_name],
                                      capacity=cap))
+        _bind_callback_fields(
+            type(self), decls, owner="model",
+            protected=frozenset(
+                name for name in vars(Model) if not name.startswith("_")))
         self._decls = decls
 
         # Backwards-compatible views of the declarations, by kind
@@ -1771,9 +1813,6 @@ class Model(Generic[_ExperimentResultT]):
                                    "pqueues")}
         self._history_captures: dict[str, HistoryCaptureSpec] = {}
         self._dataset_captures: dict[str, HistoryCaptureSpec] = {}
-        #: declared entity field name -> field kind, for fields whose
-        #: ``env.<entity>.method(...)`` calls (put/acquire/signal/...)
-        #: compile to native helper calls.
         self.entity_fields: dict[str, str] = {
             f.name: f.kind.name
             for f in decls.by_kind("queue", "resource", "pool", "store",
@@ -1818,7 +1857,8 @@ class Model(Generic[_ExperimentResultT]):
 
         seen: set[str] = set()
         for field in decls.fields.values():
-            _check_name(field.name, field.kind.name)
+            if not field.name.startswith(("_pred_", "_ev_")):
+                _check_name(field.name, field.kind.name)
             seen.add(field.name)
         for root in self._component_roots.values():
             label = ("component collection" if root.collection
@@ -1835,10 +1875,8 @@ class Model(Generic[_ExperimentResultT]):
                                  "a declared param")
         self._seen = seen
         self._processes: list[_ProcDecl] = []
-        # (name, fn, env field holding the compiled address)
-        self._predicates: list[tuple[str, Callable[..., Any], str]] = []
-        # (name, fn, env field holding the compiled address, takes_data)
-        self._events: list[tuple[str, Callable[..., Any], str, bool]] = []
+        self._predicates: list[_PredicateDecl] = []
+        self._events: list[_EventDecl] = []
         self._collect: Callable[..., Any] | None = None
         # (lowered collect, instance count); count > 1 collects take the
         # instance index as their second argument
@@ -1849,6 +1887,18 @@ class Model(Generic[_ExperimentResultT]):
         self._runtime_text_slots: dict[str, int] = {}
         self._component_functions = _build_component_functions(
             self._component_roots.values())
+        scalar_function_fields = {name for name, _format in _STANDARD_FIELDS}
+        scalar_function_fields.update(
+            field.name for field in decls.by_kind(
+                "param", "output", "state", "fstate"))
+        self._model_functions = _build_model_functions(
+            type(self), model_name=self.name,
+            component_roots=self._component_roots,
+            component_functions=self._component_functions,
+            scalar_fields=scalar_function_fields)
+        self._lowering_context = _CallbackLoweringContext(
+            self.datasets, self.history_fields, self.entity_fields,
+            self._component_functions, self._model_functions)
         self._bind_components()
         self._register_component_processes()
         self._register_model_callbacks()
@@ -1935,22 +1985,32 @@ class Model(Generic[_ExperimentResultT]):
             for index, (fn, instances) in enumerate(
                 self._collects)
         )
+        functions = (
+            *((f"model:{name}", spec.helper)
+              for name, spec in self._model_functions.items()),
+            *((spec.graph_name, spec.helper)
+              for spec in self._component_functions.values()),
+        )
         return CompilationPlan(
             model_name=self.name,
             callback_dtype=callback_dtype,
             process_names=tuple(process.name for process in processes),
             process_keys=tuple(
                 _callback_function_key(process.fn) for process in processes),
-            predicate_names=tuple(name for name, _fn, _field
-                                  in self._predicates),
+            predicate_names=tuple(callback.name
+                                  for callback in self._predicates),
             predicate_keys=tuple(
-                f"{field}:{_callback_function_key(fn)}"
-                for _name, fn, field in self._predicates),
-            event_names=tuple(name for name, _fn, _field, _takes_data
-                              in self._events),
+                f"{callback.label}:{_callback_function_key(callback.fn)}"
+                for callback in self._predicates),
+            event_names=tuple(callback.name for callback in self._events),
             event_keys=tuple(
-                f"{field}:{takes_data}:{_callback_function_key(fn)}"
-                for _name, fn, field, takes_data in self._events),
+                f"{callback.label}:{callback.takes_data}:"
+                f"{_callback_function_key(callback.fn)}"
+                for callback in self._events),
+            function_names=tuple(name for name, _helper in functions),
+            function_keys=tuple(
+                _callback_function_key(helper)
+                for _name, helper in functions),
             collect_keys=tuple(
                 f"{_callback_function_key(fn)}:{instances}"
                 for fn, instances in self._collects
@@ -2043,14 +2103,22 @@ class Model(Generic[_ExperimentResultT]):
         ) != plan.process_keys:
             return {}, {}, {}, {}
         if tuple(
-            f"{field}:{_callback_function_key(fn)}"
-            for _name, fn, field in self._predicates
+            f"{callback.label}:{_callback_function_key(callback.fn)}"
+            for callback in self._predicates
         ) != plan.predicate_keys:
             return {}, {}, {}, {}
         if tuple(
-            f"{field}:{takes_data}:{_callback_function_key(fn)}"
-            for _name, fn, field, takes_data in self._events
+            f"{callback.label}:{callback.takes_data}:"
+            f"{_callback_function_key(callback.fn)}"
+            for callback in self._events
         ) != plan.event_keys:
+            return {}, {}, {}, {}
+        functions = (
+            *(spec.helper for spec in self._model_functions.values()),
+            *(spec.helper for spec in self._component_functions.values()),
+        )
+        if tuple(_callback_function_key(helper) for helper in functions) \
+                != plan.function_keys:
             return {}, {}, {}, {}
         if tuple(
             f"{_callback_function_key(fn)}:{instances}"
@@ -2131,87 +2199,36 @@ class Model(Generic[_ExperimentResultT]):
         ]
 
     def _register_model_callbacks(self) -> None:
-        """Register the callbacks declared on this model class."""
-        cls = type(self)
-        protected = {
-            name for name in vars(Model)
-            if not name.startswith("_")
-        }
+        callbacks = _callback_set(type(self))
+        for decl in callbacks.predicates:
+            self._register_predicate(decl.fn, target_field=decl.field)
+        for decl in callbacks.events:
+            self._register_event(decl.fn, target_field=decl.field)
 
-        def methods(marker: str, kind: str):
-            return _marked_methods(cls, marker, kind, stop=Model)
-
-        process_methods = methods(_PROCESS_ATTR, "process")
-        predicate_methods = methods(_PREDICATE_ATTR, "predicate")
-        event_methods = methods(_EVENT_ATTR, "event")
-        collect_methods = methods(_COLLECT_ATTR, "collect")
-
-        all_methods = {
-            **{name: "process" for name in process_methods},
-            **{name: "predicate" for name in predicate_methods},
-            **{name: "event" for name in event_methods},
-            **{name: "collect" for name in collect_methods},
-        }
-        for name, kind in all_methods.items():
-            if name in protected:
-                raise ValueError(
-                    f"model {kind} callback '{cls.__name__}.{name}' "
-                    "shadows a public sim.Model operation")
-            if name in self._seen:
-                raise ValueError(
-                    f"model {kind} callback '{cls.__name__}.{name}' "
-                    "collides with a declared field; use a differently "
-                    "named callback and field= when binding callback fields")
-
-        # Predicates and events publish fields that model processes may
-        # reference, so establish those bindings before lowering processes.
-        for _name, (fn, spec) in predicate_methods.items():
-            self._register_predicate(fn, target_field=spec.field)
-        for _name, (fn, spec) in event_methods.items():
-            self._register_event(fn, target_field=spec.field)
-
-        for name, (fn, spec) in process_methods.items():
-            if type(spec.copies) is not int:
-                raise TypeError(
-                    f"model process '{cls.__name__}.{name}' copies must be "
-                    "an int")
-            process_field = spec.field
-            if process_field is not None \
-                    and process_field not in self._process_fields:
-                raise ValueError(
-                    f"model process '{cls.__name__}.{name}' field= must name "
-                    "a declared sim.Processes field")
+        for decl in callbacks.processes:
+            spec = decl.spec
             self._register_process(
-                fn, copies=spec.copies, priority=spec.priority,
+                decl.fn, copies=spec.copies, priority=spec.priority,
                 struct=spec.struct, spawnable=spec.spawnable,
-                _process_field=process_field, _owner_cls=cls)
+                _process_field=spec.field, _owner_cls=type(self))
 
-        if len(collect_methods) > 1:
-            names = ", ".join(collect_methods)
-            raise ValueError(
-                f"model '{cls.__name__}' has multiple collect callbacks: "
-                f"{names}; override an inherited collector by using the "
-                "same method name")
-        for _name, (fn, _marker) in collect_methods.items():
-            self._register_collect(fn)
+        for decl in callbacks.collectors:
+            self._register_collect(decl.fn)
 
     @staticmethod
     def _lower_shared_or_per_instance(
         decl: _ComponentDecl,
         lower_shared: Callable[[], Any],
         lower_instance: Callable[[int], Any],
+        indices: Sequence[int] | None = None,
     ) -> list[tuple[Any, int | None]]:
-        """Compile a component method once for the whole decl, taking the
-        copy index at runtime; index is None in the returned pairs. When
-        the shared lowering fails -- per-instance Ref targets that cannot
-        share one body -- fall back to one specialized function per
-        instance (which either succeeds or reproduces the real error)."""
-        if decl.count > 1:
+        selected = tuple(range(decl.count) if indices is None else indices)
+        if len(selected) > 1:
             try:
                 return [(lower_shared(), None)]
             except ValueError:
                 pass
-        return [(lower_instance(index), index) for index in range(decl.count)]
+        return [(lower_instance(index), index) for index in selected]
 
     def _register_component_decl_processes(
         self, decl: _ComponentDecl,
@@ -2220,171 +2237,149 @@ class Model(Generic[_ExperimentResultT]):
         Spawnable process methods are always per-instance -- the spawn descriptor
         is what identifies the instance at runtime."""
         components = self._component_bindings[decl.name]
-        if decl.polymorphic:
-            for variant, indices in enumerate(
-                    decl.specialization_groups()):
-                cls = decl.class_at(indices[0])
-                group_name = f"{decl.name}__variant_{variant}"
-                for method_name, method, spec in \
-                        _component_process_methods(cls):
-                    counts = tuple(
-                        spec.resolve_copies(
-                            components[index],
-                            f"{decl.process_names[index]}.{method_name}")
-                        for index in indices)
-                    representative = indices[0]
-                    field_kind = (
-                        decl.decls.kind_of(method_name)
-                        if (method_name in decl.field_owners
-                            and representative
-                            in decl.field_owners[method_name])
-                        else None)
-                    spawnable = spec.spawnable or field_kind == "spawnable"
-                    # Descriptor and handle slots are per logical instance;
-                    # retain per-instance registration for these two field
-                    # kinds while grouping ordinary scheduled processes.
-                    if spawnable or field_kind == "processes":
-                        for position, index in enumerate(indices):
-                            lowered = _lower_component_process(
-                                decl.process_names[index], decl, method_name,
-                                method, _is_struct_class,
-                                instance_index=index,
-                                model_dataset_fields=self.datasets,
-                                model_history_fields=self.history_fields,
-                                model_entity_fields=self.entity_fields,
-                                component_functions=self._component_functions)
-                            spawn_field = (
-                                decl.direct_field_map[method_name]
-                                if spawnable else None)
-                            spawn_index = None
-                            if spawn_field is not None:
-                                owners = decl.field_owners[method_name]
-                                if len(owners) > 1:
-                                    spawn_index = \
-                                        decl.field_slots[method_name][index]
-                            process_field = (
-                                decl.direct_field_map[method_name]
-                                if field_kind == "processes" else None)
-                            process_offset = (
-                                decl.process_offsets[method_name][index]
-                                if process_field is not None else 0)
-                            self._register_process(
-                                lowered, copies=counts[position],
-                                priority=spec.priority,
-                                _spawn_field=spawn_field,
-                                _spawn_index=spawn_index,
-                                _process_field=process_field,
-                                _process_offset=process_offset)
-                        continue
+        lowering = self._lowering_context
+
+        # Predicate/event native ABIs carry no component-instance context,
+        # so collections receive one specialized callback per logical item.
+        for index in range(decl.count):
+            cls = decl.class_at(index)
+            prefix = decl.process_names[index]
+            for callback in _callback_set(cls).predicates:
+                method_name, method, spec = callback.name, callback.fn, callback.spec
+                local_field = callback.field
+                flat_field = decl.direct_field_map[local_field]
+                field_index = (
+                    decl.field_slots[local_field][index]
+                    if self._field_shapes.get(flat_field) is not None
+                    else None
+                )
+                lowered = _lower_component_predicate(
+                    prefix, decl, method_name, method, instance_index=index,
+                    context=lowering)
+                self._register_predicate(
+                    lowered, target_field=flat_field,
+                    target_index=field_index)
+            for callback in _callback_set(cls).events:
+                method_name, method, spec = callback.name, callback.fn, callback.spec
+                local_field = callback.field
+                flat_field = decl.direct_field_map[local_field]
+                field_index = (
+                    decl.field_slots[local_field][index]
+                    if self._field_shapes.get(flat_field) is not None
+                    else None
+                )
+                lowered = _lower_component_event(
+                    prefix, decl, method_name, method, instance_index=index,
+                    context=lowering)
+                self._register_event(
+                    lowered, target_field=flat_field,
+                    target_index=field_index)
+
+        groups = decl.specialization_groups()
+        for variant, indices in enumerate(groups):
+            cls = decl.class_at(indices[0])
+            group_name = (
+                decl.name if len(groups) == 1
+                else f"{decl.name}__variant_{variant}")
+            for callback in _callback_set(cls).processes:
+                method_name, method, spec = (
+                    callback.name, callback.fn, callback.spec)
+                counts = tuple(
+                    spec.resolve_copies(
+                        components[index],
+                        f"{decl.process_names[index]}.{method_name}")
+                    for index in indices)
+                process_local_field = spec.field
+                has_process_field = (
+                    process_local_field is not None
+                    and process_local_field in decl.field_owners
+                    and indices[0] in decl.field_owners[process_local_field])
+
+                def lower_instance(index: int) -> Any:
+                    return _lower_component_process(
+                        decl.process_names[index], decl, method_name, method,
+                        _is_struct_class, instance_index=index,
+                        context=lowering)
+
+                if spec.spawnable or (has_process_field and len(groups) > 1):
+                    for position, index in enumerate(indices):
+                        spawn_field = (
+                            decl.direct_field_map[method_name]
+                            if spec.spawnable else None)
+                        spawn_index = None
+                        if spawn_field is not None:
+                            owners = decl.field_owners[method_name]
+                            if len(owners) > 1:
+                                spawn_index = decl.field_slots[method_name][index]
+                        process_field = (
+                            decl.direct_field_map[process_local_field]
+                            if has_process_field else None)
+                        process_offset = (
+                            decl.process_offsets[process_local_field][index]
+                            if process_field is not None else 0)
+                        self._register_process(
+                            lower_instance(index), copies=counts[position],
+                            priority=spec.priority, struct=spec.struct,
+                            _spawn_field=spawn_field,
+                            _spawn_index=spawn_index,
+                            _process_field=process_field,
+                            _process_offset=process_offset)
+                    continue
+
+                process_field = (
+                    decl.direct_field_map[process_local_field]
+                    if process_local_field is not None else None)
+
+                def lower_group() -> Any:
                     if len(indices) == 1:
-                        lowered = _lower_component_process(
+                        return _lower_component_process(
                             group_name, decl, method_name, method,
                             _is_struct_class, instance_index=indices[0],
-                            model_dataset_fields=self.datasets,
-                            model_history_fields=self.history_fields,
-                            model_entity_fields=self.entity_fields,
-                            component_functions=self._component_functions)
+                            context=lowering)
+                    return _lower_component_process(
+                        group_name, decl, method_name, method,
+                        _is_struct_class,
+                        copies_per_instance=counts,
+                        instance_indices=indices,
+                        context=lowering)
+
+                lowered = self._lower_shared_or_per_instance(
+                    decl,
+                    lower_group,
+                    (lower_instance if len(indices) > 1 or len(groups) == 1
+                     else lambda _index: lower_group()),
+                    indices)
+                for fn, index in lowered:
+                    if index is None:
+                        copies, offset = sum(counts), 0
                     else:
-                        lowered = _lower_component_process(
-                            group_name, decl, method_name, method,
-                            _is_struct_class, copies_per_instance=counts,
-                            instance_indices=indices,
-                            model_dataset_fields=self.datasets,
-                            model_history_fields=self.history_fields,
-                            model_entity_fields=self.entity_fields,
-                            component_functions=self._component_functions)
+                        position = indices.index(index)
+                        copies = counts[position]
+                        offset = (
+                            decl.process_offsets[process_local_field][index]
+                            if process_field is not None else 0)
                     self._register_process(
-                        lowered, copies=sum(counts),
-                        priority=spec.priority)
-                for method_name, method in _component_collect_methods(cls):
-                    if len(indices) == 1:
-                        lowered = _lower_component_collect(
-                            group_name, decl, method_name, method,
-                            instance_index=indices[0],
-                            model_dataset_fields=self.datasets,
-                            model_history_fields=self.history_fields,
-                            model_entity_fields=self.entity_fields,
-                            component_functions=self._component_functions)
-                    else:
-                        lowered = _lower_component_collect(
-                            group_name, decl, method_name, method,
-                            per_class=True, instance_indices=indices,
-                            model_dataset_fields=self.datasets,
-                            model_history_fields=self.history_fields,
-                            model_entity_fields=self.entity_fields,
-                            component_functions=self._component_functions)
+                        fn, copies=copies, priority=spec.priority,
+                        struct=spec.struct,
+                        _process_field=process_field,
+                        _process_offset=offset)
+
+            for callback in _callback_set(cls).collectors:
+                method_name, method = callback.name, callback.fn
+                lowered = self._lower_shared_or_per_instance(
+                    decl,
+                    lambda: _lower_component_collect(
+                        group_name, decl, method_name, method,
+                        per_class=True, instance_indices=indices,
+                        context=lowering),
+                    lambda index: _lower_component_collect(
+                        decl.process_names[index], decl, method_name, method,
+                        instance_index=index,
+                        context=lowering),
+                    indices)
+                for fn, index in lowered:
                     self._component_collects.append(
-                        (lowered, len(indices)))
-            return
-
-        for method_name, method, spec in _component_process_methods(decl.cls):
-            counts = tuple(
-                spec.resolve_copies(
-                    component, f"{decl.process_names[index]}.{method_name}")
-                for index, component in enumerate(components))
-            field_kind = decl.decls.kind_of(method_name)
-            spawnable = spec.spawnable or field_kind == "spawnable"
-
-            def lower_instance(index: int) -> Any:
-                return _lower_component_process(
-                    decl.process_names[index], decl, method_name, method,
-                    _is_struct_class, instance_index=index,
-                    model_dataset_fields=self.datasets,
-                    model_history_fields=self.history_fields,
-                    model_entity_fields=self.entity_fields,
-                    component_functions=self._component_functions)
-
-            if spawnable:
-                spawn_field = decl.direct_field_map[method_name]
-                for index in range(decl.count):
-                    self._register_process(
-                        lower_instance(index), copies=counts[index],
-                        priority=spec.priority, _spawn_field=spawn_field,
-                        _spawn_index=index if decl.count > 1 else None)
-                continue
-
-            process_field = (decl.direct_field_map[method_name]
-                             if field_kind == "processes" else None)
-            lowered = self._lower_shared_or_per_instance(
-                decl,
-                lambda: _lower_component_process(
-                    decl.name, decl, method_name, method, _is_struct_class,
-                    copies_per_instance=counts,
-                    model_dataset_fields=self.datasets,
-                    model_history_fields=self.history_fields,
-                    model_entity_fields=self.entity_fields,
-                    component_functions=self._component_functions),
-                lower_instance)
-            for fn, index in lowered:
-                if index is None:
-                    copies, offset = sum(counts), 0
-                else:
-                    copies = counts[index]
-                    offset = (decl.process_offsets[method_name][index]
-                              if process_field is not None else 0)
-                self._register_process(
-                    fn, copies=copies, priority=spec.priority,
-                    _process_field=process_field, _process_offset=offset)
-
-        for method_name, method in _component_collect_methods(decl.cls):
-            lowered = self._lower_shared_or_per_instance(
-                decl,
-                lambda: _lower_component_collect(
-                    decl.name, decl, method_name, method, per_class=True,
-                    model_dataset_fields=self.datasets,
-                    model_history_fields=self.history_fields,
-                    model_entity_fields=self.entity_fields,
-                    component_functions=self._component_functions),
-                lambda index: _lower_component_collect(
-                    decl.process_names[index], decl, method_name, method,
-                    instance_index=index,
-                    model_dataset_fields=self.datasets,
-                    model_history_fields=self.history_fields,
-                    model_entity_fields=self.entity_fields,
-                    component_functions=self._component_functions))
-            for fn, index in lowered:
-                self._component_collects.append(
-                    (fn, decl.count if index is None else 1))
+                        (fn, len(indices) if index is None else 1))
 
     @property
     def _component_roots(self) -> dict[str, _ComponentDecl]:
@@ -2434,27 +2429,6 @@ class Model(Generic[_ExperimentResultT]):
             raise KeyError(f"ambiguous component field: {path}")
         return matches[0]
 
-    def _lower_component_refs(self, fn: _F) -> _F:
-        return _lower_model_component_refs(
-            fn, model_name=self.name,
-            component_roots=self._component_roots,
-            component_functions=self._component_functions,
-        )
-
-    def _lower_dataset_methods(self, fn: _F) -> _F:
-        return _lower_dataset_methods(
-            fn,
-            model_name=self.name,
-            dataset_fields=self.datasets,
-        )
-
-    def _lower_history_methods(self, fn: _F) -> _F:
-        return _lower_history_methods(
-            fn,
-            model_name=self.name,
-            history_fields=self.history_fields,
-        )
-
     def _next_capture_slot(self) -> int:
         return sum(spec.slot_count for spec in (
             *self._history_captures.values(),
@@ -2503,49 +2477,72 @@ class Model(Generic[_ExperimentResultT]):
         )
         return slot
 
-    def _lower_history_capture_methods(self, fn: _F) -> _F:
-        return lower_history_capture_methods(
-            fn,
-            model_name=self.name,
-            history_fields=self.history_fields,
-            indexed_history_fields=self._indexed_history_fields,
-            register=self._register_history_capture,
-        )
-
-    def _lower_dataset_capture_methods(self, fn: _F) -> _F:
-        return lower_dataset_capture_methods(
-            fn,
-            model_name=self.name,
-            dataset_fields=set(self.datasets),
-            register=self._register_dataset_capture,
-        )
-
-    def _entity_fields_with_hidden_events(self) -> dict[str, str]:
-        """``self.entity_fields`` plus hidden ``_ev_<name>`` fields for
-        unbound ``@sim.event`` callbacks (mirrors how
-        ``process_dag()``'s ``entity_kinds`` gets the same merge)."""
-        fields = dict(self.entity_fields)
-        for _name, _fn, field, _takes_data in self._events:
-            fields.setdefault(field, "event")
-        return fields
-
-    def _lower_entity_methods(
-        self, fn: _F, *, extra_fields: Mapping[str, str] | None = None,
+    def _lower_model_callback(
+        self,
+        fn: _F,
+        *,
+        collect: bool = False,
+        event_field: str | None = None,
     ) -> _F:
-        fields = self._entity_fields_with_hidden_events()
-        if extra_fields:
-            fields = {**fields, **extra_fields}
-        return _lower_entity_methods(
-            fn,
-            model_name=self.name,
-            entity_fields=fields,
-        )
+        """Lower one root callback through a single AST and compilation."""
+        context = self._lowering_context
+        try:
+            node = copy.deepcopy(_function_def_from_source(fn))
+        except (OSError, TypeError) as exc:
+            raise ValueError(
+                f"model '{self.name}' callback '{fn.__qualname__}' needs "
+                "inspectable source"
+            ) from exc
+        if not node.args.args:
+            return fn
 
-    def _lower_random_calls(self, fn: _F) -> _F:
-        return lower_random_calls_in_function(
-            fn,
-            label=f"model '{self.name}' callback '{fn.__qualname__}'",
-        )
+        namespace = _closure_namespace(fn)
+        node, changed, called_functions = \
+            _lower_model_component_refs_in_node(
+                node, model_name=self.name,
+                component_roots=self._component_roots,
+                component_functions=context.component_functions,
+                model_functions=context.model_functions)
+        if changed:
+            namespace.update(_model_lowering_namespace(
+                self._component_roots, context.component_functions,
+                context.model_functions))
+
+        if collect:
+            node, lowered = lower_history_capture_calls(
+                node, model_name=self.name,
+                history_fields=context.histories,
+                indexed_history_fields=self._indexed_history_fields,
+                register=self._register_history_capture,
+                namespace=namespace)
+            changed |= lowered
+            node, lowered = lower_dataset_capture_calls(
+                node, model_name=self.name,
+                dataset_fields=set(context.datasets),
+                register=self._register_dataset_capture,
+                namespace=namespace)
+            changed |= lowered
+
+        entity_fields = dict(context.entities)
+        if event_field is not None:
+            entity_fields[event_field] = "event"
+        node, lowered = _lower_model_callback_methods_in_node(
+            node, fn, model_name=self.name, context=context,
+            entity_fields=entity_fields, namespace=namespace)
+        changed |= lowered
+        node, lowered = self._lower_runtime_text_handles_in_node(
+            node, namespace)
+        changed |= lowered
+        if not changed:
+            return fn
+
+        generated = _compile_model_callback_lowering(
+            fn, node, self.name, {}, namespace)
+        generated.__cimba_function_calls__ = tuple(sorted({
+            *getattr(fn, "__cimba_function_calls__", ()),
+            *called_functions,
+        }))
+        return generated
 
     def _register_runtime_text_handle(self, address: int) -> int:
         """Register one local cstring address under a stable text slot."""
@@ -2567,8 +2564,21 @@ class Model(Generic[_ExperimentResultT]):
             node = copy.deepcopy(_function_def_from_source(fn))
         except (OSError, TypeError):
             return fn
-        if not node.args.args:
+        lowered, changed = self._lower_runtime_text_handles_in_node(
+            node, namespace)
+        if not changed:
             return fn
+        return _compile_model_callback_lowering(
+            fn, lowered, self.name, {}, namespace)
+
+    def _lower_runtime_text_handles_in_node(
+        self,
+        node: ast.FunctionDef,
+        namespace: dict[str, Any],
+    ) -> tuple[ast.FunctionDef, bool]:
+        """Rewrite captured text handles in an already parsed callback."""
+        if not node.args.args:
+            return node, False
         env_name = node.args.args[0].arg
         local_names = {
             arg.arg
@@ -2592,27 +2602,11 @@ class Model(Generic[_ExperimentResultT]):
         )
         lowered = lowerer.visit(node)
         if not lowerer.changed:
-            return fn
+            return node, False
         if not isinstance(lowered, ast.FunctionDef):
             raise TypeError("runtime text lowering produced a non-function")
-        lowered.decorator_list = []
-        lowered.returns = None
-        lowered.type_comment = None
-        for arg in lowered.args.args:
-            arg.annotation = None
-            arg.type_comment = None
         namespace["_CIMBA_RUNTIME_TEXT_HANDLE"] = _runtime_text_handle
-        return _compile_lowered(
-            lowered,
-            filename=(
-                f"<cimba runtime text callback "
-                f"'{self.name}.{fn.__name__}'>"
-            ),
-            fn_name=fn.__name__,
-            qualname=fn.__qualname__,
-            namespace=namespace,
-            like=fn,
-        )
+        return lowered, True
 
     def _process_dag_blocks(
         self,
@@ -2643,17 +2637,17 @@ class Model(Generic[_ExperimentResultT]):
                 _process_field: str | None = None,
                 _process_offset: int = 0,
                 _owner_cls: type | None = None):
-        """Register a process function `def fn(env)` or `def fn(env, idx)`
+        """Register a process function `def fn(self)` or `def fn(self, idx)`
         (the latter receives its copy index). A final parameter annotated
         with a sim.Struct subclass receives the process's own field view:
-        `def fn(env, vip: Visitor)` or `def fn(env, idx, vip: Visitor)`.
+        `def fn(self, vip: Visitor)` or `def fn(self, idx, vip: Visitor)`.
         copies=n starts n identical processes; priority sets the cimba
         process priority; struct= attaches the per-process fields without
         the view parameter. spawnable=True leaves a process unstarted at
         setup and publishes it as env.<name>, so sim.spawn(env.<name>, env)
         creates it at runtime. Component processes use the same decorator
         and publish their descriptor at the component path."""
-        if getattr(fn, "__cimba_component_function__", False):
+        if getattr(fn, "__cimba_function__", False):
             raise ValueError(
                 f"component function '{fn.__qualname__}' cannot be "
                 "registered as a model process")
@@ -2748,41 +2742,29 @@ class Model(Generic[_ExperimentResultT]):
                         f"Spawnable field '{label}' already has a process "
                         "binding")
 
-        nargs = fn.__code__.co_argcount
-        params = fn.__code__.co_varnames[:nargs]
         localns = ({base.__name__: base for base in _owner_cls.__mro__}
                    if _owner_cls is not None else None)
-        hints = get_type_hints(fn, localns=localns)
-        own = hints.get(params[-1]) if nargs > 1 else None
-        injected = _is_struct_class(own)
-        for p in params[1:len(params) - 1 if injected else None]:
-            if _is_struct_class(hints.get(p)):
-                raise ValueError(f"process '{name}': the {hints[p].__name__}"
-                                 " view must be the last parameter")
+        signature = (
+            "process functions take (self), (self, idx), and optionally "
+            "a final view parameter annotated with a sim.Struct subclass")
+        own, base_arg_count = _process_signature(
+            fn, 1, _is_struct_class, f"process '{name}'", signature,
+            localns)
+        injected = own is not None
         if injected:
             if struct is not None and struct is not own:
                 raise ValueError(f"process '{name}': struct= and the view "
                                  "annotation disagree")
             struct = own
-        indexed = nargs - injected == 2
-        if nargs - injected not in (1, 2):
-            raise ValueError(
-                "process functions take (env), (env, idx), and optionally "
-                "a final view parameter annotated with a sim.Struct "
-                "subclass")
+        indexed = base_arg_count == 2
         if spawnable:
             if copies != 1:
                 raise ValueError(f"spawnable process '{name}' cannot take "
                                  "copies; sim.spawn() creates them")
             if indexed:
-                raise ValueError(f"spawnable process '{name}' takes (env) "
-                                 "or (env, view), not a copy index")
-        fn = self._lower_component_refs(fn)
-        fn = self._lower_dataset_methods(fn)
-        fn = self._lower_history_methods(fn)
-        fn = self._lower_entity_methods(fn)
-        fn = self._lower_random_calls(fn)
-        fn = self._lower_runtime_text_handles(fn)
+                raise ValueError(f"spawnable process '{name}' takes (self) "
+                                 "or (self, view), not a copy index")
+        fn = self._lower_model_callback(fn)
         self._processes.append(_ProcDecl(name, fn, copies, priority,
                                          indexed, struct, injected,
                                          spawnable, spawn_field,
@@ -2802,8 +2784,8 @@ class Model(Generic[_ExperimentResultT]):
                         if f.kind.dag_entity}
         # Registered events without a declared field publish their address
         # in a hidden _ev_<name> field.
-        entity_kinds.update({field: "event"
-                             for _n, _fn, field, _d in self._events})
+        entity_kinds.update({callback.field: "event"
+                             for callback in self._events})
         spawnable_field_processes: dict[str, list[str]] = {}
         spawnable_index_processes: dict[tuple[str, int], list[str]] = {}
         process_field_processes: dict[str, list[str]] = {}
@@ -2863,6 +2845,34 @@ class Model(Generic[_ExperimentResultT]):
                 if edge not in function_edges:
                     function_edges.append(edge)
 
+        for spec in self._model_functions.values():
+            function_node = ProcessDAGNode(spec.graph_name, "function")
+            function_nodes[function_node.key] = function_node
+            helper = getattr(spec.helper, "py_func", spec.helper)
+            helper_node = _function_def_from_source(helper)
+            env_name = helper_node.args.args[0].arg
+            for item in ast.walk(helper_node):
+                if (not isinstance(item, ast.Attribute)
+                        or not isinstance(item.value, ast.Name)
+                        or item.value.id != env_name
+                        or item.attr not in self._decls.fields):
+                    continue
+                field_kind = self._decls.kind_of(item.attr)
+                if field_kind not in ("param", "output", "state", "fstate"):
+                    continue
+                field_node = ProcessDAGNode(item.attr, field_kind)
+                function_nodes[field_node.key] = field_node
+                edge = ProcessDAGEdge(
+                    field_node.key, function_node.key, "read")
+                if edge not in function_edges:
+                    function_edges.append(edge)
+            calls = getattr(helper, "__cimba_function_calls__", ())
+            for callee in calls:
+                edge = ProcessDAGEdge(
+                    function_node.key, f"function:{callee}", "call")
+                if edge not in function_edges:
+                    function_edges.append(edge)
+
         for process in self._processes:
             for called in getattr(
                     process.fn, "__cimba_function_calls__", ()):
@@ -2882,106 +2892,106 @@ class Model(Generic[_ExperimentResultT]):
             spawnable_index_processes=spawnable_index_processes,
             process_field_processes=process_field_processes,
             process_index_processes=process_index_processes,
-            event_callbacks=((field, fn) for _n, fn, field, _d in self._events),
+            event_callbacks=((callback.field, callback.fn)
+                             for callback in self._events),
             blocks=self._process_dag_blocks(
                 entity_kinds, function_members),
             extra_nodes=function_nodes.values(),
             extra_edges=function_edges,
         )
 
+    def _bind_callback_slot(
+        self,
+        name: str,
+        kind: str,
+        target_field: str | None,
+        target_index: int | None,
+        declared_fields: Sequence[str],
+        callbacks: Sequence[_PredicateDecl | _EventDecl],
+    ) -> str:
+        if target_field is None:
+            if target_index is not None:
+                raise ValueError(
+                    f"hidden {kind} fields cannot take an index")
+            self._register_name(name, kind)
+            return f"_{'pred' if kind == 'predicate' else 'ev'}_{name}"
+        if target_field not in declared_fields:
+            raise ValueError(
+                f"{kind} callback '{name}' field= must name a declared "
+                f"sim.{kind.capitalize()} field")
+        if self._compiled is not None:
+            raise RuntimeError("model is already compiled")
+        shape = self._field_shapes.get(target_field)
+        if shape is None:
+            if target_index is not None:
+                raise ValueError(f"{kind} field '{target_field}' is scalar")
+        elif (len(shape) != 1 or target_index is None
+              or not 0 <= target_index < shape[0]):
+            raise ValueError(
+                f"{kind} field '{target_field}' requires an index in "
+                f"[0, {shape[0]})")
+        key = (target_field if target_index is None
+               else (target_field, target_index))
+        if any(callback.key == key for callback in callbacks):
+            raise ValueError(f"{kind} field '{key}' already bound")
+        self._register_name(name, kind)
+        return target_field
+
     def _register_predicate(
         self, fn: _F, *, target_field: str | None = None,
+        target_index: int | None = None,
     ) -> _F:
-        """Register a condition predicate `def fn(env) -> bool`. Its
-        compiled address is published in the declared Predicate field of
-        the same name, for use with env.<cond>.wait_for(env.<name>).
+        """Register a condition predicate `def fn(self) -> bool`. Its
+        compiled address is published in the explicitly bound Predicate field,
+        for use with env.<cond>.wait_for(env.<name>).
         (Without a declared field, it is published as the hidden
         field `_pred_<name>`.)"""
         name = fn.__name__
-        if fn.__code__.co_argcount != 1:
-            raise ValueError("predicate functions take (env)")
+        _callback_arg_count(
+            fn, (1,), "predicate functions take (self)")
         localns = {base.__name__: base for base in type(self).__mro__}
         if get_type_hints(fn, localns=localns).get("return") is not bool:
             raise ValueError("predicate functions must return bool")
-        if target_field is not None:
-            if target_field not in self._predicate_fields:
-                raise ValueError(
-                    f"predicate callback '{name}' field= must name a "
-                    "declared sim.Predicate field")
-            if self._compiled is not None:
-                raise RuntimeError("model is already compiled")
-            if any(f == target_field for _n, _fn, f in self._predicates):
-                raise ValueError(
-                    f"predicate field '{target_field}' already bound")
-            self._register_name(name, "predicate")
-            field = target_field
-        else:
-            self._register_name(name, "predicate")
-            field = f"_pred_{name}"
-        fn = self._lower_component_refs(fn)
-        fn = self._lower_dataset_methods(fn)
-        fn = self._lower_history_methods(fn)
-        fn = self._lower_entity_methods(fn)
-        fn = self._lower_random_calls(fn)
-        fn = self._lower_runtime_text_handles(fn)
-        self._predicates.append((name, fn, field))
+        field = self._bind_callback_slot(
+            name, "predicate", target_field, target_index,
+            self._predicate_fields, self._predicates)
+        fn = self._lower_model_callback(fn)
+        self._predicates.append(_PredicateDecl(name, fn, field, target_index))
         return fn
 
     def _register_event(
         self, fn: _F, *, target_field: str | None = None,
+        target_index: int | None = None,
     ) -> _F:
-        """Register a low-level event callback `def fn(env)` or
-        `def fn(env, data)` (the latter receives the int64 data word given
+        """Register a low-level event callback `def fn(self)` or
+        `def fn(self, data)` (the latter receives the int64 data word given
         at scheduling time). Its compiled address is published in the
-        declared Event field of the same name, for use with
+        explicitly bound Event field, for use with
         env.<name>.schedule(delay, ...). (Without a declared field, it is
         published as the hidden field `_ev_<name>`.)"""
         name = fn.__name__
-        nargs = fn.__code__.co_argcount
-        if nargs not in (1, 2):
-            raise ValueError("event functions take (env) or (env, data)")
-        if target_field is not None:
-            if target_field not in self._event_fields:
-                raise ValueError(
-                    f"event callback '{name}' field= must name a declared "
-                    "sim.Event field")
-            if self._compiled is not None:
-                raise RuntimeError("model is already compiled")
-            if any(f == target_field for _n, _fn, f, _d in self._events):
-                raise ValueError(f"event field '{target_field}' already bound")
-            self._register_name(name, "event")
-            field = target_field
-        else:
-            self._register_name(name, "event")
-            field = f"_ev_{name}"
+        nargs = _callback_arg_count(
+            fn, (1, 2), "event functions take (self) or (self, data)")
+        field = self._bind_callback_slot(
+            name, "event", target_field, target_index,
+            self._event_fields, self._events)
         self.entity_fields[field] = "event"
-        fn = self._lower_component_refs(fn)
-        fn = self._lower_dataset_methods(fn)
-        fn = self._lower_history_methods(fn)
-        fn = self._lower_entity_methods(fn, extra_fields={field: "event"})
-        fn = self._lower_random_calls(fn)
-        fn = self._lower_runtime_text_handles(fn)
-        self._events.append((name, fn, field, nargs == 2))
+        fn = self._lower_model_callback(fn, event_field=field)
+        self._events.append(
+            _EventDecl(name, fn, field, nargs == 2, target_index))
         return fn
 
     def _register_collect(self, fn: _F) -> _F:
-        """Register the statistics-collection function, run once at the
+        """Register the statistics-collection function `def fn(self)`, run once at the
         end of each trial, after any component-owned @sim.collect methods
         (so it can aggregate over component outputs)."""
         if self._collect is not None:
             raise ValueError("collect() already registered")
         if self._compiled is not None:
             raise RuntimeError("model is already compiled")
-        if fn.__code__.co_argcount != 1:
-            raise ValueError("model collect functions take (env)")
-        fn = self._lower_component_refs(fn)
-        fn = self._lower_history_capture_methods(fn)
-        fn = self._lower_dataset_capture_methods(fn)
-        fn = self._lower_dataset_methods(fn)
-        fn = self._lower_history_methods(fn)
-        fn = self._lower_entity_methods(fn)
-        fn = self._lower_random_calls(fn)
-        fn = self._lower_runtime_text_handles(fn)
+        _callback_arg_count(
+            fn, (1,), "model collect functions take (self)")
+        fn = self._lower_model_callback(fn, collect=True)
         self._collect = fn
         return fn
 
@@ -3223,17 +3233,10 @@ class Model(Generic[_ExperimentResultT]):
         fields += [self._trace_field_spec(t) for t in self.traces]
         fields += [(f.name, "<i8", (f.count,))
                    for f in self._decls.by_kind("pqueues")]
-        fields += [(p, "<i8") for p in self._predicate_fields]
-        fields += [(f, "<i8") for _n, _fn, f in self._predicates
-                   if f.startswith("_pred_")]
-        fields += [(e, "<i8") for e in self._event_fields]
-        fields += [(f, "<i8") for _n, _fn, f, _d in self._events
-                   if f.startswith("_ev_")]
+        fields += [self._field_spec(p, "<i8")
+                   for p in self._predicate_fields]
+        fields += [self._field_spec(e, "<i8") for e in self._event_fields]
         fields += [self._field_spec(s, "<i8") for s in self._spawnable_fields]
-        fields += [(p.spawn_field, "<i8") for p in self._processes
-                   if p.spawnable and p.spawn_field is not None
-                   and p.spawn_field not in self._spawnable_fields
-                   and p.spawn_field not in self._component_spawnable_fields]
         if self._history_captures or self._dataset_captures:
             fields += [
                 (HISTORY_CAPTURE_TRIAL_FIELD, "<u8"),
@@ -3265,8 +3268,8 @@ class Model(Generic[_ExperimentResultT]):
         warm_parent: bool | None = None,
         cache_counters: _CacheCounters | None = None,
         processes: Sequence[_ProcDecl] | None = None,
-        predicates: Sequence[tuple[str, Callable[..., Any], str]] | None = None,
-        events: Sequence[tuple[str, Callable[..., Any], str, bool]] | None = None,
+        predicates: Sequence[_PredicateDecl] | None = None,
+        events: Sequence[_EventDecl] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], list[Any]]:
         """Compile lowered class callbacks to Cimba's native callback ABIs."""
         trial_ptr = types.CPointer(rec)
@@ -3276,13 +3279,6 @@ class Model(Generic[_ExperimentResultT]):
         # cmb_event_func: subject is the env pointer, object the data word
         ev_sig = types.void(trial_ptr, types.intp)
         rec_from_addr = ptr_caster(rec)
-
-        def closure_namespace(fn):
-            namespace = dict(fn.__globals__)
-            if fn.__closure__ is not None:
-                for name, cell in zip(fn.__code__.co_freevars, fn.__closure__):
-                    namespace[name] = cell.cell_contents
-            return namespace
 
         def make_pred(inner):
             def pred(cnd, prc, ctxp):
@@ -3334,15 +3330,7 @@ class Model(Generic[_ExperimentResultT]):
             can use the callback's record pointer directly, avoiding that
             duplicate Numba compilation while retaining the same ABI.
             """
-            source = getattr(p.fn, "__cimba_source__", None)
-            if source is None:
-                source = inspect.getsource(p.fn)
-            source = textwrap.dedent(source)
-            tree = ast.parse(source)
-            fn_node = next(
-                node for node in tree.body
-                if isinstance(node, ast.FunctionDef)
-            )
+            fn_node = _function_def_from_source(p.fn)
             env_name = fn_node.args.args[0].arg
             body = copy.deepcopy(fn_node.body)
             prefix = [
@@ -3360,9 +3348,9 @@ class Model(Generic[_ExperimentResultT]):
                     ),
                 ),
             ]
-            namespace = closure_namespace(p.fn)
+            namespace = _closure_namespace(p.fn)
             namespace["carray"] = carray
-            if p.struct is not None:
+            if p.injected:
                 view_name = fn_node.args.args[-1].arg
                 prefix.append(
                     ast.Assign(
@@ -3432,14 +3420,16 @@ class Model(Generic[_ExperimentResultT]):
             else predicates
         compile_events = self._events if events is None else events
         predicate_jobs = [
-            (name, field, pred_sig, make_pred(njit(fn)))
-            for name, fn, field in compile_predicates
-            if field not in (precompiled_predicates or {})
+            (callback.name, callback.key, pred_sig,
+             make_pred(njit(callback.fn)))
+            for callback in compile_predicates
+            if callback.key not in (precompiled_predicates or {})
         ]
         event_jobs = [
-            (name, field, ev_sig, make_event(njit(fn), takes_data))
-            for name, fn, field, takes_data in compile_events
-            if field not in (precompiled_events or {})
+            (callback.name, callback.key, ev_sig,
+             make_event(njit(callback.fn), callback.takes_data))
+            for callback in compile_events
+            if callback.key not in (precompiled_events or {})
         ]
         all_jobs = [
             *((signature, function)
@@ -3517,19 +3507,9 @@ class Model(Generic[_ExperimentResultT]):
         native callback loop, avoiding a separate lazy ``njit`` dispatcher and
         repeated generated calls from trial teardown.
         """
-        source = getattr(fn, "__cimba_source__", None)
-        if source is None:
-            source = inspect.getsource(fn)
-        tree = ast.parse(textwrap.dedent(source))
-        fn_node = next(
-            node for node in tree.body
-            if isinstance(node, ast.FunctionDef)
-        )
+        fn_node = _function_def_from_source(fn)
         env_name = fn_node.args.args[0].arg
-        namespace = dict(fn.__globals__)
-        if fn.__closure__ is not None:
-            for name, cell in zip(fn.__code__.co_freevars, fn.__closure__):
-                namespace[name] = cell.cell_contents
+        namespace = _closure_namespace(fn)
         namespace["carray"] = carray
         body: list[ast.stmt] = [
             ast.Assign(
@@ -3604,13 +3584,25 @@ class Model(Generic[_ExperimentResultT]):
             self._ensure_class_precompiled()
         if not self._processes:
             raise ValueError("model has no processes")
-        bound = {f for _n, _fn, f in self._predicates}
-        unbound = [f for f in self._predicate_fields if f not in bound]
+        bound_predicates = {callback.key for callback in self._predicates}
+        unbound = []
+        for field in self._predicate_fields:
+            shape = self._field_shapes.get(field)
+            expected = ({field} if shape is None else
+                        {(field, index) for index in range(shape[0])})
+            if not expected.issubset(bound_predicates):
+                unbound.append(field)
         if unbound:
             raise ValueError(f"Predicate field(s) {unbound} declared but "
                              "no @predicate of that name registered")
-        bound = {f for _n, _fn, f, _d in self._events}
-        unbound = [f for f in self._event_fields if f not in bound]
+        bound_events = {callback.key for callback in self._events}
+        unbound = []
+        for field in self._event_fields:
+            shape = self._field_shapes.get(field)
+            expected = ({field} if shape is None else
+                        {(field, index) for index in range(shape[0])})
+            if not expected.issubset(bound_events):
+                unbound.append(field)
         if unbound:
             raise ValueError(f"Event field(s) {unbound} declared but "
                              "no @event of that name registered")
@@ -3927,9 +3919,15 @@ class Model(Generic[_ExperimentResultT]):
         for o in self.outputs:
             trials[o] = np.nan
         for field, pred in compiled["preds"].items():
-            trials[field] = pred.address
+            if isinstance(field, tuple):
+                trials[field[0]][:, field[1]] = pred.address
+            else:
+                trials[field] = pred.address
         for field, ev in compiled["user_events"].items():
-            trials[field] = ev.address
+            if isinstance(field, tuple):
+                trials[field[0]][:, field[1]] = ev.address
+            else:
+                trials[field] = ev.address
         for field, index, process_name in compiled["spawn_assignments"]:
             desc = compiled["spawns"][process_name]
             if index is None:

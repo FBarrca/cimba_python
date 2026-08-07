@@ -44,25 +44,25 @@ class ReportingModel(sim.Model):
     pqs: sim.PQueues = sim.count(1)
 
     @sim.process
-    def driver(env: "ReportingModel"):
+    def driver(self):
         for i in range(12):
-            env.d.add(float(i % 4))
+            self.d.add(float(i % 4))
 
-        env.q.put(2)
-        env.resource.acquire()
-        env.pool.acquire(1)
-        env.store.put(101)
-        env.pqs[0].put(202, 5)
+        self.q.put(2)
+        self.resource.acquire()
+        self.pool.acquire(1)
+        self.store.put(101)
+        self.pqs[0].put(202, 5)
         sim.hold(1.0)
 
-        env.q.get(1)
-        env.resource.release()
-        env.pool.release(1)
-        env.store.take()
-        env.pqs[0].take()
+        self.q.get(1)
+        self.resource.release()
+        self.pool.release(1)
+        self.store.take()
+        self.pqs[0].take()
         sim.hold(1.0)
 
-        env.q.get(1)
+        self.q.get(1)
         sim.suspend()
 
 
@@ -78,9 +78,9 @@ class DatasetMethodModel(sim.Model):
     d: sim.Dataset
 
     @sim.process
-    def driver(env: "DatasetMethodModel"):
+    def driver(self):
         for value in range(1, 5):
-            env.d.add(float(value))
+            self.d.add(float(value))
 
 def build_reporting_model() -> ReportingModel:
     model = ReportingModel()
@@ -94,19 +94,19 @@ def test_sim_dataset_methods_compile_in_model_callbacks(tmp_path):
 
     class ConfiguredDatasetMethodModel(DatasetMethodModel):
         @sim.collect
-        def collect(env: "DatasetMethodModel"):
-            env.n = float(env.d.count())
-            env.avg = env.d.mean()
-            env.sd = env.d.std()
-            env.q25 = env.d.quantile(0.25)
-            env.lo = env.d.min()
-            env.hi = env.d.max()
-            env.med = env.d.median()
-            ok = env.d.print_file(report_handle, append=0)
-            ok += env.d.fivenum_file(report_handle, append=1)
-            ok += env.d.histogram_file(
+        def collect(self):
+            self.n = float(self.d.count())
+            self.avg = self.d.mean()
+            self.sd = self.d.std()
+            self.q25 = self.d.quantile(0.25)
+            self.lo = self.d.min()
+            self.hi = self.d.max()
+            self.med = self.d.median()
+            ok = self.d.print_file(report_handle, append=0)
+            ok += self.d.fivenum_file(report_handle, append=1)
+            ok += self.d.histogram_file(
                 report_handle, append=1, bins=4, low=0.0, high=0.0)
-            env.ok = float(ok)
+            self.ok = float(ok)
 
     model = ConfiguredDatasetMethodModel()
 
@@ -132,15 +132,15 @@ def test_dataset_capture_returns_per_trial_arrays():
         d: sim.Dataset
 
         @sim.process
-        def driver(env: "Samples"):
+        def driver(self):
             for i in range(4):
-                env.d.add(float(i + 1))
+                self.d.add(float(i + 1))
 
         @sim.collect
-        def collect(env: "Samples"):
-            env.avg = env.d.mean()
-            env.n = float(env.d.count())
-            env.d.capture()
+        def collect(self):
+            self.avg = self.d.mean()
+            self.n = float(self.d.count())
+            self.d.capture()
 
     model = Samples()
 
@@ -180,8 +180,8 @@ def test_dataset_capture_model_collect_uses_component_path():
         station: Station = Station()
 
         @sim.collect
-        def collect(env: "Clinic"):
-            env.station.samples.capture()
+        def collect(self):
+            self.station.samples.capture()
 
     model = Clinic()
 
@@ -197,12 +197,12 @@ def test_dataset_capture_rejects_invalid_targets():
         d: sim.Dataset
 
         @sim.process
-        def driver(env: "Samples"):
-            env.d.add(1.0)
+        def driver(self):
+            self.d.add(1.0)
 
         @sim.collect
-        def collect_with_args(env: "Samples"):
-            env.d.capture(1)
+        def collect_with_args(self):
+            self.d.capture(1)
 
     with pytest.raises(ValueError, match="dataset capture\\(\\) takes no"):
         Samples()
@@ -231,25 +231,25 @@ def test_native_text_report_file_variants_cover_dataset_methods(tmp_path):
 
     class FileReportingModel(ReportingModel):
         @sim.collect
-        def collect(env: "ReportingModel"):
-            env.n = float(env.q.history().count())
-            ok = env.q.report_file(report_handle, 0)
-            ok += env.resource.report_file(report_handle, 1)
-            ok += env.pool.report_file(report_handle, 1)
-            ok += env.store.report_file(report_handle, 1)
-            ok += env.pqs[0].report_file(report_handle, 1)
-            ok += env.q.history().print_file(report_handle, 1)
-            ok += env.q.history().fivenum_file(report_handle, 1)
-            ok += env.q.history().histogram_file(report_handle, 1,
+        def collect(self):
+            self.n = float(self.q.history().count())
+            ok = self.q.report_file(report_handle, 0)
+            ok += self.resource.report_file(report_handle, 1)
+            ok += self.pool.report_file(report_handle, 1)
+            ok += self.store.report_file(report_handle, 1)
+            ok += self.pqs[0].report_file(report_handle, 1)
+            ok += self.q.history().print_file(report_handle, 1)
+            ok += self.q.history().fivenum_file(report_handle, 1)
+            ok += self.q.history().histogram_file(report_handle, 1,
                                                  4, 0.0, 4.0)
-            ok += env.q.history().correlogram_file(report_handle, 1, 2)
-            ok += env.q.history().pacf_correlogram_file(report_handle, 1, 2)
-            ok += env.d.print_file(report_handle, 1)
-            ok += env.d.fivenum_file(report_handle, 1)
-            ok += env.d.histogram_file(report_handle, 1, 4, 0.0, 0.0)
-            ok += env.d.correlogram_file(report_handle, 1, 2)
-            ok += env.d.pacf_correlogram_file(report_handle, 1, 2)
-            env.ok = float(ok)
+            ok += self.q.history().correlogram_file(report_handle, 1, 2)
+            ok += self.q.history().pacf_correlogram_file(report_handle, 1, 2)
+            ok += self.d.print_file(report_handle, 1)
+            ok += self.d.fivenum_file(report_handle, 1)
+            ok += self.d.histogram_file(report_handle, 1, 4, 0.0, 0.0)
+            ok += self.d.correlogram_file(report_handle, 1, 2)
+            ok += self.d.pacf_correlogram_file(report_handle, 1, 2)
+            self.ok = float(ok)
 
     model = FileReportingModel()
 
@@ -271,9 +271,9 @@ def test_native_text_report_file_variants_cover_dataset_methods(tmp_path):
 def test_timeseries_history_method_compiles_in_model_callbacks():
     class TimeseriesReportingModel(ReportingModel):
         @sim.collect
-        def collect(env: "ReportingModel"):
-            env.n = float(env.q.history().count())
-            env.ok = env.q.history().mean() + env.pqs[0].history().mean()
+        def collect(self):
+            self.n = float(self.q.history().count())
+            self.ok = self.q.history().mean() + self.pqs[0].history().mean()
 
     model = TimeseriesReportingModel()
 
@@ -289,18 +289,18 @@ def test_timeseries_history_capture_returns_per_trial_arrays():
         q: sim.Queue = sim.capacity(5)
 
         @sim.process
-        def driver(env: "CaptureModel"):
+        def driver(self):
             for _ in range(3):
-                env.q.put(1)
+                self.q.put(1)
                 sim.hold(1.0)
-                env.q.get(1)
+                self.q.get(1)
                 sim.hold(1.0)
             sim.suspend()
 
         @sim.collect
-        def collect(env: "CaptureModel"):
-            env.mean = env.q.history().mean()
-            env.q.history().capture()
+        def collect(self):
+            self.mean = self.q.history().mean()
+            self.q.history().capture()
 
     model = CaptureModel()
 
@@ -344,22 +344,22 @@ def test_indexed_component_history_capture_returns_item_per_trial():
         q: sim.Queue = sim.capacity(5)
 
         @sim.process
-        def arrivals(env: "QueueModel"):
-            env.q.put(1)
-            for index in range(len(env.counters)):
+        def arrivals(self):
+            self.q.put(1)
+            for index in range(len(self.counters)):
                 for _ in range(index + 1):
-                    env.counters[index].line.put(1)
-                env.counters[index].resource.acquire()
-                env.counters[index].store.put(index)
+                    self.counters[index].line.put(1)
+                self.counters[index].resource.acquire()
+                self.counters[index].store.put(index)
             sim.suspend()
 
         @sim.collect
-        def collect(env: "QueueModel"):
-            env.q.history().capture()
-            for index in range(len(env.counters)):
-                env.counters[index].line.history().capture()
-                env.counters[index].resource.history().capture()
-                env.counters[index].store.history().capture()
+        def collect(self):
+            self.q.history().capture()
+            for index in range(len(self.counters)):
+                self.counters[index].line.history().capture()
+                self.counters[index].resource.history().capture()
+                self.counters[index].store.history().capture()
 
     model = QueueModel()
 
@@ -402,9 +402,9 @@ def test_indexed_component_history_capture_rejects_unbounded_index():
         counters: list[Counter] = [Counter(), Counter()]
 
         @sim.collect
-        def collect(env: "QueueModel"):
+        def collect(self):
             index = 1
-            env.counters[index].line.history().capture()
+            self.counters[index].line.history().capture()
 
     with pytest.raises(ValueError, match="unbounded index"):
         QueueModel()
@@ -413,8 +413,8 @@ def test_indexed_component_history_capture_rejects_unbounded_index():
         counters: list[Counter] = [Counter(), Counter()]
 
         @sim.collect
-        def constant_collect(env: "ConstantModel"):
-            env.counters[2].line.history().capture()
+        def constant_collect(self):
+            self.counters[2].line.history().capture()
 
     with pytest.raises(ValueError, match="out of range"):
         ConstantModel()
@@ -428,13 +428,13 @@ def test_one_item_component_history_capture_keeps_collection_dimension():
         counters: list[Counter] = [Counter()]
 
         @sim.process
-        def driver(env: "QueueModel"):
-            env.counters[0].line.put(1)
+        def driver(self):
+            self.counters[0].line.put(1)
             sim.suspend()
 
         @sim.collect
-        def collect(env: "QueueModel"):
-            env.counters[0].line.history().capture()
+        def collect(self):
+            self.counters[0].line.history().capture()
 
     model = QueueModel()
 
@@ -455,13 +455,13 @@ def test_constant_indexed_history_capture_leaves_other_items_empty():
         counters: list[Counter] = [Counter(), Counter(), Counter()]
 
         @sim.process
-        def driver(env: "QueueModel"):
-            env.counters[1].line.put(1)
+        def driver(self):
+            self.counters[1].line.put(1)
             sim.suspend()
 
         @sim.collect
-        def collect(env: "QueueModel"):
-            env.counters[1].line.history().capture()
+        def collect(self):
+            self.counters[1].line.history().capture()
 
     model = QueueModel()
 
@@ -479,12 +479,12 @@ def test_timeseries_history_capture_rejects_invalid_targets():
         d: sim.Dataset
 
         @sim.process
-        def dataset_driver(env: "DatasetCapture"):
-            env.d.add(1.0)
+        def dataset_driver(self):
+            self.d.add(1.0)
 
         @sim.collect
-        def dataset_collect(env: "DatasetCapture"):
-            env.d.history().capture()
+        def dataset_collect(self):
+            self.d.history().capture()
 
     with pytest.raises(ValueError, match="unknown history field"):
         DatasetCapture()
@@ -493,12 +493,12 @@ def test_timeseries_history_capture_rejects_invalid_targets():
         pqs: sim.PQueues = sim.count(1)
 
         @sim.process
-        def indexed_driver(env: "IndexedCapture"):
-            env.pqs[0].put(1, 0)
+        def indexed_driver(self):
+            self.pqs[0].put(1, 0)
 
         @sim.collect
-        def indexed_collect(env: "IndexedCapture"):
-            env.pqs[0].history().capture()
+        def indexed_collect(self):
+            self.pqs[0].history().capture()
 
     with pytest.raises(ValueError, match="indexed entity"):
         IndexedCapture()
@@ -536,8 +536,8 @@ def test_timeseries_history_capture_model_collect_uses_component_path():
         station: Station = Station()
 
         @sim.collect
-        def collect(env: "Clinic"):
-            env.station.q.history().capture()
+        def collect(self):
+            self.station.q.history().capture()
 
     model = Clinic()
 
@@ -589,15 +589,15 @@ def test_timeseries_history_method_compiles_in_components():
 def test_native_text_report_stdout_variants_print_to_console():
     class StdoutReportingModel(ReportingModel):
         @sim.collect
-        def collect(env: "ReportingModel"):
-            ok = env.q.report()
-            ok += env.resource.report()
-            ok += env.pool.report()
-            ok += env.store.report()
-            ok += env.pqs[0].report()
-            ok += env.q.history().histogram(4, 0.0, 4.0)
-            ok += env.d.histogram(4, 0.0, 0.0)
-            env.ok = float(ok)
+        def collect(self):
+            ok = self.q.report()
+            ok += self.resource.report()
+            ok += self.pool.report()
+            ok += self.store.report()
+            ok += self.pqs[0].report()
+            ok += self.q.history().histogram(4, 0.0, 4.0)
+            ok += self.d.histogram(4, 0.0, 0.0)
+            self.ok = float(ok)
 
     model = StdoutReportingModel()
 

@@ -64,11 +64,11 @@ def test_sim_logging_helpers():
         done: sim.Output
 
         @sim.process
-        def actor(env: "LogModel"):
+        def actor(self):
             sim.log_user(userflag, msg)
             sim.log_user_i64(userflag, label_i, 7)
             sim.log_user_f64(userflag, label_f, 2.5)
-            env.done = 1.0
+            self.done = 1.0
             sim.suspend()
 
     model = LogModel()
@@ -92,9 +92,9 @@ def test_sim_logging_suppressed_in_trial_threads():
         done: sim.Output
 
         @sim.process
-        def actor(env: "LogModel"):
+        def actor(self):
             sim.log_user(userflag, msg)
-            env.done = 1.0
+            self.done = 1.0
             sim.suspend()
 
     model = LogModel()
@@ -118,10 +118,10 @@ def test_disabled_logging_overhead_is_bounded():
         done: sim.Output
 
         @sim.process
-        def no_log_actor(env: "NoLog"):
+        def no_log_actor(self):
             for _ in range(200):
                 sim.hold(0.0)
-            env.done = 1.0
+            self.done = 1.0
 
     no_log = NoLog()
 
@@ -130,11 +130,11 @@ def test_disabled_logging_overhead_is_bounded():
         done: sim.Output
 
         @sim.process
-        def disabled_actor(env: "DisabledLog"):
+        def disabled_actor(self):
             for _ in range(200):
                 sim.log_user(userflag, msg)
                 sim.hold(0.0)
-            env.done = 1.0
+            self.done = 1.0
 
     disabled_log = DisabledLog()
 
@@ -165,20 +165,20 @@ class MM1(sim.Model):
     queue: sim.Queue
 
     @sim.process
-    def arrivals(env: "MM1"):
+    def arrivals(self):
         while True:
-            sim.hold(cimba.random.exponential(1.0 / env.utilization))
-            env.queue.put(1)
+            sim.hold(cimba.random.exponential(1.0 / self.utilization))
+            self.queue.put(1)
 
     @sim.process
-    def service(env: "MM1"):
+    def service(self):
         while True:
             sim.hold(1.0)
-            env.queue.get(1)
+            self.queue.get(1)
 
     @sim.collect
-    def collect_stats(env: "MM1"):
-        env.avg_queue_length = env.queue.mean_level()
+    def collect_stats(self):
+        self.avg_queue_length = self.queue.mean_level()
 
 
 def test_sim_model_run():
@@ -242,8 +242,8 @@ def test_param_defaults_are_optional_visible_and_overridable():
         result: sim.Output
 
         @sim.process
-        def run(env: "Defaults"):
-            env.result = env.rate * env.required * env.scale
+        def run(self):
+            self.result = self.rate * self.required * self.scale
 
     model = Defaults()
     assert model.params == ["rate", "required", "scale"]
@@ -291,7 +291,7 @@ def test_unbound_predicate_field_rejected():
         ready: sim.Predicate
 
         @sim.process
-        def proc(env: "Gate"):
+        def proc(self):
             sim.hold(1.0)
 
     model = Gate()
@@ -312,30 +312,30 @@ def test_bounded_queue_and_dataset_stats():
         d: sim.Dataset
 
         @sim.process
-        def producer(env: "Bounded"):
-            env.max_level = 0.0
-            env.space_ok = 1.0
+        def producer(self):
+            self.max_level = 0.0
+            self.space_ok = 1.0
             while True:
-                env.q.put(1)       # blocks while the queue is full
-                lvl = env.q.level()
-                if lvl > env.max_level:
-                    env.max_level = lvl
-                if env.q.space() + lvl != 5:
-                    env.space_ok = 0.0
-                env.d.add(1.0 * lvl)
+                self.q.put(1)       # blocks while the queue is full
+                lvl = self.q.level()
+                if lvl > self.max_level:
+                    self.max_level = lvl
+                if self.q.space() + lvl != 5:
+                    self.space_ok = 0.0
+                self.d.add(1.0 * lvl)
                 sim.hold(0.5)
 
         @sim.process
-        def consumer(env: "Bounded"):
+        def consumer(self):
             while True:
                 sim.hold(1.0)
-                env.q.get(1)
+                self.q.get(1)
 
         @sim.collect
-        def stats(env: "Bounded"):
-            env.d_min = env.d.min()
-            env.d_max = env.d.max()
-            env.d_std = env.d.std()
+        def stats(self):
+            self.d_min = self.d.min()
+            self.d_max = self.d.max()
+            self.d_std = self.d.std()
 
     model = Bounded()
 
@@ -362,19 +362,19 @@ def test_dataset_median_and_quantile():
         d_empty: sim.Dataset
 
         @sim.process
-        def feed(env: "Quant"):
+        def feed(self):
             sim.hold(2.0)           # tally inside the measurement window
             for i in range(1, 7):
-                env.d.add(1.0 * i)
+                self.d.add(1.0 * i)
             sim.suspend()
 
         @sim.collect
-        def stats(env: "Quant"):
-            env.med = env.d.median()
-            env.q0 = env.d.quantile(0.0)
-            env.q25 = env.d.quantile(0.25)
-            env.q100 = env.d.quantile(1.0)
-            env.med_empty = env.d_empty.median()
+        def stats(self):
+            self.med = self.d.median()
+            self.q0 = self.d.quantile(0.0)
+            self.q25 = self.d.quantile(0.25)
+            self.q100 = self.d.quantile(1.0)
+            self.med_empty = self.d_empty.median()
 
     model = Quant()
 
@@ -397,9 +397,9 @@ def test_experiment_summary():
         z: sim.Output
 
         @sim.process
-        def p(env: "Sweep"):
-            env.y = env.x * 2.0
-            env.z = cimba.random.uniform(0.0, 1.0)
+        def p(self):
+            self.y = self.x * 2.0
+            self.z = cimba.random.uniform(0.0, 1.0)
             sim.suspend()
 
     model = Sweep()
@@ -435,8 +435,8 @@ def test_many_scalar_params_do_not_hit_a_mesh_dimension_limit():
         "__annotations__": {**{p: sim.Param for p in names},
                             "y": sim.Output},
     })
-    def p(env):
-        env.y = env.p0 + env.p39
+    def p(self):
+        self.y = self.p0 + self.p39
         sim.suspend()
     Many.p = sim.process(p)
     model = Many()
@@ -469,8 +469,8 @@ def test_param_cross_product_order_and_degenerate_axes():
         out: sim.Output
 
         @sim.process
-        def p(env: "Grid"):
-            env.out = env.x
+        def p(self):
+            self.out = self.x
             sim.suspend()
 
     model = Grid()
@@ -502,8 +502,8 @@ def test_shaped_param_held_fixed_while_a_scalar_param_sweeps():
         y: sim.Output
 
         @sim.process
-        def p(env: "Net"):
-            env.y = env.legs[1].rate * env.x
+        def p(self):
+            self.y = self.legs[1].rate * self.x
             sim.suspend()
 
     model = Net()
@@ -535,8 +535,8 @@ def test_experiment_summary_single_point():
         y: sim.Output
 
         @sim.process
-        def p(env: "Single"):
-            env.y = cimba.random.uniform(0.0, 1.0)
+        def p(self):
+            self.y = cimba.random.uniform(0.0, 1.0)
             sim.suspend()
 
     model = Single()
@@ -562,14 +562,14 @@ def test_random_draws_and_suspend():
         die: sim.Output
 
         @sim.process
-        def draw(env: "Draws"):
-            env.tri = cimba.random.triangular(0.0, 1.0, 2.0)
-            env.wei = cimba.random.weibull(1.5, 2.0)
-            env.lgn = cimba.random.lognormal(0.0, 0.5)
-            env.erl = cimba.random.erlang(3, 2.0)
-            env.bet = cimba.random.beta(2.0, 3.0, 0.0, 1.0)
-            env.poi = cimba.random.poisson(4.0)
-            env.die = cimba.random.dice(1, 6)
+        def draw(self):
+            self.tri = cimba.random.triangular(0.0, 1.0, 2.0)
+            self.wei = cimba.random.weibull(1.5, 2.0)
+            self.lgn = cimba.random.lognormal(0.0, 0.5)
+            self.erl = cimba.random.erlang(3, 2.0)
+            self.bet = cimba.random.beta(2.0, 3.0, 0.0, 1.0)
+            self.poi = cimba.random.poisson(4.0)
+            self.die = cimba.random.dice(1, 6)
             sim.suspend()           # idle until the trial ends
 
     model = Draws()
@@ -611,28 +611,28 @@ def test_extra_random_distributions():
         cat: sim.Output
 
         @sim.process
-        def draw(env: "ExtraDraws"):
-            env.sn = cimba.random.normal()
-            env.se = cimba.random.exponential()
-            env.sg = cimba.random.gamma(2.5)
-            env.sb = cimba.random.beta(2.0, 3.0)
-            env.pm = cimba.random.pert_mod(0.0, 4.0, 10.0, 6.0)
-            env.lg = cimba.random.logistic(0.0, 1.0)
-            env.cy = cimba.random.cauchy(0.0, 1.0)
-            env.pr = cimba.random.pareto(2.5, 1.0)
-            env.cs = cimba.random.chi_squared(4.0)
-            env.fd = cimba.random.f_dist(5.0, 8.0)
-            env.st = cimba.random.student_t(7.0)
-            env.td = cimba.random.student_t(7.0, 1.0, 2.0)
-            env.geo = cimba.random.geometric(0.4)
-            env.binom = cimba.random.binomial(10, 0.4)
-            env.nbinom = cimba.random.negative_binomial(3, 0.4)
-            env.pas = cimba.random.negative_binomial(3, 0.4)
-            env.hypo = cimba.random.hypoexponential((1.0, 2.0, 4.0, 8.0))
-            env.hyper = cimba.random.hyperexponential(
+        def draw(self):
+            self.sn = cimba.random.normal()
+            self.se = cimba.random.exponential()
+            self.sg = cimba.random.gamma(2.5)
+            self.sb = cimba.random.beta(2.0, 3.0)
+            self.pm = cimba.random.pert_mod(0.0, 4.0, 10.0, 6.0)
+            self.lg = cimba.random.logistic(0.0, 1.0)
+            self.cy = cimba.random.cauchy(0.0, 1.0)
+            self.pr = cimba.random.pareto(2.5, 1.0)
+            self.cs = cimba.random.chi_squared(4.0)
+            self.fd = cimba.random.f_dist(5.0, 8.0)
+            self.st = cimba.random.student_t(7.0)
+            self.td = cimba.random.student_t(7.0, 1.0, 2.0)
+            self.geo = cimba.random.geometric(0.4)
+            self.binom = cimba.random.binomial(10, 0.4)
+            self.nbinom = cimba.random.negative_binomial(3, 0.4)
+            self.pas = cimba.random.negative_binomial(3, 0.4)
+            self.hypo = cimba.random.hypoexponential((1.0, 2.0, 4.0, 8.0))
+            self.hyper = cimba.random.hyperexponential(
                 (1.0, 2.0, 4.0, 8.0), (0.1, 0.2, 0.3, 0.4))
-            env.loaded = cimba.random.categorical([0.2, 0.3, 0.5])
-            env.cat = cimba.random.categorical(CAT_PROBABILITIES)
+            self.loaded = cimba.random.categorical([0.2, 0.3, 0.5])
+            self.cat = cimba.random.categorical(CAT_PROBABILITIES)
             sim.suspend()
 
     model = ExtraDraws()
@@ -672,16 +672,16 @@ def test_random_namespace_defaults_keywords_and_aliases_compile():
         chi: sim.Output
 
         @sim.process
-        def draw(env: "RandomAPI"):
-            env.u = cimba.random.uniform()
-            env.n = cimba.random.normal(mu=0.0, sigma=1.0)
-            env.e = cimba.random.exponential()
-            env.g = cimba.random.gamma(shape=2.0)
-            env.cat = cimba.random.categorical((0.2, 0.3, 0.5))
-            env.hyper = cimba.random.hyperexponential(
+        def draw(self):
+            self.u = cimba.random.uniform()
+            self.n = cimba.random.normal(mu=0.0, sigma=1.0)
+            self.e = cimba.random.exponential()
+            self.g = cimba.random.gamma(shape=2.0)
+            self.cat = cimba.random.categorical((0.2, 0.3, 0.5))
+            self.hyper = cimba.random.hyperexponential(
                 (1.0, 2.0), probabilities=(0.25, 0.75))
-            env.td = cimba.random.student_t(v=7.0, m=1.0, s=2.0)
-            env.chi = cimba.random.chi_squared(k=4.0)
+            self.td = cimba.random.student_t(v=7.0, m=1.0, s=2.0)
+            self.chi = cimba.random.chi_squared(k=4.0)
             sim.suspend()
 
     model = RandomAPI()
@@ -704,17 +704,17 @@ def test_process_handles_and_interrupt():
         worker: sim.Processes
 
         @sim.process(copies=2, field="worker")
-        def worker_process(env: "Game", idx: int):
+        def worker_process(self, idx: int):
             if idx == 0:
-                env.got_sig = sim.hold(1000.0)  # interrupted by the poker
+                self.got_sig = sim.hold(1000.0)  # interrupted by the poker
             else:
                 while True:
                     sim.hold(1000.0)
 
         @sim.process
-        def poker(env: "Game"):
+        def poker(self):
             sim.hold(1.0)
-            sim.interrupt(env.worker[0], 42, 0)
+            sim.interrupt(self.worker[0], 42, 0)
             while True:
                 sim.hold(1000.0)
 
@@ -739,24 +739,24 @@ def test_process_timeout_bindings():
         target: sim.Processes
 
         @sim.process(field="target")
-        def target_process(env: "Timeout"):
-            env.target_signal = sim.suspend()
+        def target_process(self):
+            self.target_signal = sim.suspend()
             while True:
                 sim.hold(1000.0)
 
         @sim.process
-        def controller(env: "Timeout"):
+        def controller(self):
             me = sim.current()
             cancelled = sim.timer_add(me, 5.0, sim.TIMEOUT)
-            env.cancel_first = sim.timer_cancel(me, cancelled)
-            env.cancel_second = sim.timer_cancel(me, cancelled)
-            env.constants_ok = 1.0
+            self.cancel_first = sim.timer_cancel(me, cancelled)
+            self.cancel_second = sim.timer_cancel(me, cancelled)
+            self.constants_ok = 1.0
             if sim.TIMEOUT != -5 or sim.CANCELLED != -4:
-                env.constants_ok = 0.0
+                self.constants_ok = 0.0
 
             sim.hold(0.1)
-            target_timer = sim.timer_add(env.target[0], 1.0, sim.TIMEOUT)
-            env.waited = sim.wait_event(target_timer)
+            target_timer = sim.timer_add(self.target[0], 1.0, sim.TIMEOUT)
+            self.waited = sim.wait_event(target_timer)
             while True:
                 sim.hold(1000.0)
 
@@ -792,33 +792,33 @@ def test_low_level_events():
         counter: sim.State
 
         @sim.event(field="ring")
-        def on_ring(env: "Evented", data: int):
-            env.fired_at = sim.now()
-            env.payload = data
-            env.cur_ok = 1.0 if sim.current_event() != 0 else 0.0
+        def on_ring(self, data: int):
+            self.fired_at = sim.now()
+            self.payload = data
+            self.cur_ok = 1.0 if sim.current_event() != 0 else 0.0
 
         @sim.event
-        def bump(env: "Evented"):
-            env.counter += 1
+        def bump(self):
+            self.counter += 1
 
         @sim.process
-        def driver(env: "Evented"):
-            h = env.ring.schedule(2.0, 42, 7)
-            env.sched_ok = h.scheduled()
-            env.t_sched = h.time()
-            env.count_ok = 1.0 if sim.event_count() >= 1 else 0.0
+        def driver(self):
+            h = self.ring.schedule(2.0, 42, 7)
+            self.sched_ok = h.scheduled()
+            self.t_sched = h.time()
+            self.count_ok = 1.0 if sim.event_count() >= 1 else 0.0
             h.reschedule(sim.now() + 3.0)
-            env.t_resched = h.time()
+            self.t_resched = h.time()
             h.reprioritize(9)
-            env.prio_after = h.priority()
-            env.wait_status = h.wait_event()
+            self.prio_after = h.priority()
+            self.wait_status = h.wait_event()
 
-            h2 = env._ev_bump.schedule(1.0)  # defaults: data/priority
-            env.cancel_first = h2.cancel()
-            env.cancel_second = h2.cancel()
-            env._ev_bump.schedule_at(sim.now() + 1.0)
+            h2 = self._ev_bump.schedule(1.0)  # defaults: data/priority
+            self.cancel_first = h2.cancel()
+            self.cancel_second = h2.cancel()
+            self._ev_bump.schedule_at(sim.now() + 1.0)
             sim.hold(2.0)
-            env.n_bumps = env.counter
+            self.n_bumps = self.counter
             while True:
                 sim.hold(1000.0)
 
@@ -850,10 +850,10 @@ def test_clear_events_ends_trial():
         had_events: sim.Output
 
         @sim.process
-        def runner(env: "Clearer"):
+        def runner(self):
             sim.hold(1.0)
-            env.ended_at = sim.now()
-            env.had_events = 1.0 if sim.event_count() > 0 else 0.0
+            self.ended_at = sim.now()
+            self.had_events = 1.0 if sim.event_count() > 0 else 0.0
             sim.clear_events()
             sim.suspend()
 
@@ -873,7 +873,7 @@ def test_unbound_event_field_rejected():
         ring: sim.Event
 
         @sim.process
-        def proc(env: "Gate"):
+        def proc(self):
             sim.hold(1.0)
 
     model = Gate()
@@ -890,22 +890,22 @@ def test_pqueues_and_timers():
         qs: sim.PQueues = sim.count(2)
 
         @sim.process
-        def producer(env: "Shop"):
-            env.qs[0].put(7, 0)     # low priority first
-            env.qs[0].put(8, 5)     # high priority second
+        def producer(self):
+            self.qs[0].put(7, 0)     # low priority first
+            self.qs[0].put(8, 5)     # high priority second
             sim.hold(1.0)
-            env.served_first = env.qs[0].take()  # leftover entry
+            self.served_first = self.qs[0].take()  # leftover entry
 
         @sim.process
-        def consumer(env: "Shop"):
+        def consumer(self):
             sim.hold(0.5)
-            env.served_first = env.qs[0].take()
+            self.served_first = self.qs[0].take()
 
         @sim.process
-        def waiter(env: "Shop"):
+        def waiter(self):
             me = sim.current()
             sim.timer_set(me, 2.0, 99)
-            env.timed_out = sim.suspend()
+            self.timed_out = sim.suspend()
             while True:
                 sim.hold(1000.0)
 
@@ -932,21 +932,21 @@ def test_pqueue_get_status_and_object():
         qs: sim.PQueues = sim.count(1)
 
         @sim.process
-        def actor(env: "PQGet"):
-            q = env.qs[0]
+        def actor(self):
+            q = self.qs[0]
             q.put(7, 0)
             q.put(8, 5)
 
             status, obj = q.get()
-            env.first_status = status
-            env.first_obj = obj
-            env.take_obj = q.take()
+            self.first_status = status
+            self.first_obj = obj
+            self.take_obj = q.take()
 
             me = sim.current()
             sim.timer_set(me, 1.0, sim.TIMEOUT)
             status, obj = q.get()
-            env.timeout_status = status
-            env.timeout_obj = obj
+            self.timeout_status = status
+            self.timeout_obj = obj
             while True:
                 sim.hold(1000.0)
 
@@ -973,25 +973,25 @@ def test_pqueue_space_reprioritize_and_mean_length():
         qs: sim.PQueues = sim.count(1)
 
         @sim.process
-        def actor(env: "PQStats"):
-            q = env.qs[0]
+        def actor(self):
+            q = self.qs[0]
             low = q.put(10, 0)
             q.put(20, 5)
-            env.space_ok = 0.0
+            self.space_ok = 0.0
             if q.space() > q.length():
-                env.space_ok = 1.0
-            env.pos_before = q.position(low)
+                self.space_ok = 1.0
+            self.pos_before = q.position(low)
             q.reprioritize(low, 10)
-            env.pos_after = q.position(low)
+            self.pos_after = q.position(low)
             sim.hold(1.0)
-            env.first = q.take()
+            self.first = q.take()
             sim.hold(1.0)
             q.take()
             sim.suspend()
 
         @sim.collect
-        def collect(env: "PQStats"):
-            env.mean_len = env.qs[0].mean_length()
+        def collect(self):
+            self.mean_len = self.qs[0].mean_length()
 
     model = PQStats()
 
@@ -1021,28 +1021,28 @@ def test_store_get_position_and_resource_held():
         resource: sim.Resource
 
         @sim.process
-        def actor(env: "StoreResource"):
+        def actor(self):
             me = sim.current()
-            env.resource.acquire()
-            env.held_before = env.resource.held(me)
-            env.resource.release()
-            env.held_after = env.resource.held(me)
+            self.resource.acquire()
+            self.held_before = self.resource.held(me)
+            self.resource.release()
+            self.held_after = self.resource.held(me)
 
-            env.store.put(0)
-            status, obj = env.store.get()
-            env.zero_status = status
-            env.zero_obj = obj
+            self.store.put(0)
+            status, obj = self.store.get()
+            self.zero_status = status
+            self.zero_obj = obj
 
-            env.store.put(41)
-            env.store.put(42)
-            env.pos = env.store.position(42)
-            env.store.take()
-            env.store.take()
+            self.store.put(41)
+            self.store.put(42)
+            self.pos = self.store.position(42)
+            self.store.take()
+            self.store.take()
 
             sim.timer_set(me, 1.0, sim.TIMEOUT)
-            status, obj = env.store.get()
-            env.timeout_status = status
-            env.timeout_obj = obj
+            status, obj = self.store.get()
+            self.timeout_status = status
+            self.timeout_obj = obj
             while True:
                 sim.hold(1000.0)
 
@@ -1085,7 +1085,7 @@ def test_struct_declaration_and_inheritance():
 
     class InvalidStruct(sim.Model):
         @sim.process(struct=int)
-        def proc(env):
+        def proc(self):
             sim.hold(1.0)
 
     with pytest.raises(ValueError, match="Struct subclass"):
@@ -1093,7 +1093,7 @@ def test_struct_declaration_and_inheritance():
 
     class MisplacedStruct(sim.Model):
         @sim.process
-        def misplaced(env, tag: Base, idx: int):
+        def misplaced(self, tag: Base, idx: int):
             sim.hold(1.0)
 
     with pytest.raises(ValueError, match="last parameter"):
@@ -1101,7 +1101,7 @@ def test_struct_declaration_and_inheritance():
 
     class MismatchedStruct(sim.Model):
         @sim.process(struct=Derived)
-        def mismatched(env, tag: Base):
+        def mismatched(self, tag: Base):
             sim.hold(1.0)
 
     with pytest.raises(ValueError, match="disagree"):
@@ -1125,26 +1125,26 @@ def test_process_struct_cross_access():
         clerk: sim.Processes
 
         @sim.process(copies=2, field="clerk")
-        def clerk_process(env: "Office", idx: int, tag: Tag):
+        def clerk_process(self, idx: int, tag: Tag):
             ok = 1.0 if (tag.ticket == 0 and tag.stamp == 0.0) else 0.0
             if idx == 0:
-                env.zero_ok = ok
+                self.zero_ok = ok
             tag.ticket = 10 + idx
             sim.hold(2.0)           # the stamper writes our stamp at t=1
             if idx == 0:
-                env.s0 = tag.stamp
+                self.s0 = tag.stamp
             else:
-                env.s1 = tag.stamp
+                self.s1 = tag.stamp
             sim.suspend()
 
         @sim.process
-        def stamper(env: "Office", own: Tag):
+        def stamper(self, own: Tag):
             own.ticket = 99         # plain (env, view) form, own fields
             sim.hold(1.0)
-            env.t0 = 1.0 * Tag(env.clerk[0]).ticket
-            env.t1 = 1.0 * Tag(env.clerk[1]).ticket
-            Tag(env.clerk[0]).stamp = 0.5
-            Tag(env.clerk[1]).stamp = 1.5 + 0.01 * own.ticket
+            self.t0 = 1.0 * Tag(self.clerk[0]).ticket
+            self.t1 = 1.0 * Tag(self.clerk[1]).ticket
+            Tag(self.clerk[0]).stamp = 0.5
+            Tag(self.clerk[1]).stamp = 1.5 + 0.01 * own.ticket
             sim.suspend()
 
     model = Office()
@@ -1186,22 +1186,22 @@ def test_spawn_and_despawn():
         acc: sim.FloatState
 
         @sim.process(spawnable=True)
-        def worker(env: "Factory", it: Item):
+        def worker(self, it: Item):
             sim.hold(1.0)
-            env.done += 1
-            env.acc += it.weight
+            self.done += 1
+            self.acc += it.weight
 
         @sim.process
-        def spawner(env: "Factory"):
-            h1 = sim.spawn(env.worker, env)
+        def spawner(self):
+            h1 = sim.spawn(self.worker, self)
             Item(h1).weight = 2.5      # runs only once we block: init first
-            h2 = sim.spawn(env.worker, env, 3)
+            h2 = sim.spawn(self.worker, self, 3)
             Item(h2).weight = 4.0
-            env.distinct = 1.0 if h1 != h2 else 0.0
+            self.distinct = 1.0 if h1 != h2 else 0.0
             sim.wait_process(h1)
             sim.wait_process(h2)
-            env.made = 1.0 * env.done
-            env.total = env.acc
+            self.made = 1.0 * self.done
+            self.total = self.acc
             sim.despawn(h1)
             sim.despawn(h2)
             sim.suspend()
@@ -1226,12 +1226,12 @@ def test_decorated_model_process_is_spawnable():
         finished: sim.Output
 
         @sim.process(spawnable=True)
-        def agent(env, item: Agent):
-            env.finished = item.value
+        def agent(self, item: Agent):
+            self.finished = item.value
 
         @sim.process
-        def start(env):
-            item = Agent(sim.spawn(env.agent, env))
+        def start(self):
+            item = Agent(sim.spawn(self.agent, self))
             item.value = 3
             sim.hold(0.0)
 
@@ -1252,19 +1252,19 @@ def test_spawned_leftovers_reclaimed():
         redespawn_ok: sim.Output
 
         @sim.process(spawnable=True)
-        def drone(env: "Hive"):
+        def drone(self):
             sim.suspend()       # blocks forever; never despawned
 
         @sim.process
-        def queen(env: "Hive"):
+        def queen(self):
             for _ in range(50):
-                sim.spawn(env.drone, env)
-            h = sim.spawn(env.drone, env)
+                sim.spawn(self.drone, self)
+            h = sim.spawn(self.drone, self)
             sim.hold(1.0)
             sim.despawn(h)
             sim.despawn(h)      # double despawn must be a no-op
-            env.redespawn_ok = 1.0
-            env.spawned = 51.0
+            self.redespawn_ok = 1.0
+            self.spawned = 51.0
             sim.suspend()
 
     model = Hive()
@@ -1283,7 +1283,7 @@ def test_spawnable_decorator_rejects_multiple_copies():
     with pytest.raises(ValueError, match="spawnable.*copies"):
         class Invalid(sim.Model):
             @sim.process(copies=3, spawnable=True)
-            def ghost(env):
+            def ghost(self):
                 sim.hold(1.0)
 
 
@@ -1307,25 +1307,25 @@ def test_native_timeseries_and_text_reports(tmp_path):
         d: sim.Dataset
 
         @sim.process
-        def driver(env: "Reports"):
+        def driver(self):
             for i in range(30):
-                env.d.add(float(i % 7))
-                env.q.put(1)
+                self.d.add(float(i % 7))
+                self.q.put(1)
                 sim.hold(0.5)
-                env.q.get(1)
+                self.q.get(1)
                 sim.hold(0.5)
             sim.suspend()
 
         @sim.collect
-        def collect(env: "Reports"):
-            env.n = float(env.q.history().count())
-            env.mean = env.q.history().mean()
-            ok = env.q.report_file(report_handle, 0)
-            ok += env.q.history().histogram_file(report_handle, 1, 5, 0.0, 5.0)
-            ok += env.q.history().pacf_correlogram_file(report_handle, 1, 3)
-            ok += env.d.histogram_file(report_handle, 1, 5, 0.0, 0.0)
-            ok += env.d.pacf_correlogram_file(report_handle, 1, 3)
-            env.ok = float(ok)
+        def collect(self):
+            self.n = float(self.q.history().count())
+            self.mean = self.q.history().mean()
+            ok = self.q.report_file(report_handle, 0)
+            ok += self.q.history().histogram_file(report_handle, 1, 5, 0.0, 5.0)
+            ok += self.q.history().pacf_correlogram_file(report_handle, 1, 3)
+            ok += self.d.histogram_file(report_handle, 1, 5, 0.0, 0.0)
+            ok += self.d.pacf_correlogram_file(report_handle, 1, 3)
+            self.ok = float(ok)
 
     model = Reports()
 
@@ -1351,21 +1351,21 @@ def test_native_reports_print_to_stdout():
         d: sim.Dataset
 
         @sim.process
-        def driver(env: "ConsoleReports"):
+        def driver(self):
             for i in range(12):
-                env.d.add(float(i % 3))
-                env.q.put(1)
+                self.d.add(float(i % 3))
+                self.q.put(1)
                 sim.hold(0.25)
-                env.q.get(1)
+                self.q.get(1)
                 sim.hold(0.25)
             sim.suspend()
 
         @sim.collect
-        def collect(env: "ConsoleReports"):
-            ok = env.q.report()
-            ok += env.q.history().histogram(3, 0.0, 3.0)
-            ok += env.d.histogram(bins=3, low=0.0, high=0.0)
-            env.ok = float(ok)
+        def collect(self):
+            ok = self.q.report()
+            ok += self.q.history().histogram(3, 0.0, 3.0)
+            ok += self.d.histogram(bins=3, low=0.0, high=0.0)
+            self.ok = float(ok)
 
     model = ConsoleReports()
 

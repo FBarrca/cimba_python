@@ -32,12 +32,20 @@ def test_precompile_uses_real_model_and_exposes_immutable_plan(monkeypatch):
     class Worker(sim.Component):
         count: sim.State
 
+        @sim.function
+        def value(self) -> int:
+            return self.count
+
         @sim.process
         def run(self, env):
             self.count += 1
 
     class Network(sim.Model):
         worker: Worker = Worker()
+
+        @sim.function
+        def identity(self, value: int) -> int:
+            return value
 
         def __init__(self):
             nonlocal constructed
@@ -53,6 +61,8 @@ def test_precompile_uses_real_model_and_exposes_immutable_plan(monkeypatch):
     plan = Network.compilation_plan()
     assert isinstance(plan, sim.CompilationPlan)
     assert plan.process_names == ("worker__run",)
+    assert plan.function_names == ("model:identity", "worker__value")
+    assert len(plan.function_keys) == 2
     with pytest.raises(dataclasses.FrozenInstanceError):
         plan.model_name = "changed"  # type: ignore[misc]
 

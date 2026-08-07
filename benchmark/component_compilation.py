@@ -111,35 +111,35 @@ def _worker(scenario: str, scale: int, workdir: Path) -> dict[str, Any]:
         def define_synthetic():
             if scale == 1:
                 @sim.predicate(field="ready")
-                def is_ready(env) -> bool:
-                    return env.cells__count >= 0
+                def is_ready(self) -> bool:
+                    return self.cells__count >= 0
 
                 @sim.event(field="tick")
-                def handle_tick(env, amount):
-                    env.cells__count += amount
+                def handle_tick(self, amount):
+                    self.cells__count += amount
 
                 @sim.collect
-                def totals(env):
-                    env.result = env.cells__count
+                def totals(self):
+                    self.result = self.cells__count
             else:
                 @sim.predicate(field="ready")
-                def is_ready(env) -> bool:
-                    return env.cells__count[0] >= 0
+                def is_ready(self) -> bool:
+                    return self.cells__count[0] >= 0
 
                 @sim.event(field="tick")
-                def handle_tick(env, amount):
-                    env.cells__count[0] += amount
+                def handle_tick(self, amount):
+                    self.cells__count[0] += amount
 
                 @sim.collect
-                def totals(env):
-                    env.result = env.cells__count.sum()
+                def totals(self):
+                    self.result = self.cells__count.sum()
 
             @sim.process(struct=Payload)
-            def driver(env):
+            def driver(self):
                 sim.suspend()
 
             @sim.process(spawnable=True, struct=Payload)
-            def dynamic(env):
+            def dynamic(self):
                 sim.suspend()
 
             namespace = {

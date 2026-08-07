@@ -1,10 +1,19 @@
-Models, Trials, and ``env``
-===========================
+Models, Trials, and the root ``self`` view
+==========================================
 
 A ``sim.Model`` describes the shape of one simulated world. It names the
 parameters supplied by an experiment, the outputs collected after each trial,
 the mutable state inside a trial, and the passive simulation entities that
 processes use to interact.
+
+Conceptually, the model is the root callback/declaration owner around its
+component tree. ``sim.Model`` and ``sim.Component`` therefore share callback
+discovery, inheritance, validation, and compilation semantics internally.
+They remain distinct public classes: a component is a nestable authoring
+template addressed with ``self`` inside callbacks, while a model owns the
+complete trial namespace and the experiment/result lifecycle. In a Model
+callback, ``self`` is the root trial-environment view; it is not the Python
+Model instance. Models are not valid nested components.
 
 .. code-block:: python
 
@@ -22,10 +31,10 @@ processes use to interact.
        served: sim.State
 
        @sim.process
-       def arrivals(env: "Clinic"):
+       def arrivals(self: "Clinic"):
            while True:
-               sim.hold(random.exponential(1.0 / env.arrival_rate))
-               env.waiting_room.put(1)
+               sim.hold(random.exponential(1.0 / self.arrival_rate))
+               self.waiting_room.put(1)
 
    model = Clinic("clinic")
 
@@ -36,7 +45,7 @@ that the experiment will create. Each trial receives its own ``arrival_rate``,
 The trial record
 ----------------
 
-Process functions receive the current trial as ``env``:
+Model process functions receive the current trial as ``self``:
 
 .. code-block:: python
 
@@ -45,13 +54,13 @@ Process functions receive the current trial as ``env``:
        waiting_room: sim.Queue
 
        @sim.process
-       def arrivals(env: "Clinic"):
+       def arrivals(self: "Clinic"):
            while True:
-               sim.hold(random.exponential(1.0 / env.arrival_rate))
-               env.waiting_room.put(1)
+               sim.hold(random.exponential(1.0 / self.arrival_rate))
+               self.waiting_room.put(1)
 
-The ``env`` object is trial-local. Reading ``env.arrival_rate`` reads the value
-for this trial, and ``env.waiting_room`` is the queue handle created for this
+The ``self`` view is trial-local. Reading ``self.arrival_rate`` reads the value
+for this trial, and ``self.waiting_room`` is the queue handle created for this
 trial. Another replication or parameter combination gets a different record and
 different native entities.
 
@@ -121,7 +130,7 @@ record, and destroy the right objects for every trial.
 A useful rule of thumb
 ----------------------
 
-Put model state on ``env`` when a process needs it during the simulated run.
+Put model state on ``self`` when a process needs it during the simulated run.
 Keep ordinary Python analysis code outside the process body and use it before
 or after ``exp.run()``.
 

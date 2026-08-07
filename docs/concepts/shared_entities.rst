@@ -42,16 +42,16 @@ A queue models waiting work:
        waiting_room: sim.Queue
 
        @sim.process
-       def arrivals(env: "Clinic"):
+       def arrivals(self: "Clinic"):
            while True:
-               sim.hold(random.exponential(1.0 / env.arrival_rate))
-               env.waiting_room.put(1)
+               sim.hold(random.exponential(1.0 / self.arrival_rate))
+               self.waiting_room.put(1)
 
        @sim.process
-       def service(env: "Clinic"):
+       def service(self: "Clinic"):
            while True:
-               env.waiting_room.get(1)
-               sim.hold(random.exponential(env.mean_service))
+               self.waiting_room.get(1)
+               sim.hold(random.exponential(self.mean_service))
 
 A resource models exclusive access:
 
@@ -62,12 +62,12 @@ A resource models exclusive access:
        doctor: sim.Resource
 
        @sim.process
-       def patient(env: "Clinic"):
-           env.doctor.acquire()
+       def patient(self: "Clinic"):
+           self.doctor.acquire()
            try:
-               sim.hold(random.exponential(env.mean_service))
+               sim.hold(random.exponential(self.mean_service))
            finally:
-               env.doctor.release()
+               self.doctor.release()
 
 The queue version is natural when patients are just a count. The resource
 version is natural when each patient process carries its own path through the
@@ -103,17 +103,17 @@ A condition is useful when a process waits on a predicate over model state:
        ready: sim.Predicate
 
        @sim.predicate(field="ready")
-       def is_open(env: "Clinic") -> bool:
-           return env.open == 1
+       def is_open(self: "Clinic") -> bool:
+           return self.open == 1
 
        @sim.process
-       def late_staff(env: "Clinic"):
-           env.shift_started.wait_for(env.ready)
+       def late_staff(self: "Clinic"):
+           self.shift_started.wait_for(self.ready)
 
        @sim.process
-       def manager(env: "Clinic"):
-           env.open = 1
-           env.shift_started.signal()
+       def manager(self: "Clinic"):
+           self.open = 1
+           self.shift_started.signal()
 
 A dataset collects samples:
 

@@ -22,9 +22,9 @@ Declare datasets as model or component fields:
        p95_wait: sim.Output
 
        @sim.collect
-       def collect_stats(env: "Clinic"):
-           env.avg_wait = env.waits.mean()
-           env.p95_wait = env.waits.quantile(0.95)
+       def collect_stats(self: "Clinic"):
+           self.avg_wait = self.waits.mean()
+           self.p95_wait = self.waits.quantile(0.95)
 
 Inside process code, each ``add()`` appends one sample to the current trial's
 dataset:
@@ -44,9 +44,9 @@ about:
        p95_wait: sim.Output
 
        @sim.collect
-       def collect_stats(env: "Clinic"):
-           env.avg_wait = env.waits.mean()
-           env.p95_wait = env.waits.quantile(0.95)
+       def collect_stats(self: "Clinic"):
+           self.avg_wait = self.waits.mean()
+           self.p95_wait = self.waits.quantile(0.95)
 
 A dataset field is created separately for every trial row. If an experiment
 uses ``replications=50``, then ``env.waits`` is 50 independent datasets, not
@@ -80,9 +80,9 @@ ordinary scalar outputs:
        avg_wait: sim.Output
 
        @sim.collect
-       def collect_stats(env: "Clinic"):
-           env.avg_wait = env.waits.mean()
-           env.waits.capture()
+       def collect_stats(self: "Clinic"):
+           self.avg_wait = self.waits.mean()
+           self.waits.capture()
 
 After ``exp.run()``, read the captured sample arrays from the experiment:
 
@@ -115,8 +115,8 @@ as a time-series handle:
        mean_queue_len: sim.Output
 
        @sim.collect
-       def collect_stats(env: "Clinic"):
-           env.mean_queue_len = env.waiting_room.history().mean()
+       def collect_stats(self: "Clinic"):
+           self.mean_queue_len = self.waiting_room.history().mean()
 
 ``.history()`` is available on every field kind that records one:
 ``sim.Queue``, ``sim.Resource``, ``sim.Pool``, ``sim.Store``, and indexed
@@ -151,9 +151,9 @@ file. It is declared in the model-level collector:
        mean_queue_len: sim.Output
 
        @sim.collect
-       def collect_stats(env: "Clinic"):
-           env.mean_queue_len = env.waiting_room.history().mean()
-           env.waiting_room.history().capture()
+       def collect_stats(self: "Clinic"):
+           self.mean_queue_len = self.waiting_room.history().mean()
+           self.waiting_room.history().capture()
 
 After ``exp.run()``, read the captured arrays from the experiment:
 

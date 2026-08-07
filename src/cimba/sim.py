@@ -10,8 +10,8 @@ nopython-compilable Python (numbers, loops, sim.* calls, and cimba.random
 draws).
 
 A model is a Model subclass whose annotated fields declare the trial
-record (the `env` seen by process bodies); the subclass doubles as the
-static type of `env`, so fields are checked and completed:
+record (the `self` view seen by model callbacks); the subclass doubles as the
+static type of `self`, so fields are checked and completed:
 
     class MG1(sim.Model):
         utilization: sim.Param          # swept input
@@ -19,18 +19,18 @@ static type of `env`, so fields are checked and completed:
         queue: sim.Queue                # cmb_buffer handle
 
         @sim.process
-        def arrivals(env: "MG1"):
+        def arrivals(self: "MG1"):
             while True:
-                sim.hold(cimba.random.exponential(1.0 / env.utilization))
-                env.queue.put(1)
+                sim.hold(cimba.random.exponential(1.0 / self.utilization))
+                self.queue.put(1)
 
     mg1 = MG1()
 
 Every declared Queue/Resource/Pool/Store/PQueues-element/Condition/Event
-field carries its verbs as methods: ``env.queue.put(1)``,
-``env.queue.get(1)``, ``env.server.acquire()``, ``env.cond.wait_for(pred)``,
-``env.tick.schedule(1.0)``, and so on. Component-owned fields support the
-same sugar through ``self.<field>.<method>(...)``.
+field carries its verbs as methods: ``self.queue.put(1)``,
+``self.queue.get(1)``, ``self.server.acquire()``, ``self.cond.wait_for(pred)``,
+``self.tick.schedule(1.0)``, and so on. Component-owned fields support the
+same sugar through the component's own ``self.<field>.<method>(...)``.
 
 Concept translation (cimba -> sim API):
 
@@ -88,7 +88,7 @@ traces should cover warmup + duration + cooldown.
 
 Mutable per-trial counters are declared with sim.State. Multi-copy
 processes may take a second argument to learn their index:
-`def machine(env, idx)`. The trial function, recording lifecycle, and all
+`def machine(self, idx)`. The trial function, recording lifecycle, and all
 create/start/stop/destroy plumbing are generated and compiled by Model.
 
 Related fields and process methods can be grouped with ``sim.Component``.
@@ -97,12 +97,19 @@ methods; Model lowers them into ordinary flat process functions before Numba
 compilation. A component method marked with top-level ``@sim.collect`` runs
 once per instance at the end of each trial (before the model-level
 ``@sim.collect``, which can then aggregate), typically assigning the
-component's own Output fields from ``self``. Model callbacks can use ``env.retailer.orders``; trial-table
+component's own Output fields from ``self``. Model callbacks use ``self`` as
+the root trial environment and can access component fields with
+``self.retailer.orders``; trial-table
 fields remain flattened with names such as ``retailer__orders``. Components
 can also expose explicitly typed, read-only synchronous methods with
 ``@sim.function``; calls such as ``env.policy.decide(level)`` compile to
 nopython helpers whose component field reads are passed as flattened scalar
-arguments.
+arguments. Models can declare root helpers with the same marker using
+``def helper(self, ...)``; model callbacks call them through
+``self.helper(...)`` and component callbacks through ``env.helper(...)``.
+Components may also own ``@sim.predicate`` and
+``@sim.event`` callbacks, with the same explicit ``field=`` binding used by
+models.
 Components may contain nested components; paths such as
 ``env.attraction.queues.line``
 flatten to names such as ``attraction__queues__line``. A component process
@@ -110,7 +117,8 @@ marked ``@sim.process(spawnable=True)`` can be spawned with paths such as
 ``sim.spawn(self.visitor, env)`` or
 ``sim.spawn(env.flow.visitor, env)``.
 Component-owned ``sim.Processes`` fields likewise publish handles for
-same-named fixed component process methods; component collections flatten
+fixed component process methods bound explicitly with
+``@sim.process(field="...")``; component collections flatten
 ragged per-item copy counts behind paths such as ``env.teams[i].worker[j]``.
 Fixed collections of repeated components can be declared with standard
 ``list[ComponentType]`` annotations. Model callbacks can use indexed access
@@ -120,7 +128,8 @@ and generated offset tables before compilation.
 
 Module layout: the verbs below alias the raw symbol bindings in
 ``_bindings``; the cast helpers live in ``_intrinsics``; declaration markers
-live in ``_declarations``; Component lowering lives in ``_components``;
+live in ``_declarations``; shared callback declarations live in
+``_callbacks``; Component lowering lives in ``_components``;
 Model/Experiment and the trial codegen live in ``_model``.
 """
 
@@ -135,8 +144,9 @@ from numba import types as _nbtypes
 from . import _bindings as _b
 from ._intrinsics import ptr_caster as _ptr_caster
 from ._intrinsics import record_addr as _record_addr
-from ._components import (Component, SpawnableProcess, collect, event,
-                          function, predicate, process)
+from ._callbacks import (SpawnableProcess, collect, event, function,
+                         predicate, process)
+from ._components import Component
 from ._declarations import (Condition, Const, Dataset, Env, Event, FloatState,
                             Handle, Output, Param, Pool, PQueues, Predicate,
                             Processes, Queue, Ref, Refs, Resource, Spawnable,

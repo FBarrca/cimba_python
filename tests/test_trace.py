@@ -15,16 +15,16 @@ class Replay(sim.Model):
     exhausted_at: sim.Output
 
     @sim.process
-    def generator(env: "Replay"):
-        demand = sim.Trace(env.demand)
+    def generator(self):
+        demand = sim.Trace(self.demand)
         total = 0.0
         for x in demand:
             sim.hold(1.0)
-            total += x * env.scale
-        env.total = total
-        env.length = float(len(demand))
-        env.last = demand[len(demand) - 1]
-        env.exhausted_at = sim.now()
+            total += x * self.scale
+        self.total = total
+        self.length = float(len(demand))
+        self.last = demand[len(demand) - 1]
+        self.exhausted_at = sim.now()
 
 
 @pytest.fixture(scope="module")
@@ -231,22 +231,22 @@ def test_joint_traces_stay_correlated_through_experiment():
         total_b: sim.Output
 
         @sim.process
-        def consume_a(env: "Pair"):
-            values = sim.Trace(env.demand_a)
+        def consume_a(self):
+            values = sim.Trace(self.demand_a)
             total = 0.0
             for x in values:
                 sim.hold(1.0)
                 total += x
-            env.total_a = total
+            self.total_a = total
 
         @sim.process
-        def consume_b(env: "Pair"):
-            values = sim.Trace(env.demand_b)
+        def consume_b(self):
+            values = sim.Trace(self.demand_b)
             total = 0.0
             for x in values:
                 sim.hold(1.0)
                 total += x
-            env.total_b = total
+            self.total_b = total
 
     model = Pair()
 

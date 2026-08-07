@@ -233,25 +233,25 @@ class MultiEchelonInventory(sim.Model):
     ]
 
     @sim.process(spawnable=True)
-    def shipment(env: "MultiEchelonInventory", shipment: Shipment):
-        lead_time_delay = sim.Trace(env.lead_time_delay)
-        base_lead_time = sim.Trace(env.base_lead_time)
+    def shipment(self, shipment: Shipment):
+        lead_time_delay = sim.Trace(self.lead_time_delay)
+        base_lead_time = sim.Trace(self.base_lead_time)
         requester = shipment.requester
         # Each shipment consumes the next resampled delay from the trace.
-        draw = env.lead_time_cursor
-        env.lead_time_cursor += 1
+        draw = self.lead_time_cursor
+        self.lead_time_cursor += 1
         delay = lead_time_delay[draw]
         lead_time = base_lead_time[requester] + delay
         if lead_time > 0.0:
             sim.hold(lead_time)
         # The replenishment arrives after its sampled lead time.
-        env.facilities[requester].on_hand += shipment.quantity
-        env.completed_shipments.put(sim.current())
+        self.facilities[requester].on_hand += shipment.quantity
+        self.completed_shipments.put(sim.current())
 
     @sim.process
-    def reclaim_shipments(env: "MultiEchelonInventory"):
+    def reclaim_shipments(self):
         while True:
-            handle = env.completed_shipments.take()
+            handle = self.completed_shipments.take()
             sim.despawn(handle)
 
 

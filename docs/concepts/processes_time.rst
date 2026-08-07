@@ -18,12 +18,12 @@ let another scheduled activity run.
        served: sim.State
 
        @sim.process
-       def doctor(env: "Clinic"):
+       def doctor(self: "Clinic"):
            while True:
-               env.waiting_room.get(1)
-               service_time = random.exponential(env.mean_service)
+               self.waiting_room.get(1)
+               service_time = random.exponential(self.mean_service)
                sim.hold(service_time)
-               env.served += 1
+               self.served += 1
 
 There is no ``yield`` in the process body. If the waiting room is empty,
 ``env.waiting_room.get()`` blocks the doctor process until an arrival puts a
@@ -75,11 +75,11 @@ Use ``copies=`` when the model has several identical active entities:
        served: sim.State
 
        @sim.process(copies=3)
-       def clerk(env: "Clinic", idx: int):
+       def clerk(self: "Clinic", idx: int):
            while True:
-               env.waiting_room.get(1)
-               sim.hold(random.exponential(env.mean_service))
-               env.served += 1
+               self.waiting_room.get(1)
+               sim.hold(random.exponential(self.mean_service))
+               self.served += 1
 
 The second argument receives the copy index. Use it when each copy needs a
 stable number for routing, logging, or separate state. If the copies are truly

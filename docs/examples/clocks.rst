@@ -16,14 +16,14 @@ collect function, and an experiment.
        ticks: sim.State         # trial-local counter, auto-zeroed
 
        @sim.process
-       def ticker(env: "Clock"):
+       def ticker(self: "Clock"):
            while True:
                sim.hold(1.0)
-               env.ticks = env.ticks + 1
+               self.ticks = self.ticks + 1
 
        @sim.collect
-       def collect(env: "Clock"):
-           env.tick_count = env.ticks
+       def collect(self: "Clock"):
+           self.tick_count = self.ticks
 
 
    model = Clock("Clock")

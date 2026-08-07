@@ -18,8 +18,8 @@ Declare a trace field on the model and pass trace data to
        completed: sim.Output
 
        @sim.process
-       def appointment_arrivals(env: "Clinic"):
-           times = sim.Trace(env.appointments)
+       def appointment_arrivals(self: "Clinic"):
+           times = sim.Trace(self.appointments)
            previous = 0.0
            for at in times:
                sim.hold(at - previous)

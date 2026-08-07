@@ -26,9 +26,9 @@ text handles created outside the hot loop:
        waiting_room: sim.Queue
 
        @sim.process
-       def arrivals(env: "Clinic"):
+       def arrivals(self: "Clinic"):
            sim.log_user(USER_TRACE, MSG_ARRIVED)
-           sim.log_user_i64(USER_TRACE, MSG_WAITING, env.waiting_room.level())
+           sim.log_user_i64(USER_TRACE, MSG_WAITING, self.waiting_room.level())
 
 
    cimba.logger_flags_on(USER_TRACE)
@@ -51,10 +51,10 @@ series have the same ``.report()``/``.report_file()`` pair, described in
        doctor: sim.Resource
 
        @sim.process
-       def debug_report(env: "Clinic"):
+       def debug_report(self: "Clinic"):
            sim.hold(480.0)
-           env.waiting_room.report()
-           env.doctor.report()
+           self.waiting_room.report()
+           self.doctor.report()
 
 ``.report_file(path, append=1)`` writes to a path handle created with
 ``sim.log_text()``. These reports are most useful for single-trial debugging
@@ -95,9 +95,9 @@ are usually the best data surface:
        served: sim.State
 
        @sim.collect
-       def collect_stats(env: "Clinic"):
-           env.avg_waiting = env.waiting_room.mean_level()
-           env.completed = float(env.served)
+       def collect_stats(self: "Clinic"):
+           self.avg_waiting = self.waiting_room.mean_level()
+           self.completed = float(self.served)
 
 Outputs are aligned with the experiment trial table and are easy to group by
 parameters. Reports are richer, but they are usually better for diagnosing a

@@ -21,17 +21,17 @@ Here three patients repeatedly return to a clinic that has a single doctor.
        doctor: sim.Resource     # a single shared server
 
        @sim.process(copies=3)
-       def patient(env: "Clinic"):
+       def patient(self: "Clinic"):
            while True:
                sim.hold(random.exponential(2.0))
-               env.doctor.acquire()
+               self.doctor.acquire()
                sim.hold(random.exponential(1.0))
-               env.doctor.release()
-               env.n_served = env.n_served + 1
+               self.doctor.release()
+               self.n_served = self.n_served + 1
 
        @sim.collect
-       def collect(env: "Clinic"):
-           env.served = env.n_served
+       def collect(self: "Clinic"):
+           self.served = self.n_served
 
 
    model = Clinic("Clinic")

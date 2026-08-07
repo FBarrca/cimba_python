@@ -29,17 +29,16 @@ component declares is lowered before compilation:
   where the instance index is recovered at runtime from the copy index
   (see ``_shared_instance_setup``);
 * model callbacks that use component paths
-  (``env.zones[i].gates[j].queue``) are rewritten the same way, with
+  (``self.zones[i].gates[j].queue``) are rewritten the same way, with
   generated numpy tables backing dynamic item indices, per-item
   constants, and Ref/Refs dereferences.
 * read-only ``@sim.function`` methods become explicitly typed Numba helpers.
   Calls keep their component syntax in user code, while lowering passes the
   ordinary arguments followed by the scalar component values the helper reads.
 
-The module is organized in five parts, in order: the authoring API
-(``Component``, the ``@sim.process``/``@sim.collect``/``@sim.function``
-method markers,
-and the wiring/Ref metadata captured from instance defaults);
+The module is organized in five parts, in order: the nested-owner API
+(``Component`` and the wiring/Ref metadata captured from instance defaults;
+callback markers and shared MRO normalization live in ``_callbacks``);
 declaration metadata (``_ComponentDecl``, one per component tree node);
 declaration building (``_class_declarations`` and ``_DeclBuilder``);
 the AST lowerers; and the codegen helpers that compile the lowered
@@ -54,19 +53,25 @@ import textwrap
 import weakref
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import (Any, Literal, TypeVar, get_args, get_origin,
-                    get_type_hints, overload)
+from typing import Any, get_args, get_origin, get_type_hints
 
 import numpy as np
 from numba import njit, types
 
+from ._callbacks import (
+    _CallbackOwner,
+    _ProcessSpec,
+    _bind_callback_fields,
+    _callback_arg_count,
+    _callback_set,
+    _process_signature,
+)
 from ._dataset.methods import (
-    DATASET_METHOD_NAMES,
     dataset_lowering_namespace,
     lower_dataset_method_call,
     lower_env_dataset_method_calls,
 )
-from ._declarations import (_DECL_KINDS, _MISSING, _check_name,
+from ._declarations import (_DECL_KINDS, _FIELD_KINDS, _MISSING, _check_name,
                             _ConstHint, _Declarations, _RefHint,
                             _field_declarations, _FieldDecl, _param_default,
                             class_type_hints)
@@ -78,6 +83,7 @@ from ._timeseries.methods import (
     timeseries_lowering_namespace,
 )
 from .random._lowering import (
+    lower_random_calls_in_function,
     lower_random_calls_in_node,
     random_lowering_namespace,
 )
@@ -88,19 +94,9 @@ from .store.methods import (
     lower_env_entity_method_calls,
 )
 
-_F = TypeVar("_F", bound=Callable[..., Any])
-
-
 # --- Authoring API ----------------------------------------------------------
 #
-# What model authors touch directly: the Component base class, the
-# method markers, and the values captured from instance defaults.
-
-_PROCESS_ATTR = "__cimba_process__"
-_COLLECT_ATTR = "__cimba_collect__"
-_PREDICATE_ATTR = "__cimba_predicate__"
-_EVENT_ATTR = "__cimba_event__"
-_COMPONENT_FUNCTION_ATTR = "__cimba_component_function__"
+# The Component base class and values captured from instance defaults.
 
 _wirable_fields_cache: dict[type, dict[str, str]] = {}
 
@@ -123,7 +119,7 @@ _COMPONENT_HISTORY_BINDINGS = {
 #: are lowered by the later env-based pass (``lower_env_entity_method_calls``)
 #: instead.
 _COMPONENT_ENTITY_KINDS = frozenset(
-    {"queue", "resource", "pool", "store", "condition"})
+    {"queue", "resource", "pool", "store", "condition", "event"})
 
 
 def _wirable_fields(cls: type) -> dict[str, str]:
@@ -142,7 +138,7 @@ def _wirable_fields(cls: type) -> dict[str, str]:
     return kinds
 
 
-class Component:
+class Component(_CallbackOwner):
     """Authoring-time grouping of model fields and process methods.
 
     Component instances are declared as defaults on a ``Model`` subclass. Their
@@ -150,6 +146,8 @@ class Component:
     decorated with :func:`process` are lowered into ordinary model processes.
     Methods decorated with :func:`collect` run once per instance at the end of
     each trial, before the model-level ``@sim.collect`` callback.
+    Methods decorated with :func:`predicate` and :func:`event` publish
+    component-local callback handles through explicit or hidden fields.
     Read-only methods decorated with :func:`function` are lowered into
     explicitly typed synchronous Numba helpers callable from compiled model
     and component callbacks.
@@ -303,276 +301,6 @@ def _component_fields(cls: type) -> Iterator[tuple[str, type[Component], bool]]:
             item_cls = _collection_item_class(hint)
             if item_cls is not None:
                 yield fname, item_cls, True
-
-
-@dataclass(frozen=True)
-class _ProcessSpec:
-    """The arguments of a class-declared ``@sim.process`` marker."""
-
-    copies: int | str = 1
-    priority: int = 0
-    spawnable: bool = False
-    struct: Any = None
-    field: str | None = None
-
-    def resolve_copies(self, component: Component, label: str) -> int:
-        """The copy count for one instance: the literal int, or the value
-        of the named per-instance int constant."""
-        if isinstance(self.copies, int):
-            return self.copies
-        value = getattr(component, self.copies, _MISSING)
-        if type(value) is not int or value < 1:
-            raise ValueError(
-                f"component process '{label}' copies "
-                f"constant '{self.copies}' must be a positive int")
-        return value
-
-
-class SpawnableProcess:
-    """Static marker for a process declared with ``spawnable=True``.
-
-    At runtime a decorated method remains the authoring function; the marker
-    exists solely so static checkers can distinguish dynamic spawn targets.
-    """
-
-
-@overload
-def process(fn: _F) -> _F: ...
-
-
-@overload
-def process(fn: None = None, *, copies: Literal[1] = 1,
-            priority: int = 0,
-            spawnable: Literal[True], struct: Any = None,
-            field: None = None) -> Callable[[_F], SpawnableProcess]: ...
-
-
-@overload
-def process(fn: None = None, *, copies: int | str = 1,
-            priority: int = 0,
-            spawnable: Literal[False] = False, struct: Any = None,
-            field: str | None = None) -> Callable[[_F], _F]: ...
-
-
-def process(fn=None, *, copies: int | str = 1, priority: int = 0,
-            spawnable: bool = False, struct: Any = None,
-            field: str | None = None):
-    """Mark a ``Model`` or ``Component`` method as a process."""
-    if isinstance(copies, int):
-        if copies < 1:
-            raise ValueError("copies must be >= 1")
-    elif isinstance(copies, str):
-        _check_name(copies, "copies constant")
-    else:
-        raise TypeError("copies must be an int or the name of an int constant")
-    if field is not None:
-        _check_name(field, "process field")
-    if spawnable and copies != 1:
-        raise ValueError("spawnable processes cannot take copies")
-    if spawnable and field is not None:
-        raise ValueError("spawnable processes cannot take field=")
-
-    def decorate(f):
-        if getattr(f, _COLLECT_ATTR, False):
-            raise ValueError(
-                f"'{f.__qualname__}' cannot be both a process and collect "
-                "callback")
-        if getattr(f, _PREDICATE_ATTR, None) is not None:
-            raise ValueError(
-                f"'{f.__qualname__}' cannot be both a process and predicate")
-        if getattr(f, _EVENT_ATTR, None) is not None:
-            raise ValueError(
-                f"'{f.__qualname__}' cannot be both a process and event")
-        if getattr(f, _COMPONENT_FUNCTION_ATTR, False):
-            raise ValueError(
-                f"'{f.__qualname__}' cannot be both a component process "
-                "and a component function")
-        setattr(f, _PROCESS_ATTR,
-                _ProcessSpec(copies, priority, spawnable, struct, field))
-        return f
-
-    if fn is None:
-        return decorate
-    return decorate(fn)
-
-
-def collect(fn: _F) -> _F:
-    """Mark a ``Model`` or ``Component`` statistics callback.
-
-    A model callback takes ``(env)``. A component method takes ``(self, env)``
-    and runs once per instance at the end of each trial, before the model
-    callback, typically assigning the component's declared Output fields."""
-    if getattr(fn, _PROCESS_ATTR, None) is not None:
-        raise ValueError(
-            f"'{fn.__qualname__}' cannot be both a process and collect "
-            "callback")
-    if getattr(fn, _PREDICATE_ATTR, None) is not None:
-        raise ValueError(
-            f"'{fn.__qualname__}' cannot be both a collect callback and "
-            "predicate")
-    if getattr(fn, _EVENT_ATTR, None) is not None:
-        raise ValueError(
-            f"'{fn.__qualname__}' cannot be both a collect callback and event")
-    if getattr(fn, _COMPONENT_FUNCTION_ATTR, False):
-        raise ValueError(
-            f"'{fn.__qualname__}' cannot be both a component collect method "
-            "and a component function")
-    setattr(fn, _COLLECT_ATTR, True)
-    return fn
-
-
-@dataclass(frozen=True)
-class _CallbackFieldSpec:
-    field: str | None = None
-
-
-@overload
-def predicate(fn: _F) -> _F: ...
-
-
-@overload
-def predicate(fn: None = None, *, field: str | None = None
-              ) -> Callable[[_F], _F]: ...
-
-
-def predicate(fn=None, *, field: str | None = None):
-    """Mark a ``Model`` condition predicate callback."""
-    if field is not None:
-        _check_name(field, "predicate field")
-
-    def decorate(f):
-        if (getattr(f, _PROCESS_ATTR, None) is not None
-                or getattr(f, _COLLECT_ATTR, False)
-                or getattr(f, _EVENT_ATTR, None) is not None
-                or getattr(f, _COMPONENT_FUNCTION_ATTR, False)):
-            raise ValueError(
-                f"'{f.__qualname__}' cannot combine predicate with another "
-                "callback marker")
-        setattr(f, _PREDICATE_ATTR, _CallbackFieldSpec(field))
-        return f
-
-    if fn is None:
-        return decorate
-    return decorate(fn)
-
-
-@overload
-def event(fn: _F) -> _F: ...
-
-
-@overload
-def event(fn: None = None, *, field: str | None = None
-          ) -> Callable[[_F], _F]: ...
-
-
-def event(fn=None, *, field: str | None = None):
-    """Mark a ``Model`` low-level event callback."""
-    if field is not None:
-        _check_name(field, "event field")
-
-    def decorate(f):
-        if (getattr(f, _PROCESS_ATTR, None) is not None
-                or getattr(f, _COLLECT_ATTR, False)
-                or getattr(f, _PREDICATE_ATTR, None) is not None
-                or getattr(f, _COMPONENT_FUNCTION_ATTR, False)):
-            raise ValueError(
-                f"'{f.__qualname__}' cannot combine event with another "
-                "callback marker")
-        setattr(f, _EVENT_ATTR, _CallbackFieldSpec(field))
-        return f
-
-    if fn is None:
-        return decorate
-    return decorate(fn)
-
-
-def function(fn: _F) -> _F:
-    """Mark a read-only, synchronously callable ``Component`` method.
-
-    Component functions take ``self`` followed by explicitly annotated scalar
-    arguments and return an explicitly annotated scalar. They are lowered and
-    Numba-compiled when a model containing the component is constructed.
-    """
-    if getattr(fn, _PROCESS_ATTR, None) is not None:
-        raise ValueError(
-            f"'{fn.__qualname__}' cannot be both a component function "
-            "and a component process")
-    if getattr(fn, _COLLECT_ATTR, False):
-        raise ValueError(
-            f"'{fn.__qualname__}' cannot be both a component function "
-            "and a component collect method")
-    if getattr(fn, _PREDICATE_ATTR, None) is not None:
-        raise ValueError(
-            f"'{fn.__qualname__}' cannot be both a component function "
-            "and a predicate")
-    if getattr(fn, _EVENT_ATTR, None) is not None:
-        raise ValueError(
-            f"'{fn.__qualname__}' cannot be both a component function "
-            "and an event")
-    setattr(fn, _COMPONENT_FUNCTION_ATTR, True)
-    return fn
-
-
-def _marked_methods(cls: type, marker_attr: str, kind: str, *, stop: type,
-                    ) -> dict[str, tuple[Callable[..., Any], Any]]:
-    """Methods carrying a marker attribute, walking the MRO base-first so
-    an unmarked override drops the inherited registration."""
-    methods: dict[str, tuple[Callable[..., Any], Any]] = {}
-    for base in reversed(cls.__mro__):
-        if base in (object, stop):
-            continue
-        for name, value in vars(base).items():
-            marker = getattr(value, marker_attr, None)
-            if marker is None or marker is False:
-                methods.pop(name, None)
-                continue
-            if not callable(value):
-                raise TypeError(
-                    f"{kind} callback '{cls.__name__}.{name}' is not callable")
-            methods[name] = (value, marker)
-    return methods
-
-
-def _component_process_methods(
-    cls: type[Component],
-) -> list[tuple[str, Callable[..., Any], _ProcessSpec]]:
-    for marker, kind in ((_PREDICATE_ATTR, "predicate"),
-                         (_EVENT_ATTR, "event")):
-        invalid = _marked_methods(cls, marker, kind, stop=Component)
-        if invalid:
-            name = next(iter(invalid))
-            raise ValueError(
-                f"component '{cls.__name__}.{name}' cannot be a {kind}; "
-                f"@sim.{kind} is only valid on sim.Model subclasses")
-    methods = _marked_methods(
-        cls, _PROCESS_ATTR, "process", stop=Component)
-    for name, (fn, spec) in methods.items():
-        if spec.struct is not None:
-            raise ValueError(
-                f"component process '{cls.__name__}.{name}' cannot use "
-                "struct=; annotate its final view parameter instead")
-        if spec.field is not None:
-            raise ValueError(
-                f"component process '{cls.__name__}.{name}' cannot use "
-                "field=")
-    return [(name, fn, spec) for name, (fn, spec)
-            in methods.items()]
-
-
-def _component_collect_methods(
-    cls: type[Component],
-) -> list[tuple[str, Callable[..., Any]]]:
-    return [(name, fn) for name, (fn, _marker)
-            in _marked_methods(
-                cls, _COLLECT_ATTR, "collect", stop=Component).items()]
-
-
-def _component_function_methods(
-    cls: type[Component],
-) -> list[tuple[str, Callable[..., Any]]]:
-    return [(name, fn) for name, (fn, _marker)
-            in _marked_methods(cls, _COMPONENT_FUNCTION_ATTR,
-                               "function", stop=Component).items()]
 
 
 # --- Declaration metadata ---------------------------------------------------
@@ -746,10 +474,10 @@ class _ComponentDecl:
         target's block)."""
         members: list[str] = []
         methods: dict[str, tuple[Callable[..., Any],
-                                 _ComponentProcessSpec]] = {}
+                                 _ProcessSpec]] = {}
         for cls in dict.fromkeys(self.instance_classes):
-            for method_name, method, spec in _component_process_methods(cls):
-                methods.setdefault(method_name, (method, spec))
+            for callback in _callback_set(cls).processes:
+                methods.setdefault(callback.name, (callback.fn, callback.spec))
         for method_name in methods:
             # A method compiled once for every instance registers under
             # the decl name; instance-specialized methods (spawnables,
@@ -778,11 +506,9 @@ class _ComponentDecl:
 # flattens every declared field into the model-level declarations dict.
 
 def _component_declarations(cls: type[Component]) -> _Declarations:
-    decls = _field_declarations(
-        cls, allow_symbolic_pqueues=True, allow_refs=True,
-        generated_spawnables=(
-            name for name, _method, spec in _component_process_methods(cls)
-            if spec.spawnable))
+    decls = _field_declarations(cls, allow_symbolic_pqueues=True,
+                                allow_refs=True)
+    _bind_callback_fields(cls, decls, owner="component")
     for field_decl in decls.fields.values():
         if not field_decl.kind.on_component:
             raise ValueError(
@@ -1047,8 +773,7 @@ def _resolve_component_processes(
     instance_classes: Sequence[type[Component]] | None = None,
     field_owners: Mapping[str, tuple[int, ...]] | None = None,
 ) -> tuple[dict[str, tuple[int, ...]], dict[str, tuple[int, ...]]]:
-    """Per-instance copy counts and handle offsets of each Processes
-    field, bound to the same-named @sim.process method."""
+    """Per-instance copy counts and handle offsets of Processes fields."""
     classes = tuple(instance_classes or (cls,) * len(templates))
     counts_by_field: dict[str, tuple[int, ...]] = {}
     offsets_by_field: dict[str, tuple[int, ...]] = {}
@@ -1057,15 +782,14 @@ def _resolve_component_processes(
                   else field_owners[fname])
         owned_counts: list[int] = []
         for index in owners:
-            methods = {
-                name: spec for name, _method, spec
-                in _component_process_methods(classes[index])
-            }
-            spec = methods.get(fname)
+            specs = [callback.spec
+                     for callback in _callback_set(classes[index]).processes
+                     if callback.spec.field == fname]
+            spec = specs[0] if len(specs) == 1 else None
             if spec is None:
                 raise ValueError(
                     f"component '{component_name}' Processes field '{fname}' "
-                    "must have a same-named @sim.process method")
+                    "must be bound by exactly one @sim.process(field=...)")
             owned_counts.append(spec.resolve_copies(
                 templates[index], f"{component_name}.{fname}"))
         resolved_counts, resolved_offsets = _offsets_from_counts(owned_counts)
@@ -1756,8 +1480,7 @@ def _lowering_namespace(
 # a *namespace* (one component instance), a *collection* (must be
 # indexed), or a Refs *table* (must be indexed), ending in a field or
 # constant access that lowers to the flattened env field. Subclasses
-# define the path roots: `self` inside component methods, `env.<name>`
-# inside model callbacks.
+# define the path roots: `self` inside component methods and model callbacks.
 
 def _env_attr(env_name: str, field_name: str,
               ctx: ast.expr_context) -> ast.Attribute:
@@ -1844,6 +1567,24 @@ class _ComponentFunctionSpec:
     instance_indices: tuple[int, ...] = ()
 
 
+@dataclass
+class _ModelFunctionSpec:
+    """One read-only helper declared on the root Model callback owner."""
+
+    name: str
+    method: Callable[..., Any]
+    symbol: str
+    parameter_names: tuple[str, ...]
+    argument_types: tuple[Any, ...]
+    return_type: Any
+    helper: Any = None
+    callees: tuple[str, ...] = ()
+
+    @property
+    def graph_name(self) -> str:
+        return f"model:{self.name}"
+
+
 @dataclass(frozen=True)
 class _RefTableAccess:
     """A resolved path to a Refs table, before indexing."""
@@ -1864,9 +1605,11 @@ class _ComponentPathLowerer(ast.NodeTransformer):
         *,
         env_name: str,
         component_functions: Mapping[str, _ComponentFunctionSpec] | None = None,
+        model_functions: Mapping[str, _ModelFunctionSpec] | None = None,
     ):
         self.env_name = env_name
         self.component_functions = component_functions or {}
+        self.model_functions = model_functions or {}
         self.called_functions: set[str] = set()
         self._ref_loop_tables: list[tuple[str, str, str | None, str]] = []
 
@@ -2631,6 +2374,33 @@ class _ComponentPathLowerer(ast.NodeTransformer):
         lowered_len = self._lower_len_call(node)
         if lowered_len is not None:
             return lowered_len
+        if (isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == self.env_name
+                and node.func.attr in self.model_functions):
+            spec = self.model_functions[node.func.attr]
+            if node.keywords:
+                raise ValueError(
+                    f"{self._callback_label()} call to model function "
+                    f"'{spec.name}' must use positional arguments")
+            if len(node.args) != len(spec.parameter_names):
+                raise ValueError(
+                    f"{self._callback_label()} call to model function "
+                    f"'{spec.name}' takes {len(spec.parameter_names)} "
+                    f"argument(s), got {len(node.args)}")
+            self.called_functions.add(f"model:{spec.name}")
+            return ast.copy_location(
+                ast.Call(
+                    func=ast.Name(id=spec.symbol, ctx=ast.Load()),
+                    args=[
+                        ast.Name(id=self.env_name, ctx=ast.Load()),
+                        *(self.visit(copy.deepcopy(arg))
+                          for arg in node.args),
+                    ],
+                    keywords=[],
+                ),
+                node,
+            )
         if (isinstance(node.func, ast.Name) and node.func.id == "getattr"
                 and node.args):
             target = (self._namespace_ref(node.args[0])
@@ -2854,9 +2624,11 @@ class _ComponentMethodLowerer(_ComponentPathLowerer):
         kind: str = "process",
         component_functions: Mapping[
             str, _ComponentFunctionSpec] | None = None,
+        model_functions: Mapping[str, _ModelFunctionSpec] | None = None,
     ):
         super().__init__(
-            env_name=env_name, component_functions=component_functions)
+            env_name=env_name, component_functions=component_functions,
+            model_functions=model_functions)
         self.component_name = component_name
         self.receiver_name = receiver_name
         self.component_decl = component_decl
@@ -2895,15 +2667,18 @@ class _ComponentMethodLowerer(_ComponentPathLowerer):
 
 
 class _ModelComponentRefLowerer(_ComponentPathLowerer):
-    """Lowers a model callback body: `env.<component field>` is the path
+    """Lowers a model callback body: `self.<component field>` is the path
     root; `changed` records whether anything was rewritten."""
 
     def __init__(self, *, model_name: str, fn_name: str, env_name: str,
                  component_roots: Mapping[str, _ComponentDecl],
                  component_functions: Mapping[
-                     str, _ComponentFunctionSpec] | None = None):
+                     str, _ComponentFunctionSpec] | None = None,
+                 model_functions: Mapping[
+                     str, _ModelFunctionSpec] | None = None):
         super().__init__(
-            env_name=env_name, component_functions=component_functions)
+            env_name=env_name, component_functions=component_functions,
+            model_functions=model_functions)
         self.model_name = model_name
         self.fn_name = fn_name
         self.component_roots = component_roots
@@ -3060,21 +2835,23 @@ def _function_scalar_type(annotation: Any, label: str) -> Any:
     return numba_type
 
 
-def _component_function_signature(
+def _function_signature(
     node: ast.FunctionDef,
     method: Callable[..., Any],
     label: str,
+    receiver: str,
+    localns: Mapping[str, Any] | None = None,
 ) -> tuple[tuple[str, ...], tuple[Any, ...], Any]:
     args = node.args
     signature = (
-        f"{label} must take self followed by explicitly annotated "
+        f"{label} must take {receiver} followed by explicitly annotated "
         "positional scalar arguments, without defaults or variadics, and "
         "declare a scalar return annotation")
     if (args.posonlyargs or args.vararg or args.kwonlyargs or args.kwarg
             or args.defaults or args.kw_defaults or not args.args):
         raise ValueError(signature)
     try:
-        hints = get_type_hints(method)
+        hints = get_type_hints(method, localns=localns)
     except Exception as exc:
         raise TypeError(f"{label} annotations could not be resolved") from exc
 
@@ -3572,7 +3349,7 @@ class _ComponentFunctionBuilder:
                 _component_method_source(method, "function"))
             label = f"component function '{decl.name}.{method_name}'"
             parameter_names, argument_types, return_type = \
-                _component_function_signature(node, method, label)
+                _function_signature(node, method, label, "self")
             receiver_name = node.args.args[0].arg
             _ComponentFunctionValidator(
                 receiver_name=receiver_name, method=method,
@@ -3721,10 +3498,9 @@ class _ComponentFunctionBuilder:
                 for ordinal, instance_indices in enumerate(groups):
                     variant = None if len(groups) == 1 else ordinal
                     cls = decl.class_at(instance_indices[0])
-                    for method_name, method in _component_function_methods(
-                            cls):
+                    for callback in _callback_set(cls).functions:
                         self.build(
-                            decl, method_name, method, variant,
+                            decl, callback.name, callback.fn, variant,
                             instance_indices)
         return self.specs
 
@@ -3744,14 +3520,18 @@ class _ComponentFunctionBuilder:
                        else decl.specialization_slots()[instance_index])
             group = (groups[0] if variant is None else groups[variant])
             cls = decl.class_at(index.value)
-            method = dict(_component_function_methods(cls)).get(method_name)
+            method = next(
+                (callback.fn for callback in _callback_set(cls).functions
+                 if callback.name == method_name), None)
             if method is None:
                 return ()
             return (self.build(
                 decl, method_name, method, variant, group),)
         if not decl.polymorphic:
-            method = dict(_component_function_methods(
-                decl.class_at())).get(method_name)
+            method = next(
+                (callback.fn for callback in
+                 _callback_set(decl.class_at()).functions
+                 if callback.name == method_name), None)
             if method is None:
                 return ()
             group = decl.specialization_groups()[0]
@@ -3764,7 +3544,9 @@ class _ComponentFunctionBuilder:
             if not possible.intersection(group):
                 continue
             cls = decl.class_at(group[0])
-            method = dict(_component_function_methods(cls)).get(method_name)
+            method = next(
+                (callback.fn for callback in _callback_set(cls).functions
+                 if callback.name == method_name), None)
             if method is None:
                 raise ValueError(
                     f"dynamic component function call to "
@@ -3781,6 +3563,15 @@ def _build_component_functions(
     return _ComponentFunctionBuilder().build_all(roots)
 
 
+@dataclass(frozen=True)
+class _CallbackLoweringContext:
+    datasets: Sequence[str]
+    histories: Mapping[str, str]
+    entities: Mapping[str, str]
+    component_functions: Mapping[str, _ComponentFunctionSpec]
+    model_functions: Mapping[str, _ModelFunctionSpec]
+
+
 def _lower_component_method(
     node: ast.FunctionDef,
     *,
@@ -3794,11 +3585,7 @@ def _lower_component_method(
     struct_view: type | None = None,
     prologue: Sequence[ast.stmt] = (),
     extra_namespace: Mapping[str, Any] | None = None,
-    model_dataset_fields: Iterable[str] = (),
-    model_history_fields: Mapping[str, str] = {},
-    model_entity_fields: Mapping[str, str] = {},
-    component_functions: Mapping[
-        str, _ComponentFunctionSpec] | None = None,
+    context: _CallbackLoweringContext,
 ) -> Callable[..., Any]:
     """Shared tail of process/collect lowering: drop `self`, rewrite the
     body against the flattened env, and compile the result."""
@@ -3830,39 +3617,40 @@ def _lower_component_method(
         instance_index=instance_index,
         possible_indices=possible_indices,
         kind=kind,
-        component_functions=component_functions,
+        component_functions=context.component_functions,
+        model_functions=context.model_functions,
     )
     lowered = lowerer.visit(node)
     if not isinstance(lowered, ast.FunctionDef):
         raise TypeError(f"component {kind} lowering produced a non-function")
-    if model_dataset_fields:
+    if context.datasets:
         lowered, _ = lower_env_dataset_method_calls(
             lowered,
             env_name=env_name,
-            dataset_fields=model_dataset_fields,
+            dataset_fields=context.datasets,
             label=f"component {kind} '{component_name}.{method_name}'",
         )
-    if model_history_fields:
+    if context.histories:
         lowered, _ = lower_env_history_method_calls(
             lowered,
             env_name=env_name,
-            history_fields=model_history_fields,
+            history_fields=context.histories,
             label=f"component {kind} '{component_name}.{method_name}'",
         )
-    if model_entity_fields:
+    if context.entities:
         lowered, _ = lower_env_entity_method_calls(
             lowered,
             env_name=env_name,
-            entity_fields=model_entity_fields,
+            entity_fields=context.entities,
             label=f"component {kind} '{component_name}.{method_name}'",
         )
     lowered.body[:0] = list(prologue)
 
     namespace = _closure_namespace(method)
-    if model_entity_fields:
+    if context.entities:
         _rewire_entity_method_helpers(
             namespace, set(method.__code__.co_names),
-            model_name=component_name, entity_fields=model_entity_fields,
+            model_name=component_name, entity_fields=context.entities,
             cache={})
     lowered, random_changed = lower_random_calls_in_node(
         lowered,
@@ -3876,10 +3664,16 @@ def _lower_component_method(
     namespace.update(dataset_lowering_namespace())
     namespace.update(timeseries_lowering_namespace())
     namespace.update(entity_lowering_namespace())
-    if component_functions:
+    if context.component_functions:
         namespace.update({
             spec.symbol: spec.helper
-            for spec in component_functions.values()
+            for spec in context.component_functions.values()
+        })
+    if context.model_functions:
+        namespace.update({
+            spec.symbol: spec.helper
+            for spec in context.model_functions.values()
+            if spec.helper is not None
         })
     if random_changed:
         namespace.update(random_lowering_namespace())
@@ -3974,38 +3768,19 @@ def _shared_instance_setup(
 
 
 def _component_process_signature(
-    node: ast.FunctionDef,
     component_name: str,
     method_name: str,
     method: Callable[..., Any],
     is_struct_class: Callable[[Any], bool],
 ) -> tuple[type | None, int]:
     """Validate a component process method's ``(self, env[, idx][, view])``
-    signature and return ``(struct_view_class_or_None, base_arg_count)``
-    where the base count excludes the optional view parameter."""
-    args = node.args
+    signature and return ``(struct_view_class_or_None, base_arg_count)``."""
     signature = (f"component process '{component_name}.{method_name}' must "
                  "take (self, env), (self, env, idx), and optionally a "
                  "final sim.Struct view parameter, without defaults")
-    if (args.posonlyargs or args.vararg or args.kwonlyargs or args.kwarg
-            or args.defaults or args.kw_defaults):
-        raise ValueError(signature)
-
-    params = args.args
-    hints = get_type_hints(method)
-    own = hints.get(params[-1].arg) if len(params) > 2 else None
-    struct_view = own if is_struct_class(own) else None
-    injected = struct_view is not None
-    for arg in params[2:len(params) - 1 if injected else len(params)]:
-        if is_struct_class(hints.get(arg.arg)):
-            raise ValueError(
-                f"component process '{component_name}.{method_name}': the "
-                f"{hints[arg.arg].__name__} view must be the last parameter")
-
-    base_arg_count = len(params) - (1 if injected else 0)
-    if base_arg_count not in (2, 3):
-        raise ValueError(signature)
-    return struct_view, base_arg_count
+    return _process_signature(
+        method, 2, is_struct_class,
+        f"component process '{component_name}.{method_name}'", signature)
 
 
 def _lower_component_process(
@@ -4018,11 +3793,7 @@ def _lower_component_process(
     instance_index: int | None = None,
     copies_per_instance: tuple[int, ...] | None = None,
     instance_indices: tuple[int, ...] | None = None,
-    model_dataset_fields: Iterable[str] = (),
-    model_history_fields: Mapping[str, str] = {},
-    model_entity_fields: Mapping[str, str] = {},
-    component_functions: Mapping[
-        str, _ComponentFunctionSpec] | None = None,
+    context: _CallbackLoweringContext,
 ) -> Callable[..., Any]:
     """Lower a component process method into a flat process function.
 
@@ -4035,7 +3806,7 @@ def _lower_component_process(
     lookup tables."""
     node = copy.deepcopy(_component_method_source(method, "process"))
     struct_view, base_arg_count = _component_process_signature(
-        node, component_name, method_name, method, is_struct_class)
+        component_name, method_name, method, is_struct_class)
 
     if copies_per_instance is None:
         index_expr: ast.expr = ast.Constant(instance_index)
@@ -4054,10 +3825,7 @@ def _lower_component_process(
             else ((instance_index,) if instance_index is not None else None)),
         method_name=method_name, method=method, struct_view=struct_view,
         prologue=prologue, extra_namespace=tables,
-        model_dataset_fields=model_dataset_fields,
-        model_history_fields=model_history_fields,
-        model_entity_fields=model_entity_fields,
-        component_functions=component_functions)
+        context=context)
 
 
 def _lower_component_collect(
@@ -4069,22 +3837,16 @@ def _lower_component_collect(
     instance_index: int | None = None,
     per_class: bool = False,
     instance_indices: tuple[int, ...] | None = None,
-    model_dataset_fields: Iterable[str] = (),
-    model_history_fields: Mapping[str, str] = {},
-    model_entity_fields: Mapping[str, str] = {},
-    component_functions: Mapping[
-        str, _ComponentFunctionSpec] | None = None,
+    context: _CallbackLoweringContext,
 ) -> Callable[..., Any]:
     """Lower a component collect method; with ``per_class``, one function
     covers every instance and takes the instance index as its second
     argument."""
     node = copy.deepcopy(_component_method_source(method, "collect"))
     args = node.args
-    if (args.posonlyargs or args.vararg or args.kwonlyargs or args.kwarg
-            or args.defaults or args.kw_defaults or len(args.args) != 2):
-        raise ValueError(
-            f"component collect '{component_name}.{method_name}' must take "
-            "(self, env) without defaults")
+    signature = (f"component collect '{component_name}.{method_name}' must "
+                 "take (self, env) without defaults")
+    _callback_arg_count(method, (2,), signature)
     if per_class:
         args.args.append(ast.arg(arg="__cimba_group_inst"))
         indices = (instance_indices
@@ -4115,10 +3877,107 @@ def _lower_component_collect(
             else ((instance_index,) if instance_index is not None else None)),
         method_name=method_name, method=method,
         prologue=prologue, extra_namespace=tables,
-        model_dataset_fields=model_dataset_fields,
-        model_history_fields=model_history_fields,
-        model_entity_fields=model_entity_fields,
-        component_functions=component_functions)
+        context=context)
+
+
+def _lower_component_predicate(
+    component_name: str,
+    component_decl: _ComponentDecl,
+    method_name: str,
+    method: Callable[..., Any],
+    *,
+    instance_index: int,
+    context: _CallbackLoweringContext,
+) -> Callable[..., Any]:
+    """Lower one instance of a component ``@sim.predicate`` callback."""
+    node = copy.deepcopy(_component_method_source(method, "predicate"))
+    signature = (f"component predicate '{component_name}.{method_name}' must "
+                 "take (self, env) without defaults")
+    _callback_arg_count(method, (2,), signature)
+    if get_type_hints(method).get("return") is not bool:
+        raise ValueError(
+            f"component predicate '{component_name}.{method_name}' must "
+            "return bool")
+    generated = _lower_component_method(
+        node, kind="predicate", component_name=component_name,
+        component_decl=component_decl,
+        instance_index=ast.Constant(instance_index),
+        possible_indices=(instance_index,), method_name=method_name,
+        method=method, context=context)
+    generated.__annotations__["return"] = bool
+    return generated
+
+
+def _lower_component_event(
+    component_name: str,
+    component_decl: _ComponentDecl,
+    method_name: str,
+    method: Callable[..., Any],
+    *,
+    instance_index: int,
+    context: _CallbackLoweringContext,
+) -> Callable[..., Any]:
+    """Lower one instance of a component ``@sim.event`` callback."""
+    node = copy.deepcopy(_component_method_source(method, "event"))
+    signature = (f"component event '{component_name}.{method_name}' must "
+                 "take (self, env) or (self, env, data) without defaults")
+    _callback_arg_count(method, (2, 3), signature)
+    return _lower_component_method(
+        node, kind="event", component_name=component_name,
+        component_decl=component_decl,
+        instance_index=ast.Constant(instance_index),
+        possible_indices=(instance_index,), method_name=method_name,
+        method=method, context=context)
+
+
+def _lower_model_component_refs_in_node(
+    node: ast.FunctionDef,
+    *,
+    model_name: str,
+    component_roots: Mapping[str, _ComponentDecl],
+    component_functions: Mapping[
+        str, _ComponentFunctionSpec] | None = None,
+    model_functions: Mapping[str, _ModelFunctionSpec] | None = None,
+) -> tuple[ast.FunctionDef, bool, tuple[str, ...]]:
+    if not node.args.args:
+        return node, False, ()
+
+    env_name = node.args.args[0].arg
+    lowerer = _ModelComponentRefLowerer(
+        model_name=model_name,
+        fn_name=node.name,
+        env_name=env_name,
+        component_roots=component_roots,
+        component_functions=component_functions,
+        model_functions=model_functions,
+    )
+    lowered = lowerer.visit(node)
+    if not isinstance(lowered, ast.FunctionDef):
+        raise TypeError("model callback lowering produced a non-function")
+    return lowered, lowerer.changed, tuple(sorted(lowerer.called_functions))
+
+
+def _model_lowering_namespace(
+    component_roots: Mapping[str, _ComponentDecl],
+    component_functions: Mapping[str, _ComponentFunctionSpec] | None,
+    model_functions: Mapping[str, _ModelFunctionSpec] | None,
+) -> dict[str, Any]:
+    namespace = dataset_lowering_namespace()
+    namespace.update(timeseries_lowering_namespace())
+    namespace.update(entity_lowering_namespace())
+    if component_functions:
+        namespace.update({
+            spec.symbol: spec.helper
+            for spec in component_functions.values()
+        })
+    if model_functions:
+        namespace.update({
+            spec.symbol: spec.helper
+            for spec in model_functions.values()
+            if spec.helper is not None
+        })
+    namespace.update(_lowering_namespace(component_roots.values()))
+    return namespace
 
 
 def _lower_model_component_refs(
@@ -4128,12 +3987,13 @@ def _lower_model_component_refs(
     component_roots: Mapping[str, _ComponentDecl],
     component_functions: Mapping[
         str, _ComponentFunctionSpec] | None = None,
+    model_functions: Mapping[str, _ModelFunctionSpec] | None = None,
 ) -> Callable[..., Any]:
-    """Rewrite a model callback's component paths against the flattened
-    env; returns the callback unchanged when it uses none."""
-    if not component_roots:
+    """Rewrite a model callback's component paths against the flat root."""
+    if not component_roots and not model_functions:
         return fn
-    if not any(name in fn.__code__.co_names for name in component_roots):
+    names = {*component_roots, *(model_functions or {})}
+    if not any(name in fn.__code__.co_names for name in names):
         return fn
     try:
         node = copy.deepcopy(_function_def_from_source(fn))
@@ -4142,21 +4002,11 @@ def _lower_model_component_refs(
             f"model '{model_name}' callback '{fn.__qualname__}' needs "
             "inspectable source to use Component namespaces"
         ) from exc
-    if not node.args.args:
-        return fn
-
-    env_name = node.args.args[0].arg
-    lowerer = _ModelComponentRefLowerer(
-        model_name=model_name,
-        fn_name=fn.__name__,
-        env_name=env_name,
-        component_roots=component_roots,
+    lowered, changed, called_functions = _lower_model_component_refs_in_node(
+        node, model_name=model_name, component_roots=component_roots,
         component_functions=component_functions,
-    )
-    lowered = lowerer.visit(node)
-    if not isinstance(lowered, ast.FunctionDef):
-        raise TypeError("model callback lowering produced a non-function")
-    if not lowerer.changed:
+        model_functions=model_functions)
+    if not changed:
         return fn
 
     lowered.decorator_list = []
@@ -4167,15 +4017,8 @@ def _lower_model_component_refs(
         arg.type_comment = None
 
     namespace = _closure_namespace(fn)
-    namespace.update(dataset_lowering_namespace())
-    namespace.update(timeseries_lowering_namespace())
-    namespace.update(entity_lowering_namespace())
-    if component_functions:
-        namespace.update({
-            spec.symbol: spec.helper
-            for spec in component_functions.values()
-        })
-    namespace.update(_lowering_namespace(component_roots.values()))
+    namespace.update(_model_lowering_namespace(
+        component_roots, component_functions, model_functions))
     generated = _compile_lowered(
         lowered,
         filename=f"<cimba model callback '{model_name}.{fn.__name__}'>",
@@ -4184,107 +4027,127 @@ def _lower_model_component_refs(
         namespace=namespace,
         like=fn,
     )
-    generated.__cimba_function_calls__ = tuple(
-        sorted(lowerer.called_functions))
+    generated.__cimba_function_calls__ = called_functions
     return generated
 
 
-def _lower_dataset_methods(
-    fn: Callable[..., Any],
+def _build_model_functions(
+    model_cls: type,
     *,
     model_name: str,
-    dataset_fields: Iterable[str],
+    component_roots: Mapping[str, _ComponentDecl],
+    component_functions: Mapping[str, _ComponentFunctionSpec],
+    scalar_fields: Iterable[str],
+) -> dict[str, _ModelFunctionSpec]:
+    """Validate and lower read-only helpers declared by the root owner."""
+    callbacks = _callback_set(model_cls).functions
+    specs: dict[str, _ModelFunctionSpec] = {}
+    sources: dict[str, ast.FunctionDef] = {}
+    scalar_names = set(scalar_fields)
+
+    for callback in callbacks:
+        node = copy.deepcopy(_component_method_source(
+            callback.fn, "model function"))
+        label = f"model function '{model_cls.__name__}.{callback.name}'"
+        parameter_names, argument_types, return_type = \
+            _function_signature(
+                node, callback.fn, label, "self",
+                {base.__name__: base for base in model_cls.__mro__})
+        specs[callback.name] = _ModelFunctionSpec(
+            name=callback.name,
+            method=callback.fn,
+            symbol=(f"_CIMBA_MODEL_FUNCTION_{callback.name}_"
+                    f"{id(callback.fn):x}"),
+            parameter_names=parameter_names,
+            argument_types=argument_types,
+            return_type=return_type,
+        )
+        sources[callback.name] = node
+
+    building: list[str] = []
+
+    def build(name: str) -> None:
+        spec = specs[name]
+        if spec.helper is not None:
+            return
+        if name in building:
+            start = building.index(name)
+            raise ValueError(
+                "recursive model function call: "
+                + " -> ".join((*building[start:], name)))
+        building.append(name)
+        try:
+            node = sources[name]
+            env_name = node.args.args[0].arg
+            label = f"model function '{model_cls.__name__}.{name}'"
+            _ComponentFunctionValidator(
+                receiver_name=env_name, method=spec.method,
+                label=label).visit(node)
+            callees = []
+            for call in (item for item in ast.walk(node)
+                         if isinstance(item, ast.Call)):
+                if (isinstance(call.func, ast.Attribute)
+                        and isinstance(call.func.value, ast.Name)
+                        and call.func.value.id == env_name
+                        and call.func.attr in specs):
+                    callees.append(call.func.attr)
+            spec.callees = tuple(dict.fromkeys(callees))
+            for callee in spec.callees:
+                build(callee)
+
+            lowered = _lower_model_component_refs(
+                spec.method, model_name=model_name,
+                component_roots=component_roots,
+                component_functions=component_functions,
+                model_functions=specs)
+            lowered = lower_random_calls_in_function(
+                lowered, label=label)
+            lowered_node = copy.deepcopy(_function_def_from_source(lowered))
+            for item in ast.walk(lowered_node):
+                if (isinstance(item, ast.Call)
+                        and _rooted_at_name(item.func, env_name)):
+                    raise ValueError(
+                        f"{label} cannot call entity or runtime operation "
+                        f"{ast.unparse(item.func)}()")
+                if (isinstance(item, ast.Attribute)
+                        and isinstance(item.value, ast.Name)
+                        and item.value.id == env_name
+                        and item.attr not in scalar_names):
+                    raise ValueError(
+                        f"{label} cannot read non-scalar field "
+                        f"{env_name}.{item.attr}")
+            try:
+                helper = njit(lowered)
+            except Exception as exc:
+                raise TypeError(
+                    f"{label} failed Numba nopython preparation") from exc
+            helper.__cimba_source__ = getattr(
+                lowered, "__cimba_source__", inspect.getsource(lowered))
+            spec.helper = helper
+        finally:
+            building.pop()
+
+    for callback in callbacks:
+        build(callback.name)
+    return specs
+
+
+def _compile_model_callback_lowering(
+    fn: Callable[..., Any],
+    lowered: ast.FunctionDef,
+    model_name: str,
+    lowering_namespace: Mapping[str, Any],
+    namespace: dict[str, Any] | None = None,
 ) -> Callable[..., Any]:
-    """Rewrite ``env.<dataset>.method(...)`` to native dataset helper calls."""
-    fields = set(dataset_fields)
-    if not fields:
-        return fn
-    names = set(fn.__code__.co_names)
-    if not (names.intersection(fields)
-            and names.intersection(DATASET_METHOD_NAMES)):
-        return fn
-    try:
-        node = copy.deepcopy(_function_def_from_source(fn))
-    except (OSError, TypeError) as exc:
-        raise ValueError(
-            f"model '{model_name}' callback '{fn.__qualname__}' needs "
-            "inspectable source to use Dataset methods"
-        ) from exc
-    if not node.args.args:
-        return fn
-
-    env_name = node.args.args[0].arg
-    lowered, changed = lower_env_dataset_method_calls(
-        node,
-        env_name=env_name,
-        dataset_fields=fields,
-        label=f"model '{model_name}' callback '{fn.__name__}'",
-    )
-    if not changed:
-        return fn
-
     lowered.decorator_list = []
     lowered.returns = None
     lowered.type_comment = None
     for arg in lowered.args.args:
         arg.annotation = None
         arg.type_comment = None
-
-    namespace = _closure_namespace(fn)
-    namespace.update(dataset_lowering_namespace())
-    return _compile_lowered(
-        lowered,
-        filename=f"<cimba model callback '{model_name}.{fn.__name__}'>",
-        fn_name=fn.__name__,
-        qualname=fn.__qualname__,
-        namespace=namespace,
-        like=fn,
-    )
-
-
-def _lower_history_methods(
-    fn: Callable[..., Any],
-    *,
-    model_name: str,
-    history_fields: Mapping[str, str],
-) -> Callable[..., Any]:
-    """Rewrite ``env.<entity>.history.method(...)`` (and the indexed
-    ``env.<entity>[i].history.method(...)`` form) to native timeseries
-    helper calls."""
-    if not history_fields:
-        return fn
-    names = set(fn.__code__.co_names)
-    if "history" not in names or not names.intersection(history_fields):
-        return fn
-    try:
-        node = copy.deepcopy(_function_def_from_source(fn))
-    except (OSError, TypeError) as exc:
-        raise ValueError(
-            f"model '{model_name}' callback '{fn.__qualname__}' needs "
-            "inspectable source to use timeseries history methods"
-        ) from exc
-    if not node.args.args:
-        return fn
-
-    env_name = node.args.args[0].arg
-    lowered, changed = lower_env_history_method_calls(
-        node,
-        env_name=env_name,
-        history_fields=history_fields,
-        label=f"model '{model_name}' callback '{fn.__name__}'",
-    )
-    if not changed:
-        return fn
-
-    lowered.decorator_list = []
-    lowered.returns = None
-    lowered.type_comment = None
-    for arg in lowered.args.args:
-        arg.annotation = None
-        arg.type_comment = None
-
-    namespace = _closure_namespace(fn)
-    namespace.update(timeseries_lowering_namespace())
+    if namespace is None:
+        namespace = _closure_namespace(fn)
+    namespace.update(lowering_namespace)
     return _compile_lowered(
         lowered,
         filename=f"<cimba model callback '{model_name}.{fn.__name__}'>",
@@ -4309,13 +4172,10 @@ def _lower_entity_method_helper(
     recompile it, returning the new dispatcher. Otherwise (not a
     dispatcher, or nothing to rewrite) returns ``helper`` unchanged.
 
-    Entity-method lowering is normally per-registered-callback (see
-    ``_lower_entity_methods`` below), because that's the only place the
-    AST rewrite naturally has an ``env`` name to anchor on. A plain helper
-    called with ``env`` as its own first argument has exactly the same
-    shape, so it gets the same treatment here -- memoized by
-    ``id(py_func)`` in ``cache`` so a helper shared by several processes
-    is only rewritten once."""
+    A plain helper called with the model record as its first argument has
+    the same entity-call shape as a callback, so it gets the same treatment
+    here -- memoized by ``id(py_func)`` in ``cache`` so a helper shared by
+    several processes is only rewritten once."""
     py_func = getattr(helper, "py_func", None)
     if py_func is None:
         return helper
@@ -4399,61 +4259,51 @@ def _rewire_entity_method_helpers(
     return changed
 
 
-def _lower_entity_methods(
+def _lower_model_callback_methods_in_node(
+    node: ast.FunctionDef,
     fn: Callable[..., Any],
     *,
     model_name: str,
+    context: _CallbackLoweringContext,
     entity_fields: Mapping[str, str],
-) -> Callable[..., Any]:
-    """Rewrite ``env.<entity>.method(...)`` (and the indexed
-    ``env.<entity>[i].method(...)`` form) to native helper calls, e.g.
-    ``env.queue.put(1)`` or ``env.server.acquire()`` -- in ``fn``'s own
-    body, and in any ``@njit`` helper function it (transitively) calls."""
-    if not entity_fields:
-        return fn
-    names = set(fn.__code__.co_names)
-    direct = bool(names.intersection(entity_fields)
-                 and names.intersection(ENTITY_METHOD_NAMES))
-    namespace = _closure_namespace(fn)
-    cache: dict[int, Any] = {}
-    helpers_changed = _rewire_entity_method_helpers(
-        namespace, names, model_name=model_name, entity_fields=entity_fields,
-        cache=cache)
-    if not direct and not helpers_changed:
-        return fn
-    try:
-        node = copy.deepcopy(_function_def_from_source(fn))
-    except (OSError, TypeError) as exc:
-        raise ValueError(
-            f"model '{model_name}' callback '{fn.__qualname__}' needs "
-            "inspectable source to use entity methods"
-        ) from exc
+    namespace: dict[str, Any],
+) -> tuple[ast.FunctionDef, bool]:
+    """Apply root dataset, history, entity, and random rewrites to one AST."""
     if not node.args.args:
-        return fn
+        return node, False
+    receiver = node.args.args[0].arg
+    label = f"model '{model_name}' callback '{fn.__name__}'"
+    changed = False
 
-    env_name = node.args.args[0].arg
-    lowered, changed = lower_env_entity_method_calls(
-        node,
-        env_name=env_name,
-        entity_fields=entity_fields,
-        label=f"model '{model_name}' callback '{fn.__name__}'",
-    )
-    if not changed and not helpers_changed:
-        return fn
+    node, lowered = lower_env_dataset_method_calls(
+        node, env_name=receiver, dataset_fields=context.datasets,
+        label=label)
+    if lowered:
+        namespace.update(dataset_lowering_namespace())
+        changed = True
 
-    lowered.decorator_list = []
-    lowered.returns = None
-    lowered.type_comment = None
-    for arg in lowered.args.args:
-        arg.annotation = None
-        arg.type_comment = None
+    node, lowered = lower_env_history_method_calls(
+        node, env_name=receiver, history_fields=context.histories,
+        label=label)
+    if lowered:
+        namespace.update(timeseries_lowering_namespace())
+        changed = True
 
-    namespace.update(entity_lowering_namespace())
-    return _compile_lowered(
-        lowered,
-        filename=f"<cimba model callback '{model_name}.{fn.__name__}'>",
-        fn_name=fn.__name__,
-        qualname=fn.__qualname__,
-        namespace=namespace,
-        like=fn,
-    )
+    names = set(fn.__code__.co_names)
+    helpers_changed = _rewire_entity_method_helpers(
+        namespace, names, model_name=model_name,
+        entity_fields=entity_fields, cache={})
+    node, lowered = lower_env_entity_method_calls(
+        node, env_name=receiver, entity_fields=entity_fields,
+        label=label)
+    if lowered or helpers_changed:
+        namespace.update(entity_lowering_namespace())
+        changed = True
+
+    node, lowered = lower_random_calls_in_node(
+        node, namespace=namespace,
+        label=f"model '{model_name}' callback '{fn.__qualname__}'")
+    if lowered:
+        namespace.update(random_lowering_namespace())
+        changed = True
+    return node, changed

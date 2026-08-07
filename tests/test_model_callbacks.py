@@ -9,25 +9,25 @@ def test_model_callbacks_inherit_replace_remove_and_keep_declaration_order():
         total: sim.Output
 
         @sim.process
-        def first(env: "Base"):
-            env.value += 1
+        def first(self: "Base"):
+            self.value += 1
 
         @sim.process
-        def replace_me(env: "Base"):
-            env.value += 2
+        def replace_me(self: "Base"):
+            self.value += 2
 
         @sim.collect
-        def stats(env: "Base"):
-            env.total = env.value
+        def stats(self: "Base"):
+            self.total = self.value
 
     class Derived(Base):
         @sim.process
-        def replace_me(env: "Derived"):
-            env.value += 20
+        def replace_me(self: "Derived"):
+            self.value += 20
 
         @sim.process
-        def last(env: "Derived"):
-            env.value += 100
+        def last(self: "Derived"):
+            self.value += 100
 
     model = Derived()
     assert [process.name for process in model._processes] == [
@@ -38,10 +38,10 @@ def test_model_callbacks_inherit_replace_remove_and_keep_declaration_order():
     assert experiment.results.total[0] == 121
 
     class Removed(Derived):
-        def first(env):
+        def first(self):
             pass
 
-        def stats(env):
+        def stats(self):
             pass
 
     removed = Removed()
@@ -52,8 +52,8 @@ def test_model_callbacks_inherit_replace_remove_and_keep_declaration_order():
 
     class DuplicateCollector(Derived):
         @sim.collect
-        def another_stats(env: "DuplicateCollector"):
-            env.total = env.value
+        def another_stats(self):
+            self.total = self.value
 
     with pytest.raises(ValueError, match="multiple collect callbacks"):
         DuplicateCollector()
@@ -64,21 +64,21 @@ def test_callback_fields_validate_kind_binding_and_namespace_collisions():
         ready: sim.Predicate
 
         @sim.process(field="ready")
-        def worker(env):
+        def worker(self):
             pass
 
     class WrongPredicateField(sim.Model):
         alarm: sim.Event
 
         @sim.predicate(field="alarm")
-        def is_ready(env) -> bool:
+        def is_ready(self) -> bool:
             return True
 
     class WrongEventField(sim.Model):
         ready: sim.Predicate
 
         @sim.event(field="ready")
-        def on_alarm(env):
+        def on_alarm(self):
             pass
 
     for cls, match in (
@@ -93,14 +93,14 @@ def test_callback_fields_validate_kind_binding_and_namespace_collisions():
         ready: sim.Predicate
 
         @sim.predicate
-        def ready(env) -> bool:
+        def ready(self) -> bool:
             return True
 
     class CollidingParam(sim.Model):
         worker: sim.Param
 
         @sim.process
-        def worker(env):
+        def worker(self):
             pass
 
     for cls in (CollidingPredicate, CollidingParam):
@@ -111,11 +111,11 @@ def test_callback_fields_validate_kind_binding_and_namespace_collisions():
         alarm: sim.Event
 
         @sim.event(field="alarm")
-        def first_alarm(env):
+        def first_alarm(self):
             pass
 
         @sim.event(field="alarm")
-        def second_alarm(env):
+        def second_alarm(self):
             pass
 
     with pytest.raises(ValueError, match="already bound"):
@@ -126,7 +126,7 @@ def test_callback_fields_validate_kind_binding_and_namespace_collisions():
             workers: sim.Processes
 
             @sim.process(spawnable=True, field="workers")
-            def worker(env):
+            def worker(self):
                 pass
 
 
@@ -137,19 +137,19 @@ def test_hidden_predicate_and_event_fields_are_generated_and_run():
         payload: sim.Output
 
         @sim.predicate
-        def is_open(env: "Hidden") -> bool:
-            return env.opened == 1
+        def is_open(self) -> bool:
+            return self.opened == 1
 
         @sim.event
-        def alarm(env: "Hidden", data: int):
-            env.payload = data
+        def alarm(self, data: int):
+            self.payload = data
 
         @sim.process
-        def driver(env: "Hidden"):
-            env._ev_alarm.schedule(1.0, 42)
-            env.opened = 1
-            env.gate.signal()
-            env.gate.wait_for(env._pred_is_open)
+        def driver(self):
+            self._ev_alarm.schedule(1.0, 42)
+            self.opened = 1
+            self.gate.signal()
+            self.gate.wait_for(self._pred_is_open)
             sim.hold(2.0)
 
     model = Hidden()
@@ -163,27 +163,27 @@ def test_hidden_predicate_and_event_fields_are_generated_and_run():
 def test_model_callback_signature_protected_name_and_marker_errors():
     class BadProcess(sim.Model):
         @sim.process
-        def worker(env, first, second):
+        def worker(self, first, second):
             pass
 
     class BadCollect(sim.Model):
         @sim.collect
-        def stats(env, extra):
+        def stats(self, extra):
             pass
 
     class BadPredicateArgs(sim.Model):
         @sim.predicate
-        def ready(env, extra) -> bool:
+        def ready(self, extra) -> bool:
             return True
 
     class BadPredicateReturn(sim.Model):
         @sim.predicate
-        def ready(env) -> int:
+        def ready(self) -> int:
             return 1
 
     class BadEvent(sim.Model):
         @sim.event
-        def alarm(env, data, extra):
+        def alarm(self, data, extra):
             pass
 
     cases = (
@@ -199,7 +199,7 @@ def test_model_callback_signature_protected_name_and_marker_errors():
 
     class Protected(sim.Model):
         @sim.process
-        def experiment(env):
+        def experiment(self):
             pass
 
     with pytest.raises(ValueError, match="shadows a public sim.Model"):
@@ -214,43 +214,290 @@ def test_model_callback_signature_protected_name_and_marker_errors():
     def function_event(self, env):
         pass
 
-    with pytest.raises(ValueError, match="component function"):
+    with pytest.raises(ValueError, match="combine function"):
         sim.function(sim.event(function_event))
 
 
-def test_component_rejects_model_only_callback_markers_and_options():
+def test_component_supports_callback_fields_structs_predicates_and_events():
     class Struct(sim.Struct):
         value: int
 
-    class FieldComponent(sim.Component):
-        @sim.process(field="workers")
-        def worker(self, env):
-            pass
+    class Item(sim.Component):
+        workers: sim.Processes
+        ready: sim.Predicate
+        alarm: sim.Event
+        gate: sim.Condition
+        value: sim.State
+        result: sim.Output
 
-    class StructComponent(sim.Component):
-        @sim.process(struct=Struct)
-        def worker(self, env):
-            pass
+        @sim.predicate(field="ready")
+        def is_ready(self, env) -> bool:
+            return self.value >= 3
 
-    class PredicateComponent(sim.Component):
+        @sim.event(field="alarm")
+        def on_alarm(self, env, data):
+            self.value += data
+
+        @sim.process(field="workers", struct=Struct)
+        def worker(self, env):
+            self.alarm.schedule(0.1, 3)
+            sim.hold(0.2)
+            self.gate.signal()
+            sim.suspend()
+
+        @sim.process
+        def waiter(self, env):
+            self.gate.wait_for(self.ready)
+            self.result = self.value
+            sim.suspend()
+
+    class Hidden(sim.Component):
+        gate: sim.Condition
+        value: sim.State
+        result: sim.Output
+
         @sim.predicate
-        def ready(self, env) -> bool:
-            return True
+        def positive(self, env) -> bool:
+            return self.value > 0
 
-    for component in (FieldComponent(), StructComponent(), PredicateComponent()):
-        class Owner(sim.Model):
-            item: type(component) = component
+        @sim.event
+        def bump(self, env):
+            self.value += 1
 
-        with pytest.raises(ValueError, match="component"):
-            Owner()
+        @sim.process
+        def driver(self, env):
+            self._ev_bump.schedule(0.1)
+            sim.hold(0.2)
+            self.gate.signal()
+            sim.suspend()
 
+        @sim.process
+        def waiter(self, env):
+            self.gate.wait_for(self._pred_positive)
+            self.result = self.value
+            sim.suspend()
+
+    class Owner(sim.Model):
+        item: Item = Item()
+        hidden: Hidden = Hidden()
+
+    model = Owner()
+    exp = model.experiment(replications=1, duration=1.0)
+    assert exp.run() == 0
+    assert exp["item__result"][0] == 3.0
+    assert exp["hidden__result"][0] == 1.0
+    assert exp.trials["item__workers"][0] != 0
+
+    # Symbolic process copies remain a nested-owner feature.
     class StringCopies(sim.Model):
         @sim.process(copies="worker_count")
-        def worker(env):
+        def worker(self):
             pass
 
     with pytest.raises(TypeError, match="copies must be an int"):
         StringCopies()
+
+
+def test_model_functions_are_shared_root_helpers():
+    class Policy(sim.Component):
+        factor: sim.Param = 3.0
+
+        @sim.function
+        def scale(self, value: float) -> float:
+            return self.factor * value
+
+    class Worker(sim.Component):
+        result: sim.Output
+
+        @sim.process
+        def run(self, env):
+            self.result = env.adjust(2.0)
+
+    class System(sim.Model):
+        base: sim.Param = 4.0
+        result: sim.Output
+        policy: Policy = Policy()
+        worker: Worker = Worker()
+
+        @sim.function
+        def adjust(self, value: float) -> float:
+            return self.policy.scale(value) + self.base
+
+        @sim.function
+        def twice(self, value: float) -> float:
+            return self.adjust(value) * 2.0
+
+        @sim.process
+        def calculate(self):
+            self.result = self.twice(1.0)
+
+    model = System()
+    exp = model.experiment(replications=1, duration=1.0)
+    assert exp.run() == 0
+    assert exp["result"][0] == 14.0
+    assert exp["worker__result"][0] == 10.0
+    edges = {
+        (edge.source, edge.target, edge.label)
+        for edge in model.process_dag().edges
+    }
+    assert (
+        "process:calculate", "function:model:twice", "call"
+    ) in edges
+    assert (
+        "function:model:twice", "function:model:adjust", "call"
+    ) in edges
+    assert (
+        "function:model:adjust", "function:policy__scale", "call"
+    ) in edges
+    assert (
+        "process:worker__run", "function:model:adjust", "call"
+    ) in edges
+
+
+def test_component_collection_predicates_and_events_bind_per_instance():
+    class Cell(sim.Component):
+        threshold: sim.Const[int]
+        ready: sim.Predicate
+        alarm: sim.Event
+        gate: sim.Condition
+        value: sim.State
+        result: sim.Output
+
+        def __init__(self, threshold: int):
+            self.threshold = threshold
+
+        @sim.predicate(field="ready")
+        def is_ready(self, env) -> bool:
+            return self.value >= self.threshold
+
+        @sim.event(field="alarm")
+        def on_alarm(self, env, data):
+            self.value += data
+
+        @sim.process
+        def driver(self, env):
+            self.alarm.schedule(0.1, self.threshold)
+            sim.hold(0.2)
+            self.gate.signal()
+            sim.suspend()
+
+        @sim.process
+        def waiter(self, env):
+            self.gate.wait_for(self.ready)
+            self.result = self.value
+            sim.suspend()
+
+    class Network(sim.Model):
+        cells: list[Cell] = [Cell(2), Cell(5)]
+
+    model = Network()
+    exp = model.experiment(replications=1, duration=1.0)
+    assert exp.run() == 0
+    assert exp["cells__result"][0].tolist() == [2.0, 5.0]
+    assert exp.trials["cells__ready"][0].shape == (2,)
+    assert exp.trials["cells__alarm"][0].shape == (2,)
+
+
+def test_shared_callback_owner_validation():
+    class MultipleCollectors(sim.Component):
+        @sim.collect
+        def first(self, env):
+            pass
+
+        @sim.collect
+        def second(self, env):
+            pass
+
+    class MultipleCollectorsModel(sim.Model):
+        item: MultipleCollectors = MultipleCollectors()
+
+    with pytest.raises(ValueError, match="multiple collect callbacks"):
+        MultipleCollectorsModel()
+
+    class MissingBinding(sim.Component):
+        @sim.process(field="workers")
+        def run(self, env):
+            pass
+
+    class MissingBindingModel(sim.Model):
+        item: MissingBinding = MissingBinding()
+
+    with pytest.raises(ValueError, match="declared sim.Processes field"):
+        MissingBindingModel()
+
+    class WrongBinding(sim.Component):
+        workers: sim.Event
+
+        @sim.process(field="workers")
+        def run(self, env):
+            pass
+
+    class WrongBindingModel(sim.Model):
+        item: WrongBinding = WrongBinding()
+
+    with pytest.raises(ValueError, match="declared sim.Processes field"):
+        WrongBindingModel()
+
+    class First(sim.Struct):
+        value: int
+
+    class Second(sim.Struct):
+        value: int
+
+    class StructMismatch(sim.Component):
+        @sim.process(struct=First)
+        def run(self, env, view: Second):
+            pass
+
+    class StructMismatchModel(sim.Model):
+        item: StructMismatch = StructMismatch()
+
+    with pytest.raises(ValueError, match="struct=.*annotation disagree"):
+        StructMismatchModel()
+
+
+def test_model_function_validation_and_recursion():
+    class Recursive(sim.Model):
+        @sim.function
+        def first(self, value: float) -> float:
+            return self.second(value)
+
+        @sim.function
+        def second(self, value: float) -> float:
+            return self.first(value)
+
+    with pytest.raises(ValueError, match="recursive model function call"):
+        Recursive()
+
+    class Mutation(sim.Model):
+        value: sim.State
+
+        @sim.function
+        def bad(self) -> float:
+            self.value = 1
+            return 1.0
+
+    with pytest.raises(ValueError, match="cannot mutate"):
+        Mutation()
+
+    class EntityOperation(sim.Model):
+        queue: sim.Queue
+
+        @sim.function
+        def bad(self) -> float:
+            self.queue.put(1)
+            return 1.0
+
+    with pytest.raises(ValueError, match="entity or runtime operation"):
+        EntityOperation()
+
+    class Protected(sim.Model):
+        @sim.function
+        def experiment(self) -> float:
+            return 1.0
+
+    with pytest.raises(ValueError, match="shadows a public sim.Model"):
+        Protected()
 
 
 def test_compilation_plan_covers_all_class_callback_categories_and_reuses():
@@ -261,21 +508,21 @@ def test_compilation_plan_covers_all_class_callback_categories_and_reuses():
         result: sim.Output
 
         @sim.predicate(field="ready")
-        def is_ready(env: "Planned") -> bool:
-            return env.value > 0
+        def is_ready(self) -> bool:
+            return self.value > 0
 
         @sim.event(field="alarm")
-        def on_alarm(env: "Planned", data: int):
-            env.value = data
+        def on_alarm(self, data: int):
+            self.value = data
 
         @sim.process
-        def driver(env: "Planned"):
-            env.alarm.schedule(0.0, 7)
+        def driver(self):
+            self.alarm.schedule(0.0, 7)
             sim.hold(1.0)
 
         @sim.collect
-        def stats(env: "Planned"):
-            env.result = env.value
+        def stats(self):
+            self.result = self.value
 
     first = Planned()
     plan = Planned.compilation_plan()
@@ -302,21 +549,21 @@ def test_model_callbacks_respect_lazy_and_explicit_precompile_modes():
         result: sim.Output
 
         @sim.predicate
-        def positive(env: "CallbackModel") -> bool:
-            return env.value > 0
+        def positive(self) -> bool:
+            return self.value > 0
 
         @sim.event
-        def set_value(env: "CallbackModel", data: int):
-            env.value = data
+        def set_value(self, data: int):
+            self.value = data
 
         @sim.process
-        def driver(env: "CallbackModel"):
-            env._ev_set_value.schedule(0.0, 3)
+        def driver(self):
+            self._ev_set_value.schedule(0.0, 3)
             sim.hold(1.0)
 
         @sim.collect
-        def stats(env: "CallbackModel"):
-            env.result = env.value
+        def stats(self):
+            self.result = self.value
 
     class Lazy(CallbackModel):
         __cimba_precompile__ = "lazy"

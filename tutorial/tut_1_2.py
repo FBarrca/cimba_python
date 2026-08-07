@@ -21,26 +21,26 @@ class MM1(sim.Model):
     interarrival_times: sim.Dataset
 
     @sim.process
-    def arrival(env: "MM1"):
+    def arrival(self: "MM1"):
         while True:
-            t_ia = random.exponential(1.0 / env.utilization)
-            env.interarrival_times.add(t_ia)
+            t_ia = random.exponential(1.0 / self.utilization)
+            self.interarrival_times.add(t_ia)
             sim.hold(t_ia)
-            env.queue.put(1)
+            self.queue.put(1)
 
     @sim.process
-    def service(env: "MM1"):
+    def service(self: "MM1"):
         while True:
-            env.queue.get(1)
+            self.queue.get(1)
             t_srv = random.exponential(1.0)
             sim.hold(t_srv)
 
     @sim.collect
-    def collect_stats(env: "MM1"):
-        env.avg_queue_length = env.queue.history().mean()
-        env.avg_interarrival_time = env.interarrival_times.mean()
-        env.queue.history().capture()
-        env.interarrival_times.capture()
+    def collect_stats(self: "MM1"):
+        self.avg_queue_length = self.queue.history().mean()
+        self.avg_interarrival_time = self.interarrival_times.mean()
+        self.queue.history().capture()
+        self.interarrival_times.capture()
 
 
 model = MM1("MM1")

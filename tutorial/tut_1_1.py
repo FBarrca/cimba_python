@@ -11,22 +11,22 @@ class MM1(sim.Model):
     queue: sim.Queue
 
     @sim.process
-    def arrival(env: "MM1"):
+    def arrival(self):
         while True:
-            t_ia = random.exponential(1.0 / env.utilization)
+            t_ia = random.exponential(1.0 / self.utilization)
             sim.hold(t_ia)
-            env.queue.put(1)
+            self.queue.put(1)
 
     @sim.process
-    def service(env: "MM1"):
+    def service(self):
         while True:
-            env.queue.get(1)
+            self.queue.get(1)
             t_srv = random.exponential(1.0)
             sim.hold(t_srv)
 
     @sim.collect
-    def collect_stats(env: "MM1"):
-        env.avg_queue_length = env.queue.mean_level()
+    def collect_stats(self):
+        self.avg_queue_length = self.queue.mean_level()
 
 
 model = MM1("MM1")

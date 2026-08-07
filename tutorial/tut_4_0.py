@@ -12,8 +12,8 @@ class HarborTemplate(sim.Model):
     result: sim.Output
 
     @sim.process
-    def placeholder(env: "HarborTemplate"):
-        env.result = 0.0
+    def placeholder(self):
+        self.result = 0.0
         sim.suspend()
 
 

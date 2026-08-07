@@ -22,8 +22,8 @@ what to do next.
 Dynamic processes
 -----------------
 
-A process decorated with ``spawnable=True`` is created at runtime with
-``sim.spawn(env.<name>, env, priority=0)``. The returned handle can be used to
+A model process decorated with ``spawnable=True`` is created at runtime with
+``sim.spawn(self.<name>, self, priority=0)``. The returned handle can be used to
 initialize its ``sim.Struct`` fields before it first runs. Finished spawned
 processes can be reclaimed with ``sim.despawn(handle)``. Component-owned
 spawnables use the same call through the component namespace, for example
@@ -41,6 +41,14 @@ Use ``field="..."`` when the callback and field have different names.
 methods. ``sim.current_event()``, ``sim.event_count()``, and
 ``sim.clear_events()`` remain free functions (they have no single event to
 act as a receiver).
+
+Components use the same marker and binding. Their callback signatures are
+``(self, env)`` or ``(self, env, data)``, and code schedules the event through
+``self.<field>``. A bare component event publishes the hidden handle as
+``self._ev_<callback>`` (and as ``env.<component>._ev_<callback>`` to root
+callbacks). Component predicates similarly take ``(self, env) -> bool`` and
+bare declarations publish ``_pred_<callback>``. Declaring explicit fields is
+recommended when the handles should be visible to static type checkers.
 
 When several events share the same time, the higher-priority event runs first;
 ties at the same priority run in arrival order. See :doc:`../advanced/priority`
