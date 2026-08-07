@@ -321,6 +321,138 @@ def test_timeseries_history_capture_returns_per_trial_arrays():
     assert exp.run() == 0
     assert not np.all(exp.history("q", trial=0) == -1.0)
 
+def test_indexed_component_history_capture_returns_item_per_trial():
+    class Counter(sim.Component):
+        line: sim.Queue = sim.capacity(10)
+        resource: sim.Resource
+        store: sim.Store
+
+    class QueueModel(sim.Model):
+        counters: list[Counter] = [Counter(), Counter(), Counter()]
+        q: sim.Queue = sim.capacity(5)
+
+    model = QueueModel()
+
+    @model.process
+    def arrivals(env: QueueModel):
+        env.q.put(1)
+        for index in range(len(env.counters)):
+            for _ in range(index + 1):
+                env.counters[index].line.put(1)
+            env.counters[index].resource.acquire()
+            env.counters[index].store.put(index)
+        sim.suspend()
+
+    @model.collect
+    def collect(env: QueueModel):
+        env.q.history().capture()
+        for index in range(len(env.counters)):
+            env.counters[index].line.history().capture()
+            env.counters[index].resource.history().capture()
+            env.counters[index].store.history().capture()
+
+    exp = model.experiment(replications=2, duration=1.0, warmup=0.0,
+                           seed=23)
+    with pytest.raises(RuntimeError, match="run"):
+        exp.histories("counters__line")
+    assert exp.run() == 0
+
+    all_lines = exp.histories("counters__line")
+    assert len(all_lines) == len(exp)
+    assert all(len(trial_rows) == 3 for trial_rows in all_lines)
+    assert all(rows.dtype == np.float64 for trial_rows in all_lines
+               for rows in trial_rows)
+    assert all(rows.ndim == 2 and rows.shape[1] == 3
+               for trial_rows in all_lines for rows in trial_rows)
+    assert [float(rows[:, 1].max()) for rows in all_lines[0]] == [1, 2, 3]
+
+    assert len(exp.histories("counters__resource")[0]) == 3
+    assert len(exp.histories("counters__store")[0]) == 3
+    assert np.array_equal(
+        exp.history("counters__line", trial=0, index=2),
+        all_lines[0][2],
+    )
+    with pytest.raises(TypeError, match="requires an index"):
+        exp.history("counters__line")
+    with pytest.raises(IndexError, match="collection index"):
+        exp.history("counters__line", index=3)
+    with pytest.raises(TypeError, match="not indexed"):
+        exp.history("q", index=0)
+
+
+def test_indexed_component_history_capture_rejects_unbounded_index():
+    class Counter(sim.Component):
+        line: sim.Queue = sim.capacity(5)
+
+    class QueueModel(sim.Model):
+        counters: list[Counter] = [Counter(), Counter()]
+
+    model = QueueModel()
+    with pytest.raises(ValueError, match="unbounded index"):
+        @model.collect
+        def collect(env: QueueModel):
+            index = 1
+            env.counters[index].line.history().capture()
+
+    class ConstantModel(sim.Model):
+        counters: list[Counter] = [Counter(), Counter()]
+
+    constant_model = ConstantModel()
+    with pytest.raises(ValueError, match="out of range"):
+        @constant_model.collect
+        def constant_collect(env: ConstantModel):
+            env.counters[2].line.history().capture()
+
+
+def test_one_item_component_history_capture_keeps_collection_dimension():
+    class Counter(sim.Component):
+        line: sim.Queue = sim.capacity(5)
+
+    class QueueModel(sim.Model):
+        counters: list[Counter] = [Counter()]
+
+    model = QueueModel()
+
+    @model.process
+    def driver(env: QueueModel):
+        env.counters[0].line.put(1)
+        sim.suspend()
+
+    @model.collect
+    def collect(env: QueueModel):
+        env.counters[0].line.history().capture()
+
+    exp = model.experiment(duration=1.0, warmup=0.0, seed=24)
+    assert exp.run() == 0
+    rows = exp.histories("counters__line")[0]
+    assert len(rows) == 1
+    assert rows[0].shape[1] == 3
+
+
+def test_constant_indexed_history_capture_leaves_other_items_empty():
+    class Counter(sim.Component):
+        line: sim.Queue = sim.capacity(5)
+
+    class QueueModel(sim.Model):
+        counters: list[Counter] = [Counter(), Counter(), Counter()]
+
+    model = QueueModel()
+
+    @model.process
+    def driver(env: QueueModel):
+        env.counters[1].line.put(1)
+        sim.suspend()
+
+    @model.collect
+    def collect(env: QueueModel):
+        env.counters[1].line.history().capture()
+
+    exp = model.experiment(duration=1.0, warmup=0.0, seed=25)
+    assert exp.run() == 0
+    rows = exp.histories("counters__line")[0]
+    assert rows[0].shape == (0, 3)
+    assert rows[1].shape[1] == 3 and rows[1].shape[0] > 0
+    assert rows[2].shape == (0, 3)
 
 def test_timeseries_history_capture_rejects_invalid_targets():
     class DatasetCapture(sim.Model):

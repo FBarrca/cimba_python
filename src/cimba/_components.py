@@ -2116,6 +2116,18 @@ class _ComponentPathLowerer(ast.NodeTransformer):
         if not isinstance(index, ast.expr):
             raise TypeError("component collection index did not lower "
                             "to an expression")
+        if (isinstance(index, ast.Constant)
+                and type(index.value) is int):
+            length: int | None = None
+            if len(decl.parent_lengths) <= 1:
+                length = decl.parent_lengths[0] if decl.parent_lengths else 0
+            elif (isinstance(parent_index, ast.Constant)
+                  and type(parent_index.value) is int):
+                length = decl.parent_lengths[parent_index.value]
+            if length is not None and not 0 <= index.value < length:
+                raise ValueError(
+                    f"{self._callback_label()} collection index "
+                    f"{index.value} is out of range (length {length})")
         if len(decl.parent_offsets) <= 1:
             offset_value = decl.parent_offsets[0] if decl.parent_offsets else 0
             if offset_value == 0:

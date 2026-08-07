@@ -20,23 +20,29 @@ _F = TypeVar("_F", bound=Callable[..., Any])
 
 
 class _HistoryCaptureLowerer(ast.NodeTransformer):
-    """Rewrite ``env.<field>.history().capture()`` in model collectors."""
+    """Rewrite scalar and bounded indexed history captures."""
 
     def __init__(
         self,
         *,
         env_name: str,
         history_fields: Mapping[str, str],
-        register: Callable[[str, str], int],
+        indexed_history_fields: Mapping[str, int],
+        register: Callable[[str, str, int | None], int],
         label: str,
     ):
         self.env_name = env_name
         self.history_fields = dict(history_fields)
+        self.indexed_history_fields = dict(indexed_history_fields)
         self.register = register
         self.label = label
         self.changed = False
+        self._bounded_indices: dict[str, int] = {}
 
-    def _history_target(self, node: ast.AST) -> tuple[str, ast.expr, str]:
+    def _history_target(
+        self,
+        node: ast.AST,
+    ) -> tuple[str, ast.expr, str, ast.expr | None, int | None]:
         if not (isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
                 and node.func.attr == "history"
@@ -44,32 +50,83 @@ class _HistoryCaptureLowerer(ast.NodeTransformer):
             raise ValueError(
                 f"{self.label} uses capture() outside an entity history")
         target = node.func.value
+        index: ast.expr | None = None
+        base = target
         if isinstance(target, ast.Subscript):
-            raise ValueError(
-                f"{self.label} uses history capture on an indexed entity; "
-                "only scalar entity fields are supported")
-        if not (isinstance(target, ast.Attribute)
-                and isinstance(target.value, ast.Name)
-                and target.value.id == self.env_name):
+            base = target.value
+            index = target.slice
+        if not (isinstance(base, ast.Attribute)
+                and isinstance(base.value, ast.Name)
+                and base.value.id == self.env_name):
             raise ValueError(
                 f"{self.label} uses history capture on an unsupported target")
-        field = target.attr
+        field = base.attr
         binding = self.history_fields.get(field)
         if binding is None:
             raise ValueError(
                 f"{self.label} captures unknown history field '{field}'")
         if binding == "priorityqueue":
             raise ValueError(
-                f"{self.label} uses history capture on priority queues; "
-                "indexed histories are not supported")
-        return field, ast.copy_location(
-            ast.Attribute(
-                value=ast.Name(id=self.env_name, ctx=ast.Load()),
-                attr=field,
-                ctx=ast.Load(),
-            ),
-            target,
-        ), binding
+                f"{self.label} uses history capture on an indexed entity "
+                "(priority queues); indexed histories are not supported")
+        indexed_count = self.indexed_history_fields.get(field)
+        if index is not None:
+            if indexed_count is None:
+                raise ValueError(
+                    f"{self.label} uses history capture on an indexed "
+                    "entity; only component collection fields are "
+                    "supported")
+            if (isinstance(index, ast.Constant)
+                    and type(index.value) is int):
+                if not 0 <= index.value < indexed_count:
+                    raise ValueError(
+                        f"{self.label} history capture index "
+                        f"{index.value} is out of range for '{field}' "
+                        f"(length {indexed_count})")
+            elif (isinstance(index, ast.Name)
+                  and index.id in self._bounded_indices
+                  and self._bounded_indices[index.id] <= indexed_count):
+                pass
+            else:
+                raise ValueError(
+                    f"{self.label} uses an unbounded index for history "
+                    f"capture on '{field}'")
+        return field, copy.deepcopy(target), binding, index, indexed_count
+
+    @staticmethod
+    def _range_bound(node: ast.AST) -> int | None:
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "range"
+                and len(node.args) == 1
+                and not node.keywords):
+            return None
+        stop = node.args[0]
+        if not (isinstance(stop, ast.Constant)
+                and type(stop.value) is int
+                and stop.value >= 0):
+            return None
+        return stop.value
+
+    def visit_For(self, node: ast.For) -> ast.AST:
+        node.target = self.visit(node.target)
+        node.iter = self.visit(node.iter)
+        name: str | None = None
+        previous: int | None = None
+        if isinstance(node.target, ast.Name):
+            name = node.target.id
+            previous = self._bounded_indices.get(name)
+            bound = self._range_bound(node.iter)
+            if bound is not None:
+                self._bounded_indices[name] = bound
+        node.body = [self.visit(statement) for statement in node.body]
+        if name is not None:
+            if previous is None:
+                self._bounded_indices.pop(name, None)
+            else:
+                self._bounded_indices[name] = previous
+        node.orelse = [self.visit(statement) for statement in node.orelse]
+        return node
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         if (isinstance(node.func, ast.Attribute)
@@ -79,11 +136,12 @@ class _HistoryCaptureLowerer(ast.NodeTransformer):
                     and isinstance(value.func, ast.Attribute)
                     and value.func.attr == "history"):
                 return self.generic_visit(node)
-            field, entity, binding = self._history_target(node.func.value)
+            field, entity, binding, index, indexed_count = \
+                self._history_target(node.func.value)
             if node.args or node.keywords:
                 raise ValueError(
                     f"{self.label} history capture() takes no arguments")
-            slot = self.register(field, binding)
+            slot = self.register(field, binding, indexed_count)
             self.changed = True
             getter_name = {
                 "buffer": "_cimba_history_buffer",
@@ -109,7 +167,11 @@ class _HistoryCaptureLowerer(ast.NodeTransformer):
                             slice=ast.Constant(HISTORY_CAPTURE_TRIAL_FIELD),
                             ctx=ast.Load(),
                         ),
-                        ast.Constant(slot),
+                        (ast.Constant(slot) if index is None else ast.BinOp(
+                            left=ast.Constant(slot),
+                            op=ast.Add(),
+                            right=copy.deepcopy(index),
+                        )),
                         ast.Call(
                             func=ast.Name(id=getter_name, ctx=ast.Load()),
                             args=[entity],
@@ -207,7 +269,8 @@ def lower_history_capture_methods(
     *,
     model_name: str,
     history_fields: Mapping[str, str],
-    register: Callable[[str, str], int],
+    indexed_history_fields: Mapping[str, int],
+    register: Callable[[str, str, int | None], int],
 ) -> _F:
     names = set(fn.__code__.co_names)
     if "capture" not in names or "history" not in names:
@@ -227,6 +290,7 @@ def lower_history_capture_methods(
     lowerer = _HistoryCaptureLowerer(
         env_name=env_name,
         history_fields=history_fields,
+        indexed_history_fields=indexed_history_fields,
         register=register,
         label=label,
     )

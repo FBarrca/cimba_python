@@ -1617,6 +1617,24 @@ class Model:
         self._field_shapes: dict[str, tuple[int, ...]] = {
             f.name: f.shape for f in decls.fields.values()
             if f.shape is not None}
+        # Component-owned entity fields retain a collection axis even when
+        # the flattened dtype is scalar (a one-item collection).  The
+        # authoring path's ``[]`` marker is the stable indication that a
+        # field belongs to a component collection.
+        self._indexed_history_fields: dict[str, int] = {}
+        for root in self._component_roots.values():
+            for decl in root.walk():
+                if "[]" not in decl.item_display_name:
+                    continue
+                for field_decl in decl.decls.fields.values():
+                    flat_name = decl.direct_field_map[field_decl.name]
+                    if flat_name not in self.history_fields:
+                        continue
+                    count = len(decl.field_owners[field_decl.name])
+                    self._indexed_history_fields[flat_name] = max(
+                        count,
+                        self._indexed_history_fields.get(flat_name, 0),
+                    )
         self._components: dict[str, Component] = {}
         self._component_collections: dict[str, tuple[Component, ...]] = {}
         self._component_bindings: dict[str, tuple[Component, ...]] = {}
@@ -2185,16 +2203,37 @@ class Model:
             history_fields=self.history_fields,
         )
 
-    def _register_history_capture(self, name: str, binding: str) -> int:
+    def _next_capture_slot(self) -> int:
+        return sum(spec.slot_count for spec in (
+            *self._history_captures.values(),
+            *self._dataset_captures.values(),
+        ))
+
+    def _register_history_capture(
+        self,
+        name: str,
+        binding: str,
+        indexed_count: int | None = None,
+    ) -> int:
         spec = self._history_captures.get(name)
         if spec is not None:
+            if ((spec.shape is None) != (indexed_count is None)
+                    or (spec.shape is not None
+                        and spec.shape != (indexed_count,))):
+                raise ValueError(
+                    f"history field '{name}' is captured with inconsistent "
+                    "indexing")
             return spec.slot
-        slot = len(self._history_captures) + len(self._dataset_captures)
+        if indexed_count is not None and indexed_count < 1:
+            raise ValueError(
+                f"indexed history field '{name}' has no collection items")
+        slot = self._next_capture_slot()
         self._history_captures[name] = HistoryCaptureSpec(
             name=name,
             binding=binding,
             slot=slot,
             columns=3,
+            shape=(indexed_count,) if indexed_count is not None else None,
         )
         return slot
 
@@ -2202,12 +2241,13 @@ class Model:
         spec = self._dataset_captures.get(name)
         if spec is not None:
             return spec.slot
-        slot = len(self._history_captures) + len(self._dataset_captures)
+        slot = self._next_capture_slot()
         self._dataset_captures[name] = HistoryCaptureSpec(
             name=name,
             binding=binding,
             slot=slot,
             columns=1,
+            shape=None,
         )
         return slot
 
@@ -2216,6 +2256,7 @@ class Model:
             fn,
             model_name=self.name,
             history_fields=self.history_fields,
+            indexed_history_fields=self._indexed_history_fields,
             register=self._register_history_capture,
         )
 
@@ -3717,17 +3758,17 @@ class Experiment:
         ordered_datasets = sorted(dataset_captures, key=lambda spec: spec.slot)
         self._history_capture_specs = tuple(ordered_captures)
         self._dataset_capture_specs = tuple(ordered_datasets)
-        self._capture_slot_count = (
-            len(self._history_capture_specs) + len(self._dataset_capture_specs)
+        self._capture_slot_count = sum(
+            spec.slot_count
+            for spec in (*self._history_capture_specs,
+                         *self._dataset_capture_specs)
         )
         self._history_capture_names = tuple(
             spec.name for spec in self._history_capture_specs)
         self._dataset_capture_names = tuple(
             spec.name for spec in self._dataset_capture_specs)
-        self._history_capture_data: dict[
-            str, tuple[np.ndarray, ...]] | None = None
-        self._dataset_capture_data: dict[
-            str, tuple[np.ndarray, ...]] | None = None
+        self._history_capture_data: dict[str, Any] | None = None
+        self._dataset_capture_data: dict[str, Any] | None = None
 
     def run(self) -> int:
         """Run all trials in parallel, in place. Returns the number of
@@ -3829,20 +3870,49 @@ class Experiment:
     def __len__(self) -> int:
         return self.trials.size
 
-    def histories(self, name: str) -> tuple[np.ndarray, ...]:
-        """Captured raw history arrays for every trial."""
+    def histories(
+        self,
+        name: str,
+    ) -> (tuple[np.ndarray, ...]
+          | tuple[tuple[np.ndarray, ...], ...]):
+        """Captured raw history arrays for every trial.
+
+        Indexed component captures add an inner tuple containing one array
+        per collection item in deterministic collection order.
+        """
         if name not in self._history_capture_names:
             raise KeyError(f"unknown captured history: {name}")
         if self._history_capture_data is None:
             raise RuntimeError("run() the experiment before reading histories")
         return self._history_capture_data[name]
 
-    def history(self, name: str, *, trial: int = 0) -> np.ndarray:
-        """Captured raw history array for one trial."""
+    def history(
+        self,
+        name: str,
+        *,
+        trial: int = 0,
+        index: int | None = None,
+    ) -> np.ndarray:
+        """Captured raw history array for one trial and collection item."""
         rows = self.histories(name)
         if trial < 0 or trial >= len(rows):
             raise IndexError("history trial index out of range")
-        return rows[trial]
+        spec = next(
+            spec for spec in self._history_capture_specs
+            if spec.name == name
+        )
+        if spec.shape is None:
+            if index is not None:
+                raise TypeError(f"history '{name}' is not indexed")
+            return rows[trial]
+        if index is None:
+            raise TypeError(
+                f"history '{name}' requires an index for indexed capture")
+        if type(index) is not int:
+            raise TypeError("history index must be an int")
+        if index < 0 or index >= spec.shape[0]:
+            raise IndexError("history collection index out of range")
+        return rows[trial][index]
 
     def datasets(self, name: str) -> tuple[np.ndarray, ...]:
         """Captured raw dataset arrays for every trial."""

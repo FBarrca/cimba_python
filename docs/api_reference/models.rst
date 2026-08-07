@@ -173,7 +173,9 @@ If a model-level collector declares ``env.<entity>.history().capture()``,
 ``exp.history("field", trial=i)`` returns that trial's raw time-series rows as
 a NumPy array with columns ``time``, ``value``, and ``duration``.
 ``exp.histories("field")`` returns one such array per trial, aligned with the
-experiment row order.
+experiment row order. For fields owned by a component collection, indexed
+captures return one inner array per collection item; use
+``exp.history("field", trial=i, index=j)`` to select one item.
 
 If a model-level collector declares ``env.<dataset>.capture()``,
 ``exp.dataset("field", trial=i)`` returns that trial's raw dataset samples as a

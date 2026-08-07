@@ -149,6 +149,14 @@ Each returned array is ``float64`` with columns ``time``, ``value``, and
 ``"waiting_room"`` or ``"station__queue"``. The arrays are trial-local and
 aligned with the experiment row order.
 
+For entity fields owned by a fixed component collection, the collection
+dimension is retained.  For example, capturing
+``env.counters[index].line.history()`` makes ``exp.histories("counters__line")``
+a tuple of trials, each containing one history array per counter in
+collection order.  Select one item directly with
+``exp.history("counters__line", trial=0, index=index)``.  The per-item arrays
+use the same three columns as scalar captures.
+
 For text reports and text-mode plots, the no-suffix methods above (both
 dataset and ``.history()`` methods) print to stdout for console and notebook
 use; the ``*_file()`` variants write to a path handle created with
