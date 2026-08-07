@@ -145,12 +145,13 @@ from ._graph import (ProcessDAG, ProcessDAGBlock, ProcessDAGEdge,
                      ProcessDAGNode)
 from ._model import (CompilationCacheStats, CompilationPlan,
                      CompilationStatus,
-                     ComponentFieldSchema, Experiment, Model, Struct,
-                     trace_rng)
+                     ComponentFieldSchema, Experiment, ExperimentResults,
+                     Model, Struct, trace_rng)
 
 __all__ = [
     "Model", "Component", "ComponentFieldSchema", "CompilationPlan",
-    "CompilationStatus", "CompilationCacheStats", "Experiment", "Env",
+    "CompilationStatus", "CompilationCacheStats", "Experiment",
+    "ExperimentResults", "Env",
     "Handle",
     "Param", "Output", "State", "FloatState", "Queue", "Resource", "Pool",
     "Store", "Dataset", "Condition", "Predicate", "Event", "Processes",

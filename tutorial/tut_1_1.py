@@ -47,7 +47,7 @@ def main() -> None:
     failures = exp.run()
     if failures:
         raise RuntimeError(f"{failures} trial(s) failed")
-    avg = float(exp["avg_queue_length"][0])
+    avg = float(exp.results.avg_queue_length[0])
     print(f"Average queue length over the first 10 time units: {avg:.6f}")
 
 

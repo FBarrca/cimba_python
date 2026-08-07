@@ -47,7 +47,7 @@ def main() -> None:
     failures = exp.run()
     if failures:
         raise RuntimeError(f"{failures} trial(s) failed")
-    avg = float(exp["avg_queue_length"][0])
+    avg = float(exp.results.avg_queue_length[0])
     print("Theory predicts an average M/M/1 waiting-queue length of 2.25")
     print(f"Simulation result: {avg:.6f}")
 

@@ -90,7 +90,7 @@ exp = model.experiment(
 )
 exp.run()
 
-print(exp["avg_queue_length"].mean())
+print(exp.results.avg_queue_length.mean())
 ```
 
 More examples, tutorials, background notes, and the API reference are in the

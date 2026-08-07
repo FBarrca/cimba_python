@@ -24,9 +24,8 @@ def placeholder(env: HarborTemplate):
 def main() -> None:
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=1)
     exp.run()
-    print(f"template result: {exp['result'][0]:.1f}")
+    print(f"template result: {exp.results.result[0]:.1f}")
 
 
 if __name__ == "__main__":
     main()
-

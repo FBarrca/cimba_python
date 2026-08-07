@@ -255,7 +255,7 @@ def main() -> None:
           f"{wall:.2f} s, {fails} failed\n")
 
     def avg(field: str) -> float:
-        return float(np.mean(exp[field]))
+        return float(np.mean(getattr(exp.results, field)))
 
     print(f"{'':>10} {'grabbed':>10} {'stolen':>10} {'preempted':>10} "
           f"{'interrupted':>11}")
@@ -270,7 +270,7 @@ def main() -> None:
     print(f"cheese in use: {avg('cheese_in_use'):.1f} of "
           f"{CHEESE_AMOUNT} cubes on average")
 
-    errors = int(exp["accounting_errors"].sum())
+    errors = int(exp.results.accounting_errors.sum())
     print(f"accounting errors (held vs pool_held): {errors}")
     assert errors == 0, "cheese accounting mismatch!"
 

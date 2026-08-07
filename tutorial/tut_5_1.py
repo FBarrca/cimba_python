@@ -193,9 +193,9 @@ def read_timeseries(path: Path) -> tuple[np.ndarray, np.ndarray]:
 def station_values(exp: sim.Experiment, field: str) -> np.ndarray:
     return np.array(
         [
-            exp[f"station_1__{field}"][0],
-            exp[f"station_2__{field}"][0],
-            exp[f"station_3__{field}"][0],
+            getattr(getattr(exp.results, "station_1"), field)[0],
+            getattr(getattr(exp.results, "station_2"), field)[0],
+            getattr(getattr(exp.results, "station_3"), field)[0],
         ],
         dtype=float,
     )
@@ -207,25 +207,25 @@ def print_results(exp: sim.Experiment) -> None:
 
     print("--- Simulation Finished ---")
     print("\n--- Simulation Results Analysis (Cimba) ---")
-    print(f"Total parts produced: {int(exp['total_parts_produced'][0])}")
+    print(f"Total parts produced: {int(exp.results.total_parts_produced[0])}")
     print(
         "Average cycle time per part: "
-        f"{exp['avg_cycle_time'][0]:.2f} minutes"
+        f"{exp.results.avg_cycle_time[0]:.2f} minutes"
     )
     print(
         "Maximum cycle time per part: "
-        f"{exp['max_cycle_time'][0]:.2f} minutes"
+        f"{exp.results.max_cycle_time[0]:.2f} minutes"
     )
-    print(f"Throughput rate: {exp['throughput_rate'][0]:.2f} parts per minute")
+    print(f"Throughput rate: {exp.results.throughput_rate[0]:.2f} parts per minute")
     for i in range(NUM_STATIONS):
         print(
             f"{STATION_NAMES[i]} - Average Wait Time: "
             f"{wait_times[i]:.2f} minutes"
         )
         print(f"{STATION_NAMES[i]} - Utilization: {utilization[i]:.2f}%")
-    print(f"Average number in system: {exp['avg_number_in_system'][0]:.2f}")
-    print(f"Maximum number in system: {exp['max_number_in_system'][0]:.0f}")
-    print(f"Parts still in system: {exp['final_number_in_system'][0]:.0f}")
+    print(f"Average number in system: {exp.results.avg_number_in_system[0]:.2f}")
+    print(f"Maximum number in system: {exp.results.max_number_in_system[0]:.0f}")
+    print(f"Parts still in system: {exp.results.final_number_in_system[0]:.0f}")
 
 
 def load_pyplot():
@@ -279,7 +279,7 @@ def plot_results(exp: sim.Experiment, raw_dir: Path) -> None:
 
     plt.figure(figsize=(10, 6))
     plt.hist(cycle_times, bins=20, color="skyblue", edgecolor="black")
-    avg_cycle_time = exp["avg_cycle_time"][0]
+    avg_cycle_time = exp.results.avg_cycle_time[0]
     plt.axvline(
         avg_cycle_time,
         color="red",
@@ -329,7 +329,7 @@ def plot_results(exp: sim.Experiment, raw_dir: Path) -> None:
 
     plt.figure(figsize=(12, 6))
     plt.step(time_points, parts_in_system, where="post", color="dodgerblue")
-    avg_number = exp["avg_number_in_system"][0]
+    avg_number = exp.results.avg_number_in_system[0]
     plt.axhline(
         avg_number,
         color="blue",

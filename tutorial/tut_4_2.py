@@ -284,19 +284,19 @@ def main() -> None:
     print(f"{len(exp)} trials of {HOURS_PER_YEAR:.0f} h in {wall:.2f} s, "
           f"{fails} failed\n")
 
-    n_sm, _ = ci95(exp["n_small"])
-    n_lg, _ = ci95(exp["n_large"])
-    t_sm, t_sm_w = ci95(exp["avg_time_small"])
-    t_lg, t_lg_w = ci95(exp["avg_time_large"])
+    n_sm, _ = ci95(exp.results.n_small)
+    n_lg, _ = ci95(exp.results.n_large)
+    t_sm, t_sm_w = ci95(exp.results.avg_time_small)
+    t_lg, t_lg_w = ci95(exp.results.avg_time_large)
     print("Time in system (hours):")
     print(f"  small ships: {t_sm:6.2f} +/- {t_sm_w:.2f}"
           f"   ({n_sm:,.0f} departures/trial)")
     print(f"  large ships: {t_lg:6.2f} +/- {t_lg_w:.2f}"
           f"   ({n_lg:,.0f} departures/trial)")
 
-    tu, tu_w = ci95(exp["tug_util"])
-    bs, bs_w = ci95(exp["berth_small_util"])
-    bl, bl_w = ci95(exp["berth_large_util"])
+    tu, tu_w = ci95(exp.results.tug_util)
+    bs, bs_w = ci95(exp.results.berth_small_util)
+    bl, bl_w = ci95(exp.results.berth_large_util)
     print("\nMean units in use:")
     print(f"  tugs:         {tu:5.2f} +/- {tu_w:.2f} of 10")
     print(f"  small berths: {bs:5.2f} +/- {bs_w:.2f} of 6")

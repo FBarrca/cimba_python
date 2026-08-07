@@ -327,11 +327,11 @@ def main() -> int:
 
     print(
         "Average on-hand by node:",
-        np.round(exp["facilities__avg_on_hand"].mean(axis=0), 3),
+        np.round(exp.results.facilities.avg_on_hand.mean(axis=0), 3),
     )
     print(
         "Service level by node:",
-        np.round(exp["facilities__service_level"].mean(axis=0), 4),
+        np.round(exp.results.facilities.service_level.mean(axis=0), 4),
     )
     return 0
 

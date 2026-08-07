@@ -169,6 +169,61 @@ level; failed trials (NaN) are excluded per output. ``exp.replications`` and
 ``exp.swept`` expose the layout (trial order is design-point-major with
 replications innermost).
 
+Typed result namespaces
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Experiments also expose retained structured results through ``exp.results``.
+Output paths follow the model's component structure, so callers do not need to
+construct flattened ``__`` names:
+
+.. code-block:: python
+
+   exp.run()
+   queue_means = exp.results.counters.mean_queue_length
+   served = exp.results.customers_served
+
+Output leaves are the same NumPy trial-column views returned by
+``exp["..."]``; dtype, replication order, and component collection axes are
+unchanged. A component collection therefore remains one array with its
+collection dimension, rather than becoming one attribute per item.
+
+Outputs, captured datasets, and captured histories share the model's object
+tree. Callers do not need to know which storage mechanism produced a result,
+and a result declared inside a component is found through that component:
+
+.. code-block:: python
+
+   all_wait_samples = exp.results.waits
+   all_station_samples = exp.results.station.samples
+   all_queue_rows = exp.results.station.queue
+
+Dataset leaves match ``exp.datasets(name)`` and history leaves match
+``exp.histories(name)``: both are tuples aligned with experiment trials, with
+an additional inner tuple for indexed component histories. The existing
+``dataset()``, ``datasets()``, ``history()``, and ``histories()`` methods keep
+their original behavior and error handling. Output views share the trial
+table's storage; captured datasets and histories are the copied arrays already
+returned by their existing methods.
+
+The runtime namespaces discover declared/captured names through ``dir()`` and
+raise a path-aware ``AttributeError`` for unknown names. Dynamically named
+outputs remain available through the string-key API, which is the general
+fallback for names not represented by the namespace.
+
+For exact model-specific static completion, parameterize ``Model`` with a
+result ``Protocol`` describing this shared object tree. Pyright then propagates
+that schema to ``model.experiment().results``::
+
+   class QueueResults(Protocol):
+       customers_served: NDArray[np.float64]
+       waits: tuple[NDArray[np.float64], ...]
+       counters: CounterResults
+
+   class QueueModel(sim.Model[QueueResults]):
+       ...
+
+Unparameterized models continue to use the general dynamic result namespace.
+
 If a model-level collector declares ``env.<entity>.history().capture()``,
 ``exp.history("field", trial=i)`` returns that trial's raw time-series rows as
 a NumPy array with columns ``time``, ``value``, and ``duration``.

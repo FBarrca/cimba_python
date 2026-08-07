@@ -55,7 +55,7 @@ def run_mm1_trial(
     failures = exp.run()
     if failures:
         raise RuntimeError(f"{failures} trial(s) failed")
-    return float(exp["avg_queue_length"][0])
+    return float(exp.results.avg_queue_length[0])
 
 
 def main() -> None:

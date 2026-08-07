@@ -127,13 +127,13 @@ Let us try this:
         failures = exp.run()
         if failures:
             raise RuntimeError(f"{failures} trial(s) failed")
-        avg = float(exp["avg_queue_length"][0])
+        avg = float(exp.results.avg_queue_length[0])
         print(f"Average queue length over the first 10 time units: {avg:.6f}")
 
 There is one utilization value and one replication, so this experiment has one
 trial. The seed makes the random stream reproducible. ``exp.run()`` executes the
 trial table and returns the number of failed trials. Outputs are available by
-name, so ``exp["avg_queue_length"]`` returns an array with one element per
+name, so ``exp.results.avg_queue_length`` returns an array with one element per
 trial.
 
 We can now run ``tutorial/tut_1_1.py`` and see what happens. In the default
@@ -369,7 +369,7 @@ to one million time units and skip the first thousand time units as warmup:
     failures = exp.run()
     if failures:
         raise RuntimeError(f"{failures} trial(s) failed")
-    print(float(exp["avg_queue_length"][0]))
+    print(float(exp.results.avg_queue_length[0]))
 
 Time-weighted entity summaries are the right tool for levels and utilization:
 ``env.<queue>.mean_level()`` for queues, ``env.<resource>.mean_in_use()`` for
@@ -419,15 +419,15 @@ and also records sampled interarrival times in a dataset:
         env.interarrival_times.capture()
 
     exp.run()
-    queue_history = exp.history("queue")
-    interarrivals = exp.dataset("interarrival_times")
+    queue_history = exp.results.queue
+    interarrivals = exp.results.interarrival_times
 
 ``queue_history`` is a NumPy array with three columns: simulation time, queue
 level, and the duration for which that level held. With multiple replications,
-``exp.histories("queue")`` returns one array per trial, in experiment row
-order. ``interarrivals`` is a one-dimensional NumPy array containing the raw
-samples added to that trial's dataset. With multiple replications,
-``exp.datasets("interarrival_times")`` returns one sample array per trial.
+``exp.results.queue`` returns one array per trial, in experiment row order.
+``interarrivals`` is a one-dimensional NumPy array containing the raw samples
+added to that trial's dataset. With multiple replications,
+``exp.results.interarrival_times`` returns one sample array per trial.
 
 The explicit history form also gives access to text reports and diagnostic
 plots. During a single-trial debugging run, print the queue report and a partial
@@ -543,9 +543,9 @@ customer's time in system:
         env.wait_std = env.waits.std()
         env.waits.capture()
 
-After ``exp.run()``, ``exp.dataset("waits", trial=0)`` returns that trial's
-raw samples as a one-dimensional NumPy array. ``exp.datasets("waits")`` returns
-one array per trial. Datasets also provide count, minimum, and maximum. They
+After ``exp.run()``, ``exp.results.waits[0]`` returns that trial's raw samples
+as a one-dimensional NumPy array, and ``exp.results.waits`` returns one array
+per trial. Datasets also provide count, minimum, and maximum. They
 are useful for per-agent outcomes; time-weighted summaries are useful for
 states that persist between event times. Datasets also have the same
 text-reporting style:
@@ -627,8 +627,9 @@ outside the model.
 
 Model callbacks can read component fields with natural dotted access such as
 ``env.station.queue``. Cimba lowers that access to the flat internal field
-before compilation. In the experiment table, component fields still use
-flattened names for now, such as ``station__queue``.
+before compilation. Results expose the same structure through dotted access,
+such as ``exp.results.station.queue``; the underlying experiment table still
+uses flattened names such as ``station__queue`` for low-level inspection.
 
 Repeated structures can be grouped the same way with standard Python list
 annotations:
@@ -656,8 +657,9 @@ annotations:
 
 Model callbacks can index the collection with
 ``env.attractions[i].queues[j]``. Cimba lowers that to flattened fields and
-generated offset arrays; experiment fields still use names such as
-``attractions__queues`` and ``attractions__server_state``.
+generated offset arrays; the shared result object preserves the object path as
+``exp.results.attractions.queues`` and ``exp.results.attractions.server_state``
+while ``exp.trials`` retains names such as ``attractions__queues``.
 
 Components can also contain other components. This is useful when a natural
 object has smaller named parts:
@@ -690,9 +692,9 @@ object has smaller named parts:
             self.servers.served += 1
             # serve one visitor from q ...
 
-Nested fields use the same flattened public naming convention:
-``env.attractions[i].queues.line[j]`` is stored under
-``attractions__queues__line``.
+Nested fields retain their object path in results: ``env.attractions[i].queues.line[j]``
+is available as ``exp.results.attractions.queues.line``. The low-level trial
+table stores the corresponding field under ``attractions__queues__line``.
 
 .. code-block:: python
 
@@ -713,7 +715,7 @@ Nested fields use the same flattened public naming convention:
         failures = exp.run()
         if failures:
             raise RuntimeError(f"{failures} trial(s) failed")
-        return float(exp["avg_queue_length"][0])
+        return float(exp.results.avg_queue_length[0])
 
 Parallelization
 ^^^^^^^^^^^^^^^
@@ -749,7 +751,7 @@ values are arrays, and ``replications`` repeats every parameter combination:
     if failures:
         raise RuntimeError(f"{failures} trial(s) failed")
 
-    values = exp["avg_queue_length"].reshape(len(rhos), replications)
+    values = exp.results.avg_queue_length.reshape(len(rhos), replications)
 
 When the run is finished, summarize each row:
 
@@ -1905,7 +1907,7 @@ Summarize outputs with NumPy:
         half_width = 1.96 * values.std(ddof=1) / np.sqrt(values.size)
         return float(values.mean()), float(half_width)
 
-    mean, half_width = ci95(exp["avg_time_large"])
+    mean, half_width = ci95(exp.results.avg_time_large)
     print(f"large ships: {mean:.2f} +/- {half_width:.2f} hours")
 
 For the full single-trial report style, add the other entity histories in the

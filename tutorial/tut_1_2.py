@@ -61,10 +61,10 @@ def main() -> None:
     failures = exp.run()
     if failures:
         raise RuntimeError(f"{failures} trial(s) failed")
-    avg = float(exp["avg_queue_length"][0])
-    avg_interarrival = float(exp["avg_interarrival_time"][0])
-    queue_history = exp.history("queue")
-    interarrivals = exp.dataset("interarrival_times")
+    avg = float(exp.results.avg_queue_length[0])
+    avg_interarrival = float(exp.results.avg_interarrival_time[0])
+    queue_history = exp.results.queue
+    interarrivals = exp.results.interarrival_times
     print(f"Simulation stopped at t=10.0, average queue length: {avg:.6f}")
     print(f"Average sampled interarrival time: {avg_interarrival:.6f}")
     print("First queue history rows: time, level, duration")

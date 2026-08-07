@@ -64,7 +64,7 @@ def sweep_rho(
     failures = exp.run()
     if failures:
         raise RuntimeError(f"{failures} trial(s) failed")
-    return rhos, exp["avg_queue_length"].reshape(len(rhos), replications)
+    return rhos, exp.results.avg_queue_length.reshape(len(rhos), replications)
 
 
 def print_sweep(rhos: np.ndarray, values: np.ndarray) -> None:

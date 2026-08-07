@@ -31,8 +31,9 @@ import types as pytypes
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import (TYPE_CHECKING, Any, Self, TypedDict, TypeVar, get_type_hints,
-                    overload)
+from types import MappingProxyType
+from typing import (TYPE_CHECKING, Any, Generic, Self, TypedDict, TypeVar,
+                    cast, get_type_hints, overload)
 
 import llvmlite
 import numba
@@ -1503,7 +1504,167 @@ class _RuntimeTextHandleLowerer(ast.NodeTransformer):
         return ast.copy_location(converted[0], node)
 
 
-class Model:
+_ExperimentResultT = TypeVar(
+    "_ExperimentResultT", default="ExperimentResults")
+
+
+@dataclass(frozen=True)
+class _ResultLeaf:
+    family: str
+    flattened_name: str
+
+
+class _ResultNamespace:
+    """Read-only attribute access over the model's structured results."""
+
+    __slots__ = ("_experiment", "_entries", "_path")
+
+    def __init__(
+        self,
+        experiment: "Experiment[Any]",
+        entries: Mapping[str, "_ResultLeaf | _ResultNamespace"],
+        path: str,
+    ) -> None:
+        object.__setattr__(self, "_experiment", experiment)
+        object.__setattr__(self, "_entries", MappingProxyType(dict(entries)))
+        object.__setattr__(self, "_path", path)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError(f"result namespace '{self._path}' is read-only")
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        entry = self._entries.get(name)
+        if entry is None:
+            raise AttributeError(
+                f"unknown result '{self._path}.{name}'; available names: "
+                f"{', '.join(sorted(self._entries)) or '<none>'}"
+            )
+        if isinstance(entry, _ResultNamespace):
+            return entry
+        return self._experiment._result_value(entry)
+
+    def __dir__(self) -> list[str]:
+        return sorted(set(object.__dir__(self)) | set(self._entries))
+
+    def __repr__(self) -> str:
+        names = ", ".join(sorted(self._entries))
+        return f"<{type(self).__name__} {self._path}: {names}>"
+
+
+class ExperimentResults(_ResultNamespace):
+    """The model-shaped structured results retained by an experiment.
+
+    Outputs, captured datasets, and captured histories share this one object
+    tree. Users may parameterize ``Model`` with a Protocol describing the
+    exact tree for IDE completion and static checking.
+    """
+
+
+def _insert_result_leaf(
+    tree: dict[str, Any],
+    parts: Sequence[str],
+    leaf: _ResultLeaf,
+) -> None:
+    """Insert a path, retaining structural component branches on conflicts."""
+    if not parts or any(not part for part in parts):
+        return
+    node = tree
+    for part in parts[:-1]:
+        existing = node.get(part)
+        if isinstance(existing, _ResultLeaf):
+            return
+        if existing is None:
+            existing = {}
+            node[part] = existing
+        node = existing
+    final = parts[-1]
+    if isinstance(node.get(final), dict):
+        return
+    node.setdefault(final, leaf)
+
+
+def _component_result_path(schema: ComponentFieldSchema) -> tuple[str, ...]:
+    return tuple(part for part in schema.path.replace("[]", "").split(".")
+                 if part)
+
+
+def _result_tree(experiment: "Experiment[Any]") -> dict[str, Any]:
+    """Merge outputs and captures into the model's nested object tree."""
+    model = experiment.model
+    tree: dict[str, Any] = {}
+    schemas = model.component_schema()
+    if not isinstance(schemas, tuple):
+        schemas = (schemas,)
+
+    component_output_names: set[str] = set()
+    for schema in schemas:
+        if schema.kind != "output":
+            continue
+        component_output_names.add(schema.flattened_name)
+        _insert_result_leaf(
+            tree,
+            _component_result_path(schema),
+            _ResultLeaf("outputs", schema.flattened_name),
+        )
+    for name in model.outputs:
+        if name not in component_output_names:
+            _insert_result_leaf(
+                tree, (name,), _ResultLeaf("outputs", name))
+
+    def add_captures(
+        family: str,
+        names: Sequence[str],
+        kinds: set[str],
+    ) -> None:
+        schema_paths: dict[str, list[tuple[str, ...]]] = {}
+        for schema in schemas:
+            if schema.kind in kinds:
+                schema_paths.setdefault(schema.flattened_name, []).append(
+                    _component_result_path(schema))
+        for name in names:
+            paths = schema_paths.get(name, [(name,)])
+            for path in paths:
+                _insert_result_leaf(tree, path, _ResultLeaf(family, name))
+
+    add_captures(
+        "datasets", experiment._dataset_capture_names, {"dataset"})
+    add_captures(
+        "histories", experiment._history_capture_names,
+        {"queue", "resource", "pool", "store", "pqueues"})
+    return tree
+
+
+def _result_namespaces(
+    experiment: "Experiment[Any]",
+    tree: Mapping[str, Any],
+    path: str,
+) -> Mapping[str, _ResultLeaf | _ResultNamespace]:
+    entries: dict[str, _ResultLeaf | _ResultNamespace] = {}
+    for name, value in tree.items():
+        if isinstance(value, dict):
+            entries[name] = _ResultNamespace(
+                experiment,
+                _result_namespaces(experiment, value, f"{path}.{name}"),
+                f"{path}.{name}",
+            )
+        else:
+            entries[name] = value
+    return entries
+
+
+def _build_result_namespace(
+    experiment: "Experiment[Any]",
+) -> ExperimentResults:
+    return ExperimentResults(
+        experiment,
+        _result_namespaces(experiment, _result_tree(experiment), "results"),
+        "results",
+    )
+
+
+class Model(Generic[_ExperimentResultT]):
     """A simulation model. Subclass it and declare the env fields as
     annotations (Param, Output, Queue, Resource, Pool, Store, Dataset,
     Condition, State, Predicate) -- the subclass then types `env` in
@@ -3580,7 +3741,7 @@ class Model:
                    start_time: float = 0.0,
                    seed: int | None = None,
                    **param_values: "ArrayLike | Callable[..., ArrayLike]",
-                   ) -> "Experiment":
+                   ) -> "Experiment[_ExperimentResultT]":
         """Build an experiment: the cross product of the swept parameter
         values (scalars are held fixed), replicated with distinct seeds.
         Omitted Params use their declaration defaults; Params without a
@@ -3729,8 +3890,8 @@ class Model:
                               self._dataset_captures.values()))
 
 
-class Experiment:
-    model: Model
+class Experiment(Generic[_ExperimentResultT]):
+    model: Model[_ExperimentResultT]
     #: One structured record per trial; outputs are filled in by run().
     trials: np.ndarray
     #: Number of failed trials in the last run(), or None before it.
@@ -3740,8 +3901,11 @@ class Experiment:
     replications: int
     #: Names of the parameters swept over more than one value.
     swept: tuple[str, ...]
+    #: Typed/dynamic access to retained outputs, datasets, and histories.
+    results: _ExperimentResultT
 
-    def __init__(self, model: Model, trials: np.ndarray, trial_addr: int,
+    def __init__(self, model: Model[_ExperimentResultT],
+                 trials: np.ndarray, trial_addr: int,
                  keepalive: Sequence[np.ndarray] = (),
                  replications: int = 1, swept: Sequence[str] = (),
                  history_captures: Sequence[HistoryCaptureSpec] = (),
@@ -3769,6 +3933,19 @@ class Experiment:
             spec.name for spec in self._dataset_capture_specs)
         self._history_capture_data: dict[str, Any] | None = None
         self._dataset_capture_data: dict[str, Any] | None = None
+        # The concrete runtime object is the dynamic fallback. A parameterized
+        # Model supplies a narrower static result schema to type checkers.
+        self.results = cast(_ExperimentResultT,
+                            _build_result_namespace(self))
+
+    def _result_value(self, leaf: _ResultLeaf) -> Any:
+        if leaf.family == "outputs":
+            return self.trials[leaf.flattened_name]
+        if leaf.family == "datasets":
+            return self.datasets(leaf.flattened_name)
+        if leaf.family == "histories":
+            return self.histories(leaf.flattened_name)
+        raise ValueError(f"unknown result family: {leaf.family}")
 
     def run(self) -> int:
         """Run all trials in parallel, in place. Returns the number of

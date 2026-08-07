@@ -94,12 +94,16 @@ trials:
    if failures:
        raise RuntimeError(f"{failures} trial(s) failed")
 
-   average_waiting = exp["avg_waiting"]
-   completions = exp["completed"]
+   average_waiting = exp.results.avg_waiting
+   completions = exp.results.completed
    arrival_rates = exp["arrival_rate"]
 
 The arrays are aligned by trial row. That means ``average_waiting[i]`` belongs
 to the same trial as ``arrival_rates[i]`` and ``completions[i]``.
+Nested component results retain their object path under ``exp.results``.
+Declared datasets and entity histories also appear there, but their model code
+must call ``capture()`` before the retained values can be read. String lookup
+remains available for parameter columns and dynamically named fields.
 
 Summarizing across replications
 -------------------------------

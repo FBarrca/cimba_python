@@ -59,7 +59,7 @@ def main() -> None:
     failures = exp.run()
     if failures:
         raise RuntimeError(f"{failures} trial(s) failed")
-    avg = float(exp["avg_queue_length"][0])
+    avg = float(exp.results.avg_queue_length[0])
     print(f"Average queue length with user logging enabled: {avg:.6f}")
     cimba.logger_flags_off(USERFLAG1)
 
