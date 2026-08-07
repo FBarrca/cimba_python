@@ -39,7 +39,7 @@ That gives datasets and outputs two distinct levels of meaning:
 
 * during a trial, ``env.waits.add(value)`` adds another observation to
   that trial's dataset;
-* after the trial, ``@model.collect`` or a component ``@sim.collect`` usually
+* after the trial, a model or component ``@sim.collect`` usually
   reduces that dataset to scalar ``sim.Output`` fields, such as
   ``env.waits.mean()`` or ``env.waits.count()``;
 * after ``exp.run()``, ``exp["avg_wait"]`` is an array of those scalar outputs,
@@ -58,21 +58,28 @@ The measurement window
 ``duration`` is the measured part of the trial. Together they are the usual
 way to stop steady-state models with infinite process loops.
 
-The generated trial starts the registered processes, opens the recording window
+The generated trial starts the class-declared processes, opens the recording window
 after warmup, closes it after duration, runs the collector, and stops remaining
 processes.
 
 Collectors
 ----------
 
-Use ``@model.collect`` to write outputs after the measured run:
+Use ``@sim.collect`` in the model class to write outputs after the measured
+run:
 
 .. code-block:: python
 
-   @model.collect
-   def collect_stats(env: Clinic):
-       env.completed = float(env.served)
-       env.avg_waiting = env.waiting_room.mean_level()
+   class Clinic(sim.Model):
+       completed: sim.Output
+       avg_waiting: sim.Output
+       waiting_room: sim.Queue
+       served: sim.State
+
+       @sim.collect
+       def collect_stats(env: "Clinic"):
+           env.completed = float(env.served)
+           env.avg_waiting = env.waiting_room.mean_level()
 
 The collector is still part of the compiled model. It should read trial-local
 state and write ``sim.Output`` fields. Distribution statistics of dataset

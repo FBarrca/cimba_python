@@ -1,7 +1,7 @@
 Process Graphs
 ==============
 
-``model.process_dag()`` infers a graph from registered process source code. It
+``model.process_dag()`` infers a graph from class-declared process source code. It
 is a modeling aid: useful for review, documentation, and spotting unexpected
 dependencies before a model becomes hard to reason about.
 

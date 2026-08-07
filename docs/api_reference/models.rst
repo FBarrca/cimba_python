@@ -11,8 +11,8 @@ subclass whose annotated fields are typed by their simulation role:
 ``Output``, ``State``, ``FloatState``, ``Const``, ``Queue``, ``Resource``,
 ``Pool``, ``Store``, ``Dataset``, ``Condition``, ``Predicate``, ``Event``,
 ``Processes``, ``PQueues``, ``Ref``, ``Refs``, ``Struct``,
-``Trace``, ``capacity()``, ``count()``, ``process()``, ``collect()``,
-``function()``.
+``Trace``, ``capacity()``, ``count()``, ``process()``, ``predicate()``,
+``event()``, ``collect()``, ``function()``.
 
 ``sim.Param`` values are expanded into parameter combinations, ``sim.Output``
 values are collected after each trial, ``sim.State`` and ``sim.FloatState`` hold
@@ -39,6 +39,38 @@ field name.
 
    model = Clinic("clinic")
 
+Breaking change: callbacks live on the class
+--------------------------------------------
+
+Model callbacks are class declarations. The former instance-bound decorators
+have been removed without compatibility aliases. Move each callback into the
+``sim.Model`` subclass and use the exported marker:
+
+.. code-block:: python
+
+   # Before (no longer supported)
+   model = Clinic("clinic")
+
+   @model.process
+   def arrivals(env: Clinic):
+       ...
+
+.. code-block:: python
+
+   # Now
+   class Clinic(sim.Model):
+       @sim.process
+       def arrivals(env: "Clinic"):
+           ...
+
+   model = Clinic("clinic")
+
+The same change applies to ``collect``, ``predicate``, and ``event``. If a
+callback publishes into a declared ``sim.Processes``, ``sim.Predicate``, or
+``sim.Event`` field, give the callback a distinct method name and bind it with
+``field="field_name"``. Behavioral variants should be subclasses; direct
+``sim.Model(...)`` construction is supported only for callback-free models.
+
 Components
 ----------
 
@@ -48,7 +80,7 @@ model construction, and model callbacks can read component fields with
 ``env.retailer.orders``. Component fields are exposed in experiments with
 flattened names such as ``retailer__orders``. Methods decorated with
 top-level ``@sim.collect`` run once per instance at the end of each trial,
-before the model-level ``@model.collect`` callback, typically assigning the
+before the model-level ``@sim.collect`` callback, typically assigning the
 component's ``sim.Output`` fields.
 
 Read-only synchronous behavior is declared with top-level ``@sim.function``.
@@ -100,8 +132,9 @@ has that process handle.
 Compilation plans and cache
 ---------------------------
 
-Reusable component callbacks are planned from the first normally constructed
-model instance; importing a module or defining a model class does not construct
+Reusable class-declared model and component callbacks are planned from the
+first normally constructed model instance; importing a module or defining a
+model class does not construct
 a hidden prototype. ``Model.compilation_status()`` reports ``pending``,
 ``ready``, ``failed``, or ``unavailable`` together with elapsed time, callback
 counts, persistent-cache hits/misses, and an error message when preparation
@@ -111,7 +144,7 @@ After an instance compiles its remaining processes, predicates, events, and
 collectors, ``model.callback_cache_stats()`` reports their cache hits, misses,
 and writes separately from the reusable class preparation.
 
-The default ``__cimba_precompile__ = "eager"`` prepares reusable component
+The default ``__cimba_precompile__ = "eager"`` prepares reusable class
 callbacks during the first real model construction. A subclass can select
 ``"lazy"`` to prepare them on its first experiment or ``"explicit"`` and call
 ``Model.precompile(*constructor_args, **constructor_kwargs)`` itself. Explicit
@@ -130,7 +163,7 @@ logs or reports can safely reuse persisted object code in another process.
 Process graphs
 --------------
 
-Call ``model.process_dag()`` to infer a resource-aware graph from registered
+Call ``model.process_dag()`` to infer a resource-aware graph from class-declared
 process bodies. The returned ``ProcessDAG`` contains ``ProcessDAGNode`` and
 ``ProcessDAGEdge`` records for processes and model fields, and can render
 Mermaid or Graphviz DOT text. The inference follows direct ``sim`` calls,

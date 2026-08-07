@@ -9,31 +9,34 @@ class MM1(sim.Model):
     avg_queue_length: sim.Output
     queue: sim.Queue
 
+    @sim.process
+    def arrival(env: "MM1"):
+        while True:
+            t_ia = random.exponential(1.0 / env.utilization)
+            sim.hold(t_ia)
+            env.queue.put(1)
+
+    @sim.process
+    def service(env: "MM1"):
+        while True:
+            env.queue.get(1)
+            t_srv = random.exponential(1.0)
+            sim.hold(t_srv)
+
+    @sim.collect
+    def collect_stats(env: "MM1"):
+        env.avg_queue_length = env.queue.history().mean()
+        env.queue.report()
+        env.queue.history().pacf_correlogram(lags=20)
+
 
 model = MM1("MM1")
 
 
-@model.process
-def arrival(env: MM1):
-    while True:
-        t_ia = random.exponential(1.0 / env.utilization)
-        sim.hold(t_ia)
-        env.queue.put(1)
 
 
-@model.process
-def service(env: MM1):
-    while True:
-        env.queue.get(1)
-        t_srv = random.exponential(1.0)
-        sim.hold(t_srv)
 
 
-@model.collect
-def collect_stats(env: MM1):
-    env.avg_queue_length = env.queue.history().mean()
-    env.queue.report()
-    env.queue.history().pacf_correlogram(lags=20)
 
 
 def main() -> None:

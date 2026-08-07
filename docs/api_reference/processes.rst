@@ -1,8 +1,8 @@
 Processes and Events
 ====================
 
-A process is a Python function registered with ``@model.process`` (or a
-component ``@sim.process`` method). Only one process in a trial runs at a time;
+A process is a Python method declared with ``@sim.process`` on a model or
+component class. Only one process in a trial runs at a time;
 when it calls a blocking ``sim`` operation, control returns to the dispatcher
 until the process is ready to resume.
 
@@ -32,8 +32,9 @@ spawnables use the same call through the component namespace, for example
 Low-level events
 ----------------
 
-Callbacks registered with ``@model.event`` are exposed in ``sim.Event``
-fields. ``env.<event>.schedule(delay, data=0, priority=0)`` and
+Callbacks declared with ``@sim.event`` are exposed in ``sim.Event`` fields.
+Use ``field="..."`` when the callback and field have different names.
+``env.<event>.schedule(delay, data=0, priority=0)`` and
 ``.schedule_at(at, ...)`` return a scheduled-instance handle with its own
 ``.cancel()``, ``.reschedule(at)``, ``.reprioritize(priority)``,
 ``.scheduled()``, ``.time()``, ``.priority()``, and ``.wait_event()``

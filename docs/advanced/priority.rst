@@ -16,7 +16,7 @@ similarity) is easy to check.
      - Compared against
      - Tie-break
    * - Process priority
-     - ``@model.process(priority=n)``, ``sim.set_priority(process, n)``
+     - ``@sim.process(priority=n)``, ``sim.set_priority(process, n)``
      - other processes waiting on the same resource/pool
      - arrival order
    * - Event priority
@@ -44,15 +44,16 @@ A process's own priority governs how it queues for a ``sim.Resource`` or
 
 .. code-block:: python
 
-   @model.process(priority=5)
-   def vip_patient(env: Clinic):
-       ...
+   class Clinic(sim.Model):
+       @sim.process(priority=5)
+       def vip_patient(env: "Clinic"):
+           ...
 
-   @model.process
-   def regular_patient(env: Clinic):
-       me = sim.current()
-       sim.set_priority(me, -2)
-       ...
+       @sim.process
+       def regular_patient(env: "Clinic"):
+           me = sim.current()
+           sim.set_priority(me, -2)
+           ...
 
 When several processes are waiting on the same ``.acquire()``, the
 highest-priority waiter goes first; among waiters with equal priority,
@@ -91,10 +92,22 @@ and the handle they return has its own ``.reprioritize(priority)``:
 
 .. code-block:: python
 
-   @model.process
-   def driver(env: Clinic):
-       env.log_snapshot.schedule(0.0, priority=-100)  # run last today
-       env.close_shift.schedule(480.0, priority=10)   # run first at t=480
+   class Clinic(sim.Model):
+       log_snapshot: sim.Event
+       close_shift: sim.Event
+
+       @sim.event(field="log_snapshot")
+       def record_snapshot(env: "Clinic"):
+           ...
+
+       @sim.event(field="close_shift")
+       def handle_close(env: "Clinic"):
+           ...
+
+       @sim.process
+       def driver(env: "Clinic"):
+           env.log_snapshot.schedule(0.0, priority=-100)  # run last today
+           env.close_shift.schedule(480.0, priority=10)   # run first at t=480
 
 Event priority only matters when two or more events are due at *exactly* the
 same simulated time: the higher-priority one fires first, and among equal
@@ -115,10 +128,11 @@ no link to the priority of whichever process happened to put it there:
 
    GOLD_CARD_PRIORITY = 5
 
-   @sim.process
-   def visitor(self, env, vip: Visitor):
-       priority = GOLD_CARD_PRIORITY if vip.gold_card else 0
-       entry = env.ride_queue[0].put(sim.current(), priority)
+   class Attraction(sim.Component):
+       @sim.process
+       def visitor(self, env, vip: Visitor):
+           priority = GOLD_CARD_PRIORITY if vip.gold_card else 0
+           entry = env.ride_queue[0].put(sim.current(), priority)
 
 Objects come out highest-priority first; among equal priorities, whoever
 was put in earliest comes out first. ``.reprioritize(entry, priority)``

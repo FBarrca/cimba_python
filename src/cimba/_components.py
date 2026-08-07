@@ -96,8 +96,10 @@ _F = TypeVar("_F", bound=Callable[..., Any])
 # What model authors touch directly: the Component base class, the
 # method markers, and the values captured from instance defaults.
 
-_COMPONENT_PROCESS_ATTR = "__cimba_component_process__"
-_COMPONENT_COLLECT_ATTR = "__cimba_component_collect__"
+_PROCESS_ATTR = "__cimba_process__"
+_COLLECT_ATTR = "__cimba_collect__"
+_PREDICATE_ATTR = "__cimba_predicate__"
+_EVENT_ATTR = "__cimba_event__"
 _COMPONENT_FUNCTION_ATTR = "__cimba_component_function__"
 
 _wirable_fields_cache: dict[type, dict[str, str]] = {}
@@ -147,7 +149,7 @@ class Component:
     declared fields are flattened into the model's trial record, and methods
     decorated with :func:`process` are lowered into ordinary model processes.
     Methods decorated with :func:`collect` run once per instance at the end of
-    each trial, before the model-level ``@model.collect`` callback.
+    each trial, before the model-level ``@sim.collect`` callback.
     Read-only methods decorated with :func:`function` are lowered into
     explicitly typed synchronous Numba helpers callable from compiled model
     and component callbacks.
@@ -304,12 +306,14 @@ def _component_fields(cls: type) -> Iterator[tuple[str, type[Component], bool]]:
 
 
 @dataclass(frozen=True)
-class _ComponentProcessSpec:
-    """The arguments of a ``@sim.process`` method marker."""
+class _ProcessSpec:
+    """The arguments of a class-declared ``@sim.process`` marker."""
 
     copies: int | str = 1
     priority: int = 0
     spawnable: bool = False
+    struct: Any = None
+    field: str | None = None
 
     def resolve_copies(self, component: Component, label: str) -> int:
         """The copy count for one instance: the literal int, or the value
@@ -339,18 +343,21 @@ def process(fn: _F) -> _F: ...
 @overload
 def process(fn: None = None, *, copies: Literal[1] = 1,
             priority: int = 0,
-            spawnable: Literal[True]) -> Callable[[_F], SpawnableProcess]: ...
+            spawnable: Literal[True], struct: Any = None,
+            field: None = None) -> Callable[[_F], SpawnableProcess]: ...
 
 
 @overload
 def process(fn: None = None, *, copies: int | str = 1,
             priority: int = 0,
-            spawnable: Literal[False] = False) -> Callable[[_F], _F]: ...
+            spawnable: Literal[False] = False, struct: Any = None,
+            field: str | None = None) -> Callable[[_F], _F]: ...
 
 
 def process(fn=None, *, copies: int | str = 1, priority: int = 0,
-            spawnable: bool = False):
-    """Mark a ``Component`` method to be registered as a model process."""
+            spawnable: bool = False, struct: Any = None,
+            field: str | None = None):
+    """Mark a ``Model`` or ``Component`` method as a process."""
     if isinstance(copies, int):
         if copies < 1:
             raise ValueError("copies must be >= 1")
@@ -358,20 +365,30 @@ def process(fn=None, *, copies: int | str = 1, priority: int = 0,
         _check_name(copies, "copies constant")
     else:
         raise TypeError("copies must be an int or the name of an int constant")
+    if field is not None:
+        _check_name(field, "process field")
     if spawnable and copies != 1:
-        raise ValueError("spawnable component processes cannot take copies")
+        raise ValueError("spawnable processes cannot take copies")
+    if spawnable and field is not None:
+        raise ValueError("spawnable processes cannot take field=")
 
     def decorate(f):
-        if getattr(f, _COMPONENT_COLLECT_ATTR, False):
+        if getattr(f, _COLLECT_ATTR, False):
             raise ValueError(
-                f"'{f.__qualname__}' cannot be both a component process "
-                "and a component collect method")
+                f"'{f.__qualname__}' cannot be both a process and collect "
+                "callback")
+        if getattr(f, _PREDICATE_ATTR, None) is not None:
+            raise ValueError(
+                f"'{f.__qualname__}' cannot be both a process and predicate")
+        if getattr(f, _EVENT_ATTR, None) is not None:
+            raise ValueError(
+                f"'{f.__qualname__}' cannot be both a process and event")
         if getattr(f, _COMPONENT_FUNCTION_ATTR, False):
             raise ValueError(
                 f"'{f.__qualname__}' cannot be both a component process "
                 "and a component function")
-        setattr(f, _COMPONENT_PROCESS_ATTR,
-                _ComponentProcessSpec(copies, priority, spawnable))
+        setattr(f, _PROCESS_ATTR,
+                _ProcessSpec(copies, priority, spawnable, struct, field))
         return f
 
     if fn is None:
@@ -380,21 +397,93 @@ def process(fn=None, *, copies: int | str = 1, priority: int = 0,
 
 
 def collect(fn: _F) -> _F:
-    """Mark a ``Component`` method as a statistics-collection method.
+    """Mark a ``Model`` or ``Component`` statistics callback.
 
-    The method takes ``(self, env)`` and runs once at the end of each
-    trial, before the model-level ``@model.collect`` callback, typically
-    assigning the component's declared Output fields."""
-    if getattr(fn, _COMPONENT_PROCESS_ATTR, None) is not None:
+    A model callback takes ``(env)``. A component method takes ``(self, env)``
+    and runs once per instance at the end of each trial, before the model
+    callback, typically assigning the component's declared Output fields."""
+    if getattr(fn, _PROCESS_ATTR, None) is not None:
         raise ValueError(
-            f"'{fn.__qualname__}' cannot be both a component process "
-            "and a component collect method")
+            f"'{fn.__qualname__}' cannot be both a process and collect "
+            "callback")
+    if getattr(fn, _PREDICATE_ATTR, None) is not None:
+        raise ValueError(
+            f"'{fn.__qualname__}' cannot be both a collect callback and "
+            "predicate")
+    if getattr(fn, _EVENT_ATTR, None) is not None:
+        raise ValueError(
+            f"'{fn.__qualname__}' cannot be both a collect callback and event")
     if getattr(fn, _COMPONENT_FUNCTION_ATTR, False):
         raise ValueError(
             f"'{fn.__qualname__}' cannot be both a component collect method "
             "and a component function")
-    setattr(fn, _COMPONENT_COLLECT_ATTR, True)
+    setattr(fn, _COLLECT_ATTR, True)
     return fn
+
+
+@dataclass(frozen=True)
+class _CallbackFieldSpec:
+    field: str | None = None
+
+
+@overload
+def predicate(fn: _F) -> _F: ...
+
+
+@overload
+def predicate(fn: None = None, *, field: str | None = None
+              ) -> Callable[[_F], _F]: ...
+
+
+def predicate(fn=None, *, field: str | None = None):
+    """Mark a ``Model`` condition predicate callback."""
+    if field is not None:
+        _check_name(field, "predicate field")
+
+    def decorate(f):
+        if (getattr(f, _PROCESS_ATTR, None) is not None
+                or getattr(f, _COLLECT_ATTR, False)
+                or getattr(f, _EVENT_ATTR, None) is not None
+                or getattr(f, _COMPONENT_FUNCTION_ATTR, False)):
+            raise ValueError(
+                f"'{f.__qualname__}' cannot combine predicate with another "
+                "callback marker")
+        setattr(f, _PREDICATE_ATTR, _CallbackFieldSpec(field))
+        return f
+
+    if fn is None:
+        return decorate
+    return decorate(fn)
+
+
+@overload
+def event(fn: _F) -> _F: ...
+
+
+@overload
+def event(fn: None = None, *, field: str | None = None
+          ) -> Callable[[_F], _F]: ...
+
+
+def event(fn=None, *, field: str | None = None):
+    """Mark a ``Model`` low-level event callback."""
+    if field is not None:
+        _check_name(field, "event field")
+
+    def decorate(f):
+        if (getattr(f, _PROCESS_ATTR, None) is not None
+                or getattr(f, _COLLECT_ATTR, False)
+                or getattr(f, _PREDICATE_ATTR, None) is not None
+                or getattr(f, _COMPONENT_FUNCTION_ATTR, False)):
+            raise ValueError(
+                f"'{f.__qualname__}' cannot combine event with another "
+                "callback marker")
+        setattr(f, _EVENT_ATTR, _CallbackFieldSpec(field))
+        return f
+
+    if fn is None:
+        return decorate
+    return decorate(fn)
 
 
 def function(fn: _F) -> _F:
@@ -404,25 +493,33 @@ def function(fn: _F) -> _F:
     arguments and return an explicitly annotated scalar. They are lowered and
     Numba-compiled when a model containing the component is constructed.
     """
-    if getattr(fn, _COMPONENT_PROCESS_ATTR, None) is not None:
+    if getattr(fn, _PROCESS_ATTR, None) is not None:
         raise ValueError(
             f"'{fn.__qualname__}' cannot be both a component function "
             "and a component process")
-    if getattr(fn, _COMPONENT_COLLECT_ATTR, False):
+    if getattr(fn, _COLLECT_ATTR, False):
         raise ValueError(
             f"'{fn.__qualname__}' cannot be both a component function "
             "and a component collect method")
+    if getattr(fn, _PREDICATE_ATTR, None) is not None:
+        raise ValueError(
+            f"'{fn.__qualname__}' cannot be both a component function "
+            "and a predicate")
+    if getattr(fn, _EVENT_ATTR, None) is not None:
+        raise ValueError(
+            f"'{fn.__qualname__}' cannot be both a component function "
+            "and an event")
     setattr(fn, _COMPONENT_FUNCTION_ATTR, True)
     return fn
 
 
-def _marked_methods(cls: type[Component], marker_attr: str,
-                    kind: str) -> dict[str, tuple[Callable[..., Any], Any]]:
+def _marked_methods(cls: type, marker_attr: str, kind: str, *, stop: type,
+                    ) -> dict[str, tuple[Callable[..., Any], Any]]:
     """Methods carrying a marker attribute, walking the MRO base-first so
     an unmarked override drops the inherited registration."""
     methods: dict[str, tuple[Callable[..., Any], Any]] = {}
     for base in reversed(cls.__mro__):
-        if base in (object, Component):
+        if base in (object, stop):
             continue
         for name, value in vars(base).items():
             marker = getattr(value, marker_attr, None)
@@ -431,24 +528,43 @@ def _marked_methods(cls: type[Component], marker_attr: str,
                 continue
             if not callable(value):
                 raise TypeError(
-                    f"component {kind} '{cls.__name__}.{name}' is not "
-                    "callable")
+                    f"{kind} callback '{cls.__name__}.{name}' is not callable")
             methods[name] = (value, marker)
     return methods
 
 
 def _component_process_methods(
     cls: type[Component],
-) -> list[tuple[str, Callable[..., Any], _ComponentProcessSpec]]:
+) -> list[tuple[str, Callable[..., Any], _ProcessSpec]]:
+    for marker, kind in ((_PREDICATE_ATTR, "predicate"),
+                         (_EVENT_ATTR, "event")):
+        invalid = _marked_methods(cls, marker, kind, stop=Component)
+        if invalid:
+            name = next(iter(invalid))
+            raise ValueError(
+                f"component '{cls.__name__}.{name}' cannot be a {kind}; "
+                f"@sim.{kind} is only valid on sim.Model subclasses")
+    methods = _marked_methods(
+        cls, _PROCESS_ATTR, "process", stop=Component)
+    for name, (fn, spec) in methods.items():
+        if spec.struct is not None:
+            raise ValueError(
+                f"component process '{cls.__name__}.{name}' cannot use "
+                "struct=; annotate its final view parameter instead")
+        if spec.field is not None:
+            raise ValueError(
+                f"component process '{cls.__name__}.{name}' cannot use "
+                "field=")
     return [(name, fn, spec) for name, (fn, spec)
-            in _marked_methods(cls, _COMPONENT_PROCESS_ATTR, "process").items()]
+            in methods.items()]
 
 
 def _component_collect_methods(
     cls: type[Component],
 ) -> list[tuple[str, Callable[..., Any]]]:
     return [(name, fn) for name, (fn, _marker)
-            in _marked_methods(cls, _COMPONENT_COLLECT_ATTR, "collect").items()]
+            in _marked_methods(
+                cls, _COLLECT_ATTR, "collect", stop=Component).items()]
 
 
 def _component_function_methods(
@@ -456,7 +572,7 @@ def _component_function_methods(
 ) -> list[tuple[str, Callable[..., Any]]]:
     return [(name, fn) for name, (fn, _marker)
             in _marked_methods(cls, _COMPONENT_FUNCTION_ATTR,
-                               "function").items()]
+                               "function", stop=Component).items()]
 
 
 # --- Declaration metadata ---------------------------------------------------
@@ -2532,7 +2648,7 @@ class _ComponentPathLowerer(ast.NodeTransformer):
                     return self._lower_component_function_call(
                         node, receiver, specs)
             # Leave ``.history().capture()`` as a history call after lowering
-            # the component path; Model.collect handles capture registration.
+            # the component path; model collector registration handles capture.
             if node.func.attr == "capture":
                 history_call = node.func.value
                 if (isinstance(history_call, ast.Call)
@@ -3697,7 +3813,7 @@ def _lower_component_method(
     args.args = args.args[1:]
     for index, arg in enumerate(args.args):
         if struct_view is not None and index == len(args.args) - 1:
-            # Keep an annotation on the view parameter so Model.process()
+            # Keep an annotation on the view parameter so process registration
             # detects it on the lowered function; the exec namespace maps
             # _CIMBA_STRUCT_VIEW to the struct class.
             arg.annotation = ast.Name(id="_CIMBA_STRUCT_VIEW",

@@ -1,4 +1,4 @@
-"""Fresh-process benchmark for Cimba component compilation.
+"""Fresh-process benchmark for Cimba class-callback compilation.
 
 The parent process intentionally imports no Cimba modules.  Every sample is
 collected in a new interpreter so import, class planning, model construction,
@@ -75,9 +75,7 @@ def _worker(scenario: str, scale: int, workdir: Path) -> dict[str, Any]:
         module, phases["model_definition"] = _timed(define_park)
 
         def build():
-            value = module.Park()
-            value.collect(module.park_stats)
-            return value
+            return module.Park()
 
         model, phases["model_build"] = _timed(build)
         model_type = type(model)
@@ -111,6 +109,39 @@ def _worker(scenario: str, scale: int, workdir: Path) -> dict[str, Any]:
                 self.total = self.count + self.queue.level()
 
         def define_synthetic():
+            if scale == 1:
+                @sim.predicate(field="ready")
+                def is_ready(env) -> bool:
+                    return env.cells__count >= 0
+
+                @sim.event(field="tick")
+                def handle_tick(env, amount):
+                    env.cells__count += amount
+
+                @sim.collect
+                def totals(env):
+                    env.result = env.cells__count
+            else:
+                @sim.predicate(field="ready")
+                def is_ready(env) -> bool:
+                    return env.cells__count[0] >= 0
+
+                @sim.event(field="tick")
+                def handle_tick(env, amount):
+                    env.cells__count[0] += amount
+
+                @sim.collect
+                def totals(env):
+                    env.result = env.cells__count.sum()
+
+            @sim.process(struct=Payload)
+            def driver(env):
+                sim.suspend()
+
+            @sim.process(spawnable=True, struct=Payload)
+            def dynamic(env):
+                sim.suspend()
+
             namespace = {
                 "__module__": __name__,
                 "__annotations__": {
@@ -121,6 +152,11 @@ def _worker(scenario: str, scale: int, workdir: Path) -> dict[str, Any]:
                     "result": sim.Output,
                 },
                 "cells": [Cell() for _ in range(scale)],
+                "is_ready": is_ready,
+                "handle_tick": handle_tick,
+                "driver": driver,
+                "dynamic": dynamic,
+                "totals": totals,
             }
             return type(
                 f"SyntheticComponents{scale}", (sim.Model,), namespace)
@@ -128,43 +164,7 @@ def _worker(scenario: str, scale: int, workdir: Path) -> dict[str, Any]:
         model_type, phases["model_definition"] = _timed(define_synthetic)
 
         def build_synthetic():
-            model = model_type(f"synthetic-{scale}")
-
-            if scale == 1:
-                @model.predicate
-                def ready(env) -> bool:
-                    return env.cells__count >= 0
-
-                @model.event
-                def tick(env, amount):
-                    env.cells__count += amount
-            else:
-                @model.predicate
-                def ready(env) -> bool:
-                    return env.cells__count[0] >= 0
-
-                @model.event
-                def tick(env, amount):
-                    env.cells__count[0] += amount
-
-            @model.process(struct=Payload)
-            def driver(env):
-                sim.suspend()
-
-            @model.process(spawnable=True, struct=Payload)
-            def dynamic(env):
-                sim.suspend()
-
-            if scale == 1:
-                @model.collect
-                def totals(env):
-                    env.result = env.cells__count
-            else:
-                @model.collect
-                def totals(env):
-                    env.result = env.cells__count.sum()
-
-            return model
+            return model_type(f"synthetic-{scale}")
 
         model, phases["model_build"] = _timed(build_synthetic)
         nodes = 1
@@ -299,7 +299,7 @@ def _sample(
 
 
 def _print(results: list[dict[str, Any]]) -> None:
-    print("Cimba fresh-process component compilation benchmark")
+    print("Cimba fresh-process class-callback compilation benchmark")
     print("times are median ± MAD; each sample uses a new interpreter")
     print(
         "scenario             | instances | import | definition | build | "

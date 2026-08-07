@@ -17,18 +17,16 @@ Declare a trace field on the model and pass trace data to
        appointments: sim.Trace
        completed: sim.Output
 
+       @sim.process
+       def appointment_arrivals(env: "Clinic"):
+           times = sim.Trace(env.appointments)
+           previous = 0.0
+           for at in times:
+               sim.hold(at - previous)
+               previous = at
+               # Create or queue the appointment.
 
    model = Clinic("clinic")
-
-
-   @model.process
-   def appointment_arrivals(env: Clinic):
-       times = sim.Trace(env.appointments)
-       previous = 0.0
-       for at in times:
-           sim.hold(at - previous)
-           previous = at
-           # Create or queue the appointment.
 
 Inside compiled model code, ``sim.Trace(env.appointments)`` returns a
 read-only float64 view that supports length, indexing, slicing, and iteration.

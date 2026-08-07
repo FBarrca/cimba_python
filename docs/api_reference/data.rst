@@ -21,6 +21,11 @@ Declare datasets as model or component fields:
        avg_wait: sim.Output
        p95_wait: sim.Output
 
+       @sim.collect
+       def collect_stats(env: "Clinic"):
+           env.avg_wait = env.waits.mean()
+           env.p95_wait = env.waits.quantile(0.95)
+
 Inside process code, each ``add()`` appends one sample to the current trial's
 dataset:
 
@@ -33,15 +38,20 @@ about:
 
 .. code-block:: python
 
-   @model.collect
-   def collect_stats(env: Clinic):
-       env.avg_wait = env.waits.mean()
-       env.p95_wait = env.waits.quantile(0.95)
+   class Clinic(sim.Model):
+       waits: sim.Dataset
+       avg_wait: sim.Output
+       p95_wait: sim.Output
+
+       @sim.collect
+       def collect_stats(env: "Clinic"):
+           env.avg_wait = env.waits.mean()
+           env.p95_wait = env.waits.quantile(0.95)
 
 A dataset field is created separately for every trial row. If an experiment
 uses ``replications=50``, then ``env.waits`` is 50 independent datasets, not
 one dataset shared by all replications. Each replication records its own
-samples. The model-level ``@model.collect`` callback, or a component-level
+samples. A model-level or component-level
 ``@sim.collect`` callback, writes one output value per replication for each
 metric you choose. For example, ``exp["avg_wait"]`` contains 50
 per-replication averages, while ``exp["p95_wait"]`` contains 50
@@ -65,10 +75,14 @@ ordinary scalar outputs:
 
 .. code-block:: python
 
-   @model.collect
-   def collect_stats(env: Clinic):
-       env.avg_wait = env.waits.mean()
-       env.waits.capture()
+   class Clinic(sim.Model):
+       waits: sim.Dataset
+       avg_wait: sim.Output
+
+       @sim.collect
+       def collect_stats(env: "Clinic"):
+           env.avg_wait = env.waits.mean()
+           env.waits.capture()
 
 After ``exp.run()``, read the captured sample arrays from the experiment:
 
@@ -100,9 +114,9 @@ as a time-series handle:
        nurse: sim.Resource
        mean_queue_len: sim.Output
 
-   @model.collect
-   def collect_stats(env: Clinic):
-       env.mean_queue_len = env.waiting_room.history().mean()
+       @sim.collect
+       def collect_stats(env: "Clinic"):
+           env.mean_queue_len = env.waiting_room.history().mean()
 
 ``.history()`` is available on every field kind that records one:
 ``sim.Queue``, ``sim.Resource``, ``sim.Pool``, ``sim.Store``, and indexed
@@ -132,10 +146,14 @@ file. It is declared in the model-level collector:
 
 .. code-block:: python
 
-   @model.collect
-   def collect_stats(env: Clinic):
-       env.mean_queue_len = env.waiting_room.history().mean()
-       env.waiting_room.history().capture()
+   class Clinic(sim.Model):
+       waiting_room: sim.Queue
+       mean_queue_len: sim.Output
+
+       @sim.collect
+       def collect_stats(env: "Clinic"):
+           env.mean_queue_len = env.waiting_room.history().mean()
+           env.waiting_room.history().capture()
 
 After ``exp.run()``, read the captured arrays from the experiment:
 

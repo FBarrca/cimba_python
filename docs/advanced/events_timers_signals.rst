@@ -8,7 +8,7 @@ wakeups, cancellation, deadlines, or scheduled callbacks.
 Explicit events
 ---------------
 
-Declare a ``sim.Event`` field and register a matching ``@model.event``
+Declare a ``sim.Event`` field and bind a class-declared ``@sim.event``
 callback:
 
 .. code-block:: python
@@ -18,20 +18,23 @@ callback:
        arrivals: sim.Processes
        closed: sim.State
 
+       @sim.event(field="close_shift")
+       def on_close_shift(env: "Clinic"):
+           env.closed = 1
+           sim.stop(env.arrivals[0], 0)
+
+       @sim.process(field="arrivals")
+       def arrival_loop(env: "Clinic"):
+           while True:
+               sim.hold(1.0)
+
+       @sim.process
+       def supervisor(env: "Clinic"):
+           env.close_shift.schedule(480.0)
+           sim.suspend()
+
 
    model = Clinic("clinic")
-
-
-   @model.event
-   def close_shift(env: Clinic):
-       env.closed = 1
-       sim.stop(env.arrivals[0], 0)
-
-
-   @model.process
-   def supervisor(env: Clinic):
-       env.close_shift.schedule(480.0)
-       sim.suspend()
 
 ``env.<event>.schedule()`` uses a delay from the current time.
 ``.schedule_at()`` uses an absolute simulation time. Both return a
@@ -49,12 +52,20 @@ An event can be used as a deadline that another process waits for:
 
 .. code-block:: python
 
-   @model.process
-   def reminder(env: Clinic):
-       handle = env.close_shift.schedule(480.0)
-       sig = handle.wait_event()
-       if sig == sim.SUCCESS:
+   class Clinic(sim.Model):
+       close_shift: sim.Event
+       closed: sim.State
+
+       @sim.event(field="close_shift")
+       def on_close_shift(env: "Clinic"):
            env.closed = 1
+
+       @sim.process
+       def reminder(env: "Clinic"):
+           handle = env.close_shift.schedule(480.0)
+           sig = handle.wait_event()
+           if sig == sim.SUCCESS:
+               env.closed = 1
 
 If the event is cancelled before it fires, ``.wait_event()`` returns a
 non-success signal. Check the signal when cancellation changes the model path.
@@ -70,16 +81,17 @@ timeouts, appointment no-shows, and retry deadlines:
    TIMER_PATIENCE = 17
 
 
-   @model.process
-   def patient(env: Clinic, p: Patient):
-       me = sim.current()
-       sim.timer_set(me, p.patience, TIMER_PATIENCE)
-       sig = sim.suspend()
-       if sig == TIMER_PATIENCE:
-           # The patient waited too long.
-           return
-       sim.timers_clear(me)
-       # The patient was resumed by service before the timer fired.
+   class Clinic(sim.Model):
+       @sim.process(spawnable=True)
+       def patient(env: "Clinic", p: Patient):
+           me = sim.current()
+           sim.timer_set(me, p.patience, TIMER_PATIENCE)
+           sig = sim.suspend()
+           if sig == TIMER_PATIENCE:
+               # The patient waited too long.
+               return
+           sim.timers_clear(me)
+           # The patient was resumed by service before the timer fired.
 
 ``sim.timer_set()`` clears existing timers before adding one. ``sim.timer_add()``
 adds another independent timer. ``sim.timer_cancel()`` cancels one timer handle,

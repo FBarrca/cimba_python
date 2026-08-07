@@ -106,12 +106,11 @@ as routing, replenishment, pricing, or admission rules:
        inventory: sim.Param
        order: sim.Output
 
+       @sim.process
+       def replenish(env: "Inventory"):
+           env.order = env.policy.decide(env.inventory)
 
    model = Inventory()
-
-   @model.process
-   def replenish(env: Inventory):
-       env.order = env.policy.decide(env.inventory)
 
 Function arguments and the return value require explicit ``bool``, ``int``
 (``sim.Handle``), or ``float`` annotations and calls use positional arguments.
@@ -177,17 +176,21 @@ at the end of each trial, typically assigning the component's declared
 
 Every instance of a component collection runs its own collect, so per-desk
 outputs land in per-instance output slots. Component collects run before the
-model-level ``@model.collect`` callback, which can therefore aggregate over
+model-level ``@sim.collect`` callback, which can therefore aggregate over
 the component outputs:
 
 .. code-block:: python
 
-   @model.collect
-   def clinic_stats(env: Clinic):
-       env.worst_queue = env.desks[0].avg_queue
-       for i in range(1, 3):
-           if env.desks[i].avg_queue > env.worst_queue:
-               env.worst_queue = env.desks[i].avg_queue
+   class Clinic(sim.Model):
+       worst_queue: sim.Output
+       desks: list[Desk] = [Desk(), Desk(), Desk()]
+
+       @sim.collect
+       def clinic_stats(env: "Clinic"):
+           env.worst_queue = env.desks[0].avg_queue
+           for i in range(1, 3):
+               if env.desks[i].avg_queue > env.worst_queue:
+                   env.worst_queue = env.desks[i].avg_queue
 
 Nested components
 -----------------
@@ -225,17 +228,16 @@ Use a ``list[ComponentType]`` declaration for fixed repeated subsystems:
        mean_service: sim.Param
        desks: list[Desk] = [Desk(), Desk(), Desk()]
 
-
-   @model.process
-   def router(env: Clinic):
-       target = 0
-       best = env.desks[0].waiting.level()
-       for i in range(1, 3):
-           length = env.desks[i].waiting.level()
-           if length < best:
-               target = i
-               best = length
-       env.desks[target].waiting.put(1)
+       @sim.process
+       def router(env: "Clinic"):
+           target = 0
+           best = env.desks[0].waiting.level()
+           for i in range(1, 3):
+               length = env.desks[i].waiting.level()
+               if length < best:
+                   target = i
+                   best = length
+           env.desks[target].waiting.put(1)
 
 The collection length is fixed by the model class. This is a good fit for
 known departments, stations, gates, or desks. If the number of active entities

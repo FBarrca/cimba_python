@@ -125,6 +125,22 @@ class AssemblyLine(sim.Model):
     station_1: Station = Station(STATION_1_NAME, STATION_1_MEAN,
                                  downstream=station_2)
 
+    @sim.process
+    def arrivals(env: "AssemblyLine"):
+        while True:
+            sim.hold(random.exponential(INTERARRIVAL_TIME))
+            handle = sim.spawn(env.part_lifecycle, env)
+            part = Part(handle)
+
+            env.generated_parts += 1
+            part.part_id = env.generated_parts
+            part.arrival_system = sim.now()
+
+    @sim.process(spawnable=True)
+    def part_lifecycle(env: "AssemblyLine", item: Part):
+        env.system.put(1)
+        item.station_entry = sim.now()
+        env.station_1.inbox.put(sim.current())
 
 def build_model(raw_dir: Path) -> AssemblyLine:
     cycle_file = sim.log_text(str(raw_dir / "cycle_times.txt"))
@@ -135,41 +151,25 @@ def build_model(raw_dir: Path) -> AssemblyLine:
     )
     system_file = sim.log_text(str(raw_dir / "number_in_system.txt"))
 
-    model = AssemblyLine("assembly_line")
+    class ReportingAssemblyLine(AssemblyLine):
+        @sim.collect
+        def collect_stats(env: "AssemblyLine"):
+            completed = env.cycle_time.count()
+            env.total_parts_produced = completed
+            env.avg_cycle_time = env.cycle_time.mean()
+            env.max_cycle_time = env.cycle_time.max()
+            env.throughput_rate = completed / env.duration_s
+            env.avg_number_in_system = env.system.mean_level()
+            env.max_number_in_system = env.system.history().max()
+            env.final_number_in_system = env.system.level()
 
-    @model.process
-    def arrivals(env: AssemblyLine):
-        while True:
-            sim.hold(random.exponential(INTERARRIVAL_TIME))
-            handle = sim.spawn(env.part_lifecycle, env)
-            part = Part(handle)
+            env.cycle_time.print_file(cycle_file, 0)
+            env.station_1.wait_time.print_file(wait_files[0], 0)
+            env.station_2.wait_time.print_file(wait_files[1], 0)
+            env.station_3.wait_time.print_file(wait_files[2], 0)
+            env.system.history().print_file(system_file, 0)
 
-            env.generated_parts += 1
-            part.part_id = env.generated_parts
-            part.arrival_system = sim.now()
-
-    @model.process(spawnable=True)
-    def part_lifecycle(env: AssemblyLine, item: Part):
-        env.system.put(1)
-        item.station_entry = sim.now()
-        env.station_1.inbox.put(sim.current())
-
-    @model.collect
-    def collect_stats(env: AssemblyLine):
-        completed = env.cycle_time.count()
-        env.total_parts_produced = completed
-        env.avg_cycle_time = env.cycle_time.mean()
-        env.max_cycle_time = env.cycle_time.max()
-        env.throughput_rate = completed / env.duration_s
-        env.avg_number_in_system = env.system.mean_level()
-        env.max_number_in_system = env.system.history().max()
-        env.final_number_in_system = env.system.level()
-
-        env.cycle_time.print_file(cycle_file, 0)
-        env.station_1.wait_time.print_file(wait_files[0], 0)
-        env.station_2.wait_time.print_file(wait_files[1], 0)
-        env.station_3.wait_time.print_file(wait_files[2], 0)
-        env.system.history().print_file(system_file, 0)
+    model = ReportingAssemblyLine("assembly_line")
 
     return model
 

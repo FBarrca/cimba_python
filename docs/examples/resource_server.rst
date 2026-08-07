@@ -20,24 +20,21 @@ Here three patients repeatedly return to a clinic that has a single doctor.
        n_served: sim.State
        doctor: sim.Resource     # a single shared server
 
+       @sim.process(copies=3)
+       def patient(env: "Clinic"):
+           while True:
+               sim.hold(random.exponential(2.0))
+               env.doctor.acquire()
+               sim.hold(random.exponential(1.0))
+               env.doctor.release()
+               env.n_served = env.n_served + 1
+
+       @sim.collect
+       def collect(env: "Clinic"):
+           env.served = env.n_served
+
 
    model = Clinic("Clinic")
-
-
-   @model.process(copies=3)
-   def patient(env: Clinic):
-       while True:
-           sim.hold(random.exponential(2.0))   # time until this patient returns
-           env.doctor.acquire()             # wait for the one free doctor
-           sim.hold(random.exponential(1.0))   # consultation
-           env.doctor.release()
-           env.n_served = env.n_served + 1
-
-
-   @model.collect
-   def collect(env: Clinic):
-       env.served = env.n_served
-
 
    def main() -> None:
        exp = model.experiment(

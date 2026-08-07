@@ -233,24 +233,26 @@ class Harbor(sim.Model):
     facilities: HarborFacilities = HarborFacilities()
     traffic: ShipTraffic = ShipTraffic()
 
+    @sim.predicate(field="harbormaster_called")
+    def should_call_harbormaster(env: "Harbor") -> bool:
+        return True
+
+    @sim.collect
+    def harbor_stats(env: "Harbor"):
+        env.avg_time_small = env.traffic.time_small.mean()
+        env.avg_time_large = env.traffic.time_large.mean()
+        env.n_small = env.traffic.time_small.count()
+        env.n_large = env.traffic.time_large.count()
+        env.tug_util = env.facilities.tugs.mean_in_use()
+        env.berth_small_util = env.facilities.berths_small.mean_in_use()
+        env.berth_large_util = env.facilities.berths_large.mean_in_use()
+
 
 harbor = Harbor()
 
 
-@harbor.predicate
-def harbormaster_called(env: Harbor) -> bool:
-    return True
 
 
-@harbor.collect
-def harbor_stats(env: Harbor):
-    env.avg_time_small = env.traffic.time_small.mean()
-    env.avg_time_large = env.traffic.time_large.mean()
-    env.n_small = env.traffic.time_small.count()
-    env.n_large = env.traffic.time_large.count()
-    env.tug_util = env.facilities.tugs.mean_in_use()
-    env.berth_small_util = env.facilities.berths_small.mean_in_use()
-    env.berth_large_util = env.facilities.berths_large.mean_in_use()
 
 
 def ci95(vals: np.ndarray) -> tuple[float, float]:

@@ -36,29 +36,38 @@ A queue models waiting work:
 
    import cimba.random as random
 
-   @model.process
-   def arrivals(env: Clinic):
-       while True:
-           sim.hold(random.exponential(1.0 / env.arrival_rate))
-           env.waiting_room.put(1)
+   class Clinic(sim.Model):
+       arrival_rate: sim.Param
+       mean_service: sim.Param
+       waiting_room: sim.Queue
 
-   @model.process
-   def service(env: Clinic):
-       while True:
-           env.waiting_room.get(1)
-           sim.hold(random.exponential(env.mean_service))
+       @sim.process
+       def arrivals(env: "Clinic"):
+           while True:
+               sim.hold(random.exponential(1.0 / env.arrival_rate))
+               env.waiting_room.put(1)
+
+       @sim.process
+       def service(env: "Clinic"):
+           while True:
+               env.waiting_room.get(1)
+               sim.hold(random.exponential(env.mean_service))
 
 A resource models exclusive access:
 
 .. code-block:: python
 
-   @model.process
-   def patient(env: Clinic):
-       env.doctor.acquire()
-       try:
-           sim.hold(random.exponential(env.mean_service))
-       finally:
-           env.doctor.release()
+   class Clinic(sim.Model):
+       mean_service: sim.Param
+       doctor: sim.Resource
+
+       @sim.process
+       def patient(env: "Clinic"):
+           env.doctor.acquire()
+           try:
+               sim.hold(random.exponential(env.mean_service))
+           finally:
+               env.doctor.release()
 
 The queue version is natural when patients are just a count. The resource
 version is natural when each patient process carries its own path through the
@@ -91,20 +100,20 @@ A condition is useful when a process waits on a predicate over model state:
    class Clinic(sim.Model):
        open: sim.State
        shift_started: sim.Condition
-       is_open: sim.Predicate
+       ready: sim.Predicate
 
-   @model.predicate
-   def is_open(env: Clinic) -> bool:
-       return env.open == 1
+       @sim.predicate(field="ready")
+       def is_open(env: "Clinic") -> bool:
+           return env.open == 1
 
-   @model.process
-   def late_staff(env: Clinic):
-       env.shift_started.wait_for(env.is_open)
+       @sim.process
+       def late_staff(env: "Clinic"):
+           env.shift_started.wait_for(env.ready)
 
-   @model.process
-   def manager(env: Clinic):
-       env.open = 1
-       env.shift_started.signal()
+       @sim.process
+       def manager(env: "Clinic"):
+           env.open = 1
+           env.shift_started.signal()
 
 A dataset collects samples:
 

@@ -2,7 +2,8 @@ Processes and Simulated Time
 ============================
 
 A process is an active entity in the simulated world. In ``cimba.sim``, a
-process is an ordinary Python function registered with ``@model.process``.
+process is an ordinary Python method declared with ``@sim.process`` in a
+``sim.Model`` subclass.
 Inside that function, ``sim.hold()`` and entity methods such as
 ``env.queue.get()`` and ``env.resource.acquire()`` can pause the process and
 let another scheduled activity run.
@@ -11,13 +12,18 @@ let another scheduled activity run.
 
    import cimba.random as random
 
-   @model.process
-   def doctor(env: Clinic):
-       while True:
-           env.waiting_room.get(1)
-           service_time = random.exponential(env.mean_service)
-           sim.hold(service_time)
-           env.served += 1
+   class Clinic(sim.Model):
+       mean_service: sim.Param
+       waiting_room: sim.Queue
+       served: sim.State
+
+       @sim.process
+       def doctor(env: "Clinic"):
+           while True:
+               env.waiting_room.get(1)
+               service_time = random.exponential(env.mean_service)
+               sim.hold(service_time)
+               env.served += 1
 
 There is no ``yield`` in the process body. If the waiting room is empty,
 ``env.waiting_room.get()`` blocks the doctor process until an arrival puts a
@@ -63,12 +69,17 @@ Use ``copies=`` when the model has several identical active entities:
 
 .. code-block:: python
 
-   @model.process(copies=3)
-   def clerk(env: Clinic, idx: int):
-       while True:
-           env.waiting_room.get(1)
-           sim.hold(random.exponential(env.mean_service))
-           env.served += 1
+   class Clinic(sim.Model):
+       mean_service: sim.Param
+       waiting_room: sim.Queue
+       served: sim.State
+
+       @sim.process(copies=3)
+       def clerk(env: "Clinic", idx: int):
+           while True:
+               env.waiting_room.get(1)
+               sim.hold(random.exponential(env.mean_service))
+               env.served += 1
 
 The second argument receives the copy index. Use it when each copy needs a
 stable number for routing, logging, or separate state. If the copies are truly

@@ -122,10 +122,10 @@ def test_persistent_callback_cache_hits_in_a_fresh_interpreter(tmp_path):
         "-c",
         (
             "import json,tempfile; from pathlib import Path; "
-            "from tutorial.tut_5_1 import AssemblyLine,build_model; "
+            "from tutorial.tut_5_1 import build_model; "
             "m=build_model(Path(tempfile.mkdtemp())); "
             "e=m.experiment(replications=1,duration=1.0,warmup=0.0); "
-            "failures=e.run(); s=AssemblyLine.compilation_status(); "
+            "failures=e.run(); s=type(m).compilation_status(); "
             "c=m.callback_cache_stats(); "
             "print(json.dumps({"
             "'state':s.state,'hits':s.cache_hits,"
@@ -152,9 +152,10 @@ def test_persistent_callback_cache_hits_in_a_fresh_interpreter(tmp_path):
     assert cold["writes"] > 0
     assert warm["hits"] > 0
     assert warm["misses"] < cold["misses"]
-    assert cold["callback_misses"] > 0
-    assert warm["callback_hits"] > 0
-    assert warm["callback_misses"] == 0
+    # Every callback is class-declared, so the reusable class plan handles
+    # compilation and the safe per-instance fallback has no work to do.
+    assert cold["callback_hits"] == cold["callback_misses"] == 0
+    assert warm["callback_hits"] == warm["callback_misses"] == 0
 
 
 def test_indexed_callback_cache_key_includes_record_layout(tmp_path):

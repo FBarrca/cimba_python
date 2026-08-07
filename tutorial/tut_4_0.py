@@ -1,8 +1,8 @@
 """Tutorial 4.0: empty harbor simulation template.
 
 This is the Python equivalent of the upstream empty C shell. Fill in a
-``sim.Model`` subclass, register processes with ``@model.process``, register
-predicates with ``@model.predicate``, and finish with ``model.experiment(...)``.
+``sim.Model`` subclass, declare processes with ``@sim.process``, declare
+predicates with ``@sim.predicate``, and finish with ``model.experiment(...)``.
 """
 
 import cimba.sim as sim
@@ -11,14 +11,15 @@ import cimba.sim as sim
 class HarborTemplate(sim.Model):
     result: sim.Output
 
+    @sim.process
+    def placeholder(env: "HarborTemplate"):
+        env.result = 0.0
+        sim.suspend()
+
 
 model = HarborTemplate()
 
 
-@model.process
-def placeholder(env: HarborTemplate):
-    env.result = 0.0
-    sim.suspend()
 
 
 def main() -> None:

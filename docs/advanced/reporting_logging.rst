@@ -22,10 +22,13 @@ text handles created outside the hot loop:
    MSG_WAITING = sim.log_text("waiting room level")
 
 
-   @model.process
-   def arrivals(env: Clinic):
-       sim.log_user(USER_TRACE, MSG_ARRIVED)
-       sim.log_user_i64(USER_TRACE, MSG_WAITING, env.waiting_room.level())
+   class Clinic(sim.Model):
+       waiting_room: sim.Queue
+
+       @sim.process
+       def arrivals(env: "Clinic"):
+           sim.log_user(USER_TRACE, MSG_ARRIVED)
+           sim.log_user_i64(USER_TRACE, MSG_WAITING, env.waiting_room.level())
 
 
    cimba.logger_flags_on(USER_TRACE)
@@ -43,11 +46,15 @@ series have the same ``.report()``/``.report_file()`` pair, described in
 
 .. code-block:: python
 
-   @model.process
-   def debug_report(env: Clinic):
-       sim.hold(480.0)
-       env.waiting_room.report()
-       env.doctor.report()
+   class Clinic(sim.Model):
+       waiting_room: sim.Queue
+       doctor: sim.Resource
+
+       @sim.process
+       def debug_report(env: "Clinic"):
+           sim.hold(480.0)
+           env.waiting_room.report()
+           env.doctor.report()
 
 ``.report_file(path, append=1)`` writes to a path handle created with
 ``sim.log_text()``. These reports are most useful for single-trial debugging
@@ -81,10 +88,16 @@ are usually the best data surface:
 
 .. code-block:: python
 
-   @model.collect
-   def collect_stats(env: Clinic):
-       env.avg_waiting = env.waiting_room.mean_level()
-       env.completed = float(env.served)
+   class Clinic(sim.Model):
+       avg_waiting: sim.Output
+       completed: sim.Output
+       waiting_room: sim.Queue
+       served: sim.State
+
+       @sim.collect
+       def collect_stats(env: "Clinic"):
+           env.avg_waiting = env.waiting_room.mean_level()
+           env.completed = float(env.served)
 
 Outputs are aligned with the experiment trial table and are easy to group by
 parameters. Reports are richer, but they are usually better for diagnosing a

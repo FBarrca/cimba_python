@@ -58,11 +58,12 @@ def test_nested_component_uses_concrete_default_function_override():
     class Example(sim.Model):
         holder: Holder = Holder()
 
+        @sim.process
+        def run(env: "Example"):
+            sim.suspend()
+
     model = Example()
 
-    @model.process
-    def run(env: Example):
-        sim.suspend()
 
     exp = model.experiment(replications=1, duration=1.0)
     assert exp.run() == 0
@@ -93,6 +94,13 @@ def test_heterogeneous_component_collection_dispatches_dynamic_function_calls():
         policies: list[Policy] = [FixedLot(), EOQ(), FixedLot()]
         total: sim.Output
 
+        @sim.process
+        def run(env: "System"):
+            env.total = 0.0
+            for i in range(3):
+                env.total += env.policies[i].calculate(2.0)
+            sim.suspend()
+
     model = System()
     assert model.dtype["policies__lot_size"].shape == (2,)
     assert model.dtype["policies__ordering_cost"].shape == ()
@@ -116,12 +124,6 @@ def test_heterogeneous_component_collection_dispatches_dynamic_function_calls():
     assert lot_schema.shape == (2,)
     assert lot_schema.packed
 
-    @model.process
-    def run(env: System):
-        env.total = 0.0
-        for i in range(3):
-            env.total += env.policies[i].calculate(2.0)
-        sim.suspend()
 
     exp = model.experiment(
         policies__lot_size={0: 3.0, 2: 5.0},
@@ -173,14 +175,15 @@ def test_component_collection_can_have_different_nested_policy_types():
         ]
         dynamic_total: sim.Output
 
+        @sim.process
+        def run(env: "SupplyModel"):
+            env.dynamic_total = 0.0
+            for i in range(2):
+                env.dynamic_total += env.materials[i].value(2.0)
+            sim.suspend()
+
     model = SupplyModel()
 
-    @model.process
-    def run(env: SupplyModel):
-        env.dynamic_total = 0.0
-        for i in range(2):
-            env.dynamic_total += env.materials[i].value(2.0)
-        sim.suspend()
 
     graph_nodes = {node.key for node in model.process_dag().nodes}
     assert {
@@ -543,12 +546,13 @@ def test_polymorphic_component_errors_are_clear():
         policies: list[Policy] = [WithField(), WithoutField()]
         result: sim.Output
 
-    model = DynamicFields()
-    with pytest.raises(ValueError, match="not declared by every concrete"):
-        @model.process
-        def bad_field(env: DynamicFields):
+        @sim.process
+        def bad_field(env: "DynamicFields"):
             i = env.result
             env.result = env.policies[i].amount
+
+    with pytest.raises(ValueError, match="not declared by every concrete"):
+        DynamicFields()
 
     class IntPolicy(Policy):
         @sim.function
@@ -559,12 +563,13 @@ def test_polymorphic_component_errors_are_clear():
         policies: list[Policy] = [Policy(), IntPolicy()]
         result: sim.Output
 
-    bad_functions = BadFunctions()
-    with pytest.raises(TypeError, match="incompatible signatures"):
-        @bad_functions.process
-        def bad_call(env: BadFunctions):
+        @sim.process
+        def bad_call(env: "BadFunctions"):
             i = 0
             env.result = env.policies[i].calculate(1.0)
+
+    with pytest.raises(TypeError, match="incompatible signatures"):
+        BadFunctions()
 
     class ParamPolicy(Policy):
         setting: sim.Param
@@ -593,11 +598,12 @@ def test_component_function_reads_params_and_returns_value():
         level: sim.Param
         order: sim.Output
 
+        @sim.process
+        def run(env: "System"):
+            env.order = env.policy.decide(env.level)
+
     model = System()
 
-    @model.process
-    def run(env: System):
-        env.order = env.policy.decide(env.level)
 
     source = model._processes[0].fn.__cimba_source__
     # the call site names the helper per declaration, not per class, so
@@ -686,12 +692,13 @@ def test_component_function_collection_dynamic_index():
         choice: sim.State
         result: sim.Output
 
+        @sim.process
+        def run(env: "System"):
+            env.choice = 1
+            env.result = env.policies[env.choice].apply(3.0)
+
     model = System()
 
-    @model.process
-    def run(env: System):
-        env.choice = 1
-        env.result = env.policies[env.choice].apply(3.0)
 
     exp = model.experiment(
         policies__offset=[[2.0, 7.0]],
@@ -749,11 +756,12 @@ def test_component_function_calls_component_function():
         policy: Policy = Policy()
         result: sim.Output
 
+        @sim.process
+        def run(env: "System"):
+            env.result = env.policy.decide(4.0)
+
     model = System()
 
-    @model.process
-    def run(env: System):
-        env.result = env.policy.decide(4.0)
 
     exp = model.experiment(
         policy__scale=2.0,
@@ -810,15 +818,17 @@ def test_component_function_nested_component_ref_and_collect():
         result: sim.Output
         collected: sim.Output
 
+        @sim.process
+        def run(env: "System"):
+            env.result = env.wrapper.decide(2.0)
+
+        @sim.collect
+        def collect(env: "System"):
+            env.collected = env.direct.value(4.0)
+
     model = System()
 
-    @model.process
-    def run(env: System):
-        env.result = env.wrapper.decide(2.0)
 
-    @model.collect
-    def collect(env: System):
-        env.collected = env.direct.value(4.0)
 
     exp = model.experiment(
         direct__amount=4.0,
@@ -854,6 +864,11 @@ def test_component_function_classes_and_cache_are_independent():
         added: sim.Output
         multiplied: sim.Output
 
+        @sim.process
+        def run(env: "System"):
+            env.added = env.add.decide(3.0)
+            env.multiplied = env.multiply.decide(3.0)
+
     model = System()
     add_specs = [
         spec for spec in model._component_functions.values()
@@ -862,10 +877,6 @@ def test_component_function_classes_and_cache_are_independent():
     assert len(add_specs) == 2
     assert add_specs[0].helper is add_specs[1].helper
 
-    @model.process
-    def run(env: System):
-        env.added = env.add.decide(3.0)
-        env.multiplied = env.multiply.decide(3.0)
 
     exp = model.experiment(
         add__value=4.0,
@@ -960,11 +971,12 @@ def test_item_function_calls_item_function_across_unequal_collections():
         small: Box = Box(1)
         large: Box = Box(3)
 
+        @sim.process
+        def run(env: "Nested"):
+            sim.suspend()
+
     model = Nested()
 
-    @model.process
-    def run(env: Nested):
-        sim.suspend()
 
     exp = model.experiment(small__leaves__w=[7.0],
                            large__leaves__w=[1.0, 2.0, 4.0],
@@ -991,11 +1003,12 @@ def test_item_function_shared_between_lone_component_and_collection():
         lone: Node = Node()
         many: list[Node] = [Node(), Node()]
 
+        @sim.process
+        def run(env: "Mixed"):
+            sim.suspend()
+
     model = Mixed()
 
-    @model.process
-    def run(env: Mixed):
-        sim.suspend()
 
     exp = model.experiment(lone__v=9.0, many__v=[1.0, 2.0],
                            replications=1, duration=1.0, warmup=0.0)
@@ -1032,12 +1045,13 @@ def test_polymorphic_collections_of_unequal_length_dispatch_correctly():
         long: list[Base] = [Twice(), Thrice(), Base()]
         picked: sim.Output
 
+        @sim.process
+        def run(env: "Fleet"):
+            env.picked = env.long[1].value()
+            sim.suspend()
+
     model = Fleet()
 
-    @model.process
-    def run(env: Fleet):
-        env.picked = env.long[1].value()
-        sim.suspend()
 
     exp = model.experiment(short__w=[5.0], long__w=[1.0, 2.0, 4.0],
                            replications=1, duration=1.0, warmup=0.0)
@@ -1082,11 +1096,12 @@ def test_component_function_rejects_invalid_signatures_and_calls():
     class ValidSystem(sim.Model):
         item: Valid = Valid()
 
-    model = ValidSystem()
-    with pytest.raises(ValueError, match="must use positional arguments"):
-        @model.process
-        def run(env: ValidSystem):
+        @sim.process
+        def run(env: "ValidSystem"):
             env.item.apply(value=1.0)
+
+    with pytest.raises(ValueError, match="must use positional arguments"):
+        ValidSystem()
 
     class BadBody(sim.Component):
         @sim.function
@@ -1183,8 +1198,7 @@ def test_component_function_rejects_recursive_calls_and_marker_conflicts():
         item: Callable = Callable()
 
     model = CallableSystem()
-    with pytest.raises(ValueError, match="cannot be registered"):
-        model.process(model.item.value)
+    assert not hasattr(model, "process")
 
 
 class Warehouse(sim.Component):
@@ -1238,18 +1252,19 @@ def test_component_param_defaults_flatten_per_instance_and_can_be_overridden():
         policies: list[Policy] = [Policy(2.0), Policy(3.0)]
         result: sim.Output
 
+        @sim.process
+        def run(env: "Network"):
+            env.result = (
+                env.policies[0].threshold * env.policies[0].multiplier
+                + env.policies[1].threshold * env.policies[1].multiplier
+            )
+
     model = Network()
     assert model.param_defaults == {
         "policies__threshold": (10.0, 10.0),
         "policies__multiplier": (2.0, 3.0),
     }
 
-    @model.process
-    def run(env: Network):
-        env.result = (
-            env.policies[0].threshold * env.policies[0].multiplier
-            + env.policies[1].threshold * env.policies[1].multiplier
-        )
 
     defaulted = model.experiment(replications=1, duration=1.0)
     assert defaulted.run() == 0
@@ -1348,39 +1363,36 @@ def test_component_process_and_data_lifecycle_callbacks_reuse_class_aot(
     model = Network()
     status = Network.compilation_status()
     plan = Network.compilation_plan()
-    compiled = Network.__dict__["_cimba_component_compiled"]
+    compiled = Network.__dict__["_cimba_callback_compiled"]
     assert status.state == "ready"
     assert status.error is None
     assert plan is not None
     assert compiled is not None
     assert plan.process_names == ("worker__run",)
-    assert plan.callback_count == 6
+    assert plan.callback_count == 11
 
-    procs, lifecycle, collects = model._aot_component_callbacks()
+    procs, predicates, events, extras = model._aot_class_callbacks()
     assert procs["worker__run"] is dict(compiled.procs)["worker__run"]
-    assert lifecycle == {
-        0: compiled.lifecycle[0],
-        1: compiled.lifecycle[1],
-        2: compiled.lifecycle[2],
-        4: compiled.lifecycle[3],
-    }
-    assert collects == {0: compiled.collects[0]}
+    assert predicates == {}
+    assert events == {}
+    assert extras == dict(enumerate(compiled.extras))
 
     model.experiment(replications=1, duration=1.0, warmup=0.0)
     assert model._compiled["procs"]["worker__run"] is procs["worker__run"]
     assert model._compiled["events"][:3] == tuple(
-        lifecycle[index] for index in range(3))
-    assert model._compiled["events"][4] is lifecycle[4]
-    assert model._compiled["collect_callbacks"][0] is collects[0]
+        extras[index] for index in range(3))
+    assert model._compiled["events"][4] is extras[4]
+    assert model._compiled["collect_callbacks"][0] is extras[9]
 
     # A constructor-added entity shifts the class data layout and changes
     # entity setup, so both AOT groups must be rejected safely.
     extended = Network(queues=["extra"])
-    extended_procs, extended_lifecycle, extended_collects = \
-        extended._aot_component_callbacks()
+    extended_procs, extended_predicates, extended_events, extended_extras = \
+        extended._aot_class_callbacks()
     assert extended_procs == {}
-    assert extended_lifecycle == {}
-    assert extended_collects == {}
+    assert extended_predicates == {}
+    assert extended_events == {}
+    assert extended_extras == {}
 
 
 def test_component_callback_log_text_handle_uses_runtime_sidecar(monkeypatch):
@@ -1456,16 +1468,18 @@ def test_model_collect_can_use_component_field_namespace():
         avg: sim.Output
         station: Station = Station()
 
+        @sim.process
+        def feeder(env: "Network"):
+            env.station.queue.put(2)
+            sim.suspend()
+
+        @sim.collect
+        def collect_stats(env: "Network"):
+            env.avg = env.station.queue.mean_level()
+
     model = Network()
 
-    @model.process
-    def feeder(env: Network):
-        env.station.queue.put(2)
-        sim.suspend()
 
-    @model.collect
-    def collect_stats(env: Network):
-        env.avg = env.station.queue.mean_level()
 
     assert "env.station__queue" in model._processes[0].fn.__cimba_source__
     assert "env.station__queue" in model._collect.__cimba_source__
@@ -1581,11 +1595,12 @@ def test_component_collection_collects_run_per_instance_before_model():
         total: sim.Output
         desks: list[Desk] = [Desk(2), Desk(5)]
 
+        @sim.collect
+        def clinic_stats(env: "Clinic"):
+            env.total = env.desks[0].served + env.desks[1].served
+
     model = Clinic()
 
-    @model.collect
-    def clinic_stats(env: Clinic):
-        env.total = env.desks[0].served + env.desks[1].served
 
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
                            seed=22)
@@ -1675,13 +1690,14 @@ def test_model_process_can_read_and_write_component_state_namespace():
         done: sim.Output
         counter: Counter = Counter()
 
+        @sim.process
+        def actor(env: "Network"):
+            env.counter.count += 3
+            env.done = env.counter.count
+            sim.suspend()
+
     model = Network()
 
-    @model.process
-    def actor(env: Network):
-        env.counter.count += 3
-        env.done = env.counter.count
-        sim.suspend()
 
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
                            seed=14)
@@ -1700,24 +1716,27 @@ def test_model_predicate_can_use_component_field_namespace():
         ready: sim.Predicate
         flags: GateState = GateState()
 
+        @sim.predicate(field="ready")
+        def is_ready(env: "Network") -> bool:
+            return env.flags.open == 1
+
+        @sim.process
+        def opener(env: "Network"):
+            sim.hold(1.0)
+            env.flags.open = 1
+            env.gate.signal()
+            sim.suspend()
+
+        @sim.process
+        def waiter(env: "Network"):
+            env.gate.wait_for(env.ready)
+            env.ok = 1.0
+            sim.suspend()
+
     model = Network()
 
-    @model.predicate
-    def ready(env: Network) -> bool:
-        return env.flags.open == 1
 
-    @model.process
-    def opener(env: Network):
-        sim.hold(1.0)
-        env.flags.open = 1
-        env.gate.signal()
-        sim.suspend()
 
-    @model.process
-    def waiter(env: Network):
-        env.gate.wait_for(env.ready)
-        env.ok = 1.0
-        sim.suspend()
 
     exp = model.experiment(replications=1, duration=2.0, warmup=0.0,
                            seed=15)
@@ -1733,17 +1752,19 @@ def test_model_event_can_use_component_field_namespace():
         bump: sim.Event
         counter: Counter = Counter()
 
+        @sim.event(field="bump")
+        def on_bump(env: "Network"):
+            env.counter.count += 1
+
+        @sim.process
+        def driver(env: "Network"):
+            env.bump.schedule(1.0)
+            sim.hold(2.0)
+            sim.suspend()
+
     model = Network()
 
-    @model.event
-    def bump(env: Network):
-        env.counter.count += 1
 
-    @model.process
-    def driver(env: Network):
-        env.bump.schedule(1.0)
-        sim.hold(2.0)
-        sim.suspend()
 
     exp = model.experiment(replications=1, duration=3.0, warmup=0.0,
                            seed=16)
@@ -1759,13 +1780,14 @@ def test_model_process_dag_uses_lowered_component_namespace_source():
     class Network(sim.Model):
         station: Station = Station()
 
+        @sim.process
+        def feeder(env: "Network"):
+            env.station.count += 1
+            env.station.queue.put(1)
+            sim.suspend()
+
     model = Network()
 
-    @model.process
-    def feeder(env: Network):
-        env.station.count += 1
-        env.station.queue.put(1)
-        sim.suspend()
 
     graph = model.process_dag()
     nodes = {node.key for node in graph.nodes}
@@ -1878,40 +1900,50 @@ def test_model_component_namespace_errors_are_rejected():
     class UsesBox(sim.Model):
         box: Box = Box()
 
-    direct = UsesBox()
-    with pytest.raises(ValueError, match="cannot use env.box directly"):
-        @direct.process
-        def direct_actor(env: UsesBox):
+    class Direct(UsesBox):
+        @sim.process
+        def direct_actor(env: "UsesBox"):
             _ = env.box
             sim.suspend()
 
-    unknown = UsesBox()
-    with pytest.raises(ValueError, match="unknown component field"):
-        @unknown.process
-        def unknown_actor(env: UsesBox):
+    class Unknown(UsesBox):
+        @sim.process
+        def unknown_actor(env: "UsesBox"):
             env.box.missing = 1
             sim.suspend()
 
-    dynamic = UsesBox()
-    with pytest.raises(ValueError, match="dynamic getattr"):
-        @dynamic.process
-        def dynamic_actor(env: UsesBox):
+    class Dynamic(UsesBox):
+        @sim.process
+        def dynamic_actor(env: "UsesBox"):
             env.box.value = getattr(env.box, "value")
             sim.suspend()
 
-    assign = UsesBox()
-    with pytest.raises(ValueError, match="cannot use env.box directly"):
-        @assign.process
-        def assign_actor(env: UsesBox):
+    class Assign(UsesBox):
+        @sim.process
+        def assign_actor(env: "UsesBox"):
             env.box = 1
             sim.suspend()
 
-    nested = UsesBox()
-    with pytest.raises(ValueError, match="below component field"):
-        @nested.process
-        def nested_actor(env: UsesBox):
+    class Nested(UsesBox):
+        @sim.process
+        def nested_actor(env: "UsesBox"):
             _ = env.box.value.extra
             sim.suspend()
+
+    with pytest.raises(ValueError, match="cannot use env.box directly"):
+        Direct()
+
+    with pytest.raises(ValueError, match="unknown component field"):
+        Unknown()
+
+    with pytest.raises(ValueError, match="dynamic getattr"):
+        Dynamic()
+
+    with pytest.raises(ValueError, match="cannot use env.box directly"):
+        Assign()
+
+    with pytest.raises(ValueError, match="below component field"):
+        Nested()
 
 
 def test_component_collection_declarations_flatten_to_shaped_fields():
@@ -1974,18 +2006,19 @@ def test_model_process_can_index_component_collection_fields_and_constants():
             Attraction(queue_count=2, bias=20),
         ]
 
+        @sim.process
+        def visitor(env: "Park"):
+            at = 1
+            qi = 1
+            q = env.attractions[at].lanes[qi]
+            q.put(env.attractions[at].bias, 0)
+            env.attractions[at].visits += q.take()
+            env.total = env.attractions[at].visits \
+                + env.attractions[at].queue_count
+            sim.suspend()
+
     model = Park()
 
-    @model.process
-    def visitor(env: Park):
-        at = 1
-        qi = 1
-        q = env.attractions[at].lanes[qi]
-        q.put(env.attractions[at].bias, 0)
-        env.attractions[at].visits += q.take()
-        env.total = env.attractions[at].visits \
-            + env.attractions[at].queue_count
-        sim.suspend()
 
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
                            seed=21)
@@ -2001,13 +2034,14 @@ def test_component_collection_outputs_run_and_count_failures_by_trial():
     class Network(sim.Model):
         items: list[Item] = [Item(), Item()]
 
+        @sim.process
+        def actor(env: "Network"):
+            env.items[0].score = 1.0
+            env.items[1].score = 2.0
+            sim.suspend()
+
     model = Network()
 
-    @model.process
-    def actor(env: Network):
-        env.items[0].score = 1.0
-        env.items[1].score = 2.0
-        sim.suspend()
 
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
                            seed=23)
@@ -2031,11 +2065,12 @@ def test_component_collection_can_own_params_and_sweep_vectors():
         second_rate: sim.Output
         items: list[Item] = [Item(10), Item(20)]
 
+        @sim.process
+        def inspect_second(env: "Network"):
+            env.second_rate = env.items[1].rate
+
     model = Network()
 
-    @model.process
-    def inspect_second(env: Network):
-        env.second_rate = env.items[1].rate
 
     rates = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float64)
     seeds = model.trial_seeds(seed=35, items__rate=rates, replications=2)
@@ -2111,12 +2146,13 @@ def test_component_collection_can_own_traces():
         second_first: sim.Output
         sources: list[Source] = [Source(), Source()]
 
+        @sim.process
+        def inspect_second(env: "Network"):
+            values = sim.Trace(env.sources[1].demand)
+            env.second_first = values[0]
+
     model = Network()
 
-    @model.process
-    def inspect_second(env: Network):
-        values = sim.Trace(env.sources[1].demand)
-        env.second_first = values[0]
 
     assert model.traces == ["sources__demand"]
     assert model.dtype["sources__demand"].shape == (2, 2)
@@ -2196,6 +2232,10 @@ def test_component_collection_processes_run_per_item_with_symbolic_copies():
             Attraction(queue_count=2, server_count=2, base=20),
         ]
 
+        @sim.collect
+        def collect_stats(env: "Park"):
+            env.total = env.attractions[0].done + env.attractions[1].done
+
     model = Park()
     # The collection's copies are compiled into one indexed process; the
     # per-item copy counts sum, and the copy index is mapped back to the
@@ -2207,9 +2247,6 @@ def test_component_collection_processes_run_per_item_with_symbolic_copies():
     assert "_CIMBA_PROCINST_attractions__server" in \
         model._processes[0].fn.__cimba_source__
 
-    @model.collect
-    def collect_stats(env: Park):
-        env.total = env.attractions[0].done + env.attractions[1].done
 
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
                            seed=22)
@@ -2238,14 +2275,15 @@ def test_component_collection_process_dag_uses_lowered_source():
             Attraction(queue_count=2),
         ]
 
+        @sim.process
+        def visitor(env: "Park"):
+            at = 1
+            env.attractions[at].lanes[0].put(7, 0)
+            env.attractions[at].visits += 1
+            sim.suspend()
+
     model = Park()
 
-    @model.process
-    def visitor(env: Park):
-        at = 1
-        env.attractions[at].lanes[0].put(7, 0)
-        env.attractions[at].visits += 1
-        sim.suspend()
 
     graph = model.process_dag()
     nodes = {node.key for node in graph.nodes}
@@ -2291,6 +2329,10 @@ def test_nested_component_fields_processes_and_model_refs_run():
         total: sim.Output
         wrapper: Wrapper = Wrapper()
 
+        @sim.collect
+        def collect_stats(env: "Network"):
+            env.total = env.wrapper.counter.count
+
     model = Network()
     assert model.state == ["wrapper__counter__count"]
     assert [p.name for p in model._processes] == [
@@ -2299,9 +2341,6 @@ def test_nested_component_fields_processes_and_model_refs_run():
     ]
     assert isinstance(model.wrapper.counter, Counter)
 
-    @model.collect
-    def collect_stats(env: Network):
-        env.total = env.wrapper.counter.count
 
     assert "env.wrapper__counter__count" in \
         model._processes[0].fn.__cimba_source__
@@ -2339,6 +2378,11 @@ def test_component_collection_can_own_nested_component_processes():
             Attraction(server_count=2, base=20),
         ]
 
+        @sim.collect
+        def collect_stats(env: "Park"):
+            env.total = env.attractions[0].servers.done \
+                + env.attractions[1].servers.done
+
     model = Park()
     assert [(p.name, p.copies, p.priority, p.indexed)
             for p in model._processes] == [
@@ -2347,10 +2391,6 @@ def test_component_collection_can_own_nested_component_processes():
     assert model.dtype["attractions__servers__done"].shape == (2,)
     assert isinstance(model.attractions[0].servers, Servers)
 
-    @model.collect
-    def collect_stats(env: Park):
-        env.total = env.attractions[0].servers.done \
-            + env.attractions[1].servers.done
 
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
                            seed=25)
@@ -2373,6 +2413,12 @@ def test_nested_component_collections_linearize_indexes():
         total: sim.Output
         zones: list[Zone] = [Zone(1), Zone(2)]
 
+        @sim.process
+        def actor(env: "Campus"):
+            env.zones[1].gates[1].count = 7
+            env.total = env.zones[1].gates[1].count
+            sim.suspend()
+
     model = Campus()
     assert model.dtype["zones__gates__count"].shape == (3,)
     (zones,) = model._component_collection_decls
@@ -2380,11 +2426,6 @@ def test_nested_component_collections_linearize_indexes():
     assert gates.parent_offsets == (0, 1)
     assert gates.parent_lengths == (1, 2)
 
-    @model.process
-    def actor(env: Campus):
-        env.zones[1].gates[1].count = 7
-        env.total = env.zones[1].gates[1].count
-        sim.suspend()
 
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
                            seed=26)
@@ -2411,6 +2452,14 @@ def test_nested_component_collection_pqueues_use_nested_offsets():
         total: sim.Output
         zones: list[Zone] = [Zone([1]), Zone([2, 1])]
 
+        @sim.process
+        def actor(env: "Campus"):
+            q = env.zones[1].gates[0].lanes[1]
+            q.put(12, 0)
+            env.zones[1].gates[0].hits += q.take()
+            env.total = env.zones[1].gates[0].hits
+            sim.suspend()
+
     model = Campus()
     assert model.pqueues == {"zones__gates__lanes": 4}
     (zones,) = model._component_collection_decls
@@ -2418,13 +2467,6 @@ def test_nested_component_collection_pqueues_use_nested_offsets():
     assert gates.pqueue_counts["lanes"] == (1, 2, 1)
     assert gates.pqueue_offsets["lanes"] == (0, 1, 3)
 
-    @model.process
-    def actor(env: Campus):
-        q = env.zones[1].gates[0].lanes[1]
-        q.put(12, 0)
-        env.zones[1].gates[0].hits += q.take()
-        env.total = env.zones[1].gates[0].hits
-        sim.suspend()
 
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
                            seed=27)
@@ -2493,6 +2535,10 @@ def test_nested_component_spawnable_uses_decorator_with_struct_view():
         total: sim.Output
         flow: Flow = Flow()
 
+        @sim.collect
+        def collect_stats(env: "Network"):
+            env.total = env.flow.entrance.total
+
     model = Network()
     assert model._spawnable_fields == ["flow__entrance__visitor"]
     assert [
@@ -2503,9 +2549,6 @@ def test_nested_component_spawnable_uses_decorator_with_struct_view():
         ("flow__entrance__visitor", True, "flow__entrance__visitor", None),
     ]
 
-    @model.collect
-    def collect_stats(env: Network):
-        env.total = env.flow.entrance.total
 
     exp = model.experiment(replications=1, duration=5.0, warmup=0.0,
                            seed=28)
@@ -2580,18 +2623,20 @@ def test_scalar_component_can_own_process_handles():
         total: sim.Output
         workers: Workers = Workers()
 
+        @sim.process
+        def outside_supervisor(env: "Network"):
+            sim.hold(0.2)
+            sim.interrupt(env.workers.worker[0], 5, 0)
+            sim.suspend()
+
+        @sim.collect
+        def collect_stats(env: "Network"):
+            env.total = env.workers.total
+
     model = Network()
     assert model.dtype["workers__worker"].shape == (2,)
 
-    @model.process
-    def outside_supervisor(env: Network):
-        sim.hold(0.2)
-        sim.interrupt(env.workers.worker[0], 5, 0)
-        sim.suspend()
 
-    @model.collect
-    def collect_stats(env: Network):
-        env.total = env.workers.total
 
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
                            seed=33)
@@ -2619,22 +2664,24 @@ def test_component_collection_can_own_ragged_process_handles():
         total: sim.Output
         teams: list[Team] = [Team(1, 10), Team(3, 20)]
 
+        @sim.process
+        def supervisor(env: "Network"):
+            sim.hold(0.1)
+            sim.interrupt(env.teams[0].worker[0], 1, 0)
+            sim.interrupt(env.teams[1].worker[2], 2, 0)
+            sim.suspend()
+
+        @sim.collect
+        def collect_stats(env: "Network"):
+            env.total = env.teams[0].total + env.teams[1].total
+
     model = Network()
     assert model.dtype["teams__worker"].shape == (4,)
     (teams,) = model._component_collection_decls
     assert teams.process_counts["worker"] == (1, 3)
     assert teams.process_offsets["worker"] == (0, 1)
 
-    @model.process
-    def supervisor(env: Network):
-        sim.hold(0.1)
-        sim.interrupt(env.teams[0].worker[0], 1, 0)
-        sim.interrupt(env.teams[1].worker[2], 2, 0)
-        sim.suspend()
 
-    @model.collect
-    def collect_stats(env: Network):
-        env.total = env.teams[0].total + env.teams[1].total
 
     assert "env.teams__worker[0]" in model._processes[-1].fn.__cimba_source__
     assert "env.teams__worker[3]" in model._processes[-1].fn.__cimba_source__
@@ -2681,6 +2728,16 @@ def test_nested_component_collection_can_own_process_handles():
             Zone([Gate(2, 20), Gate(1, 30)]),
         ]
 
+        @sim.process
+        def supervisor(env: "Campus"):
+            sim.hold(0.1)
+            sim.interrupt(env.zones[1].gates[0].worker[1], 4, 0)
+            sim.suspend()
+
+        @sim.collect
+        def collect_stats(env: "Campus"):
+            env.total = env.zones[1].gates[0].total
+
     model = Campus()
     assert model.dtype["zones__gates__worker"].shape == (4,)
     (zones,) = model._component_collection_decls
@@ -2688,15 +2745,7 @@ def test_nested_component_collection_can_own_process_handles():
     assert gates.process_counts["worker"] == (1, 2, 1)
     assert gates.process_offsets["worker"] == (0, 1, 3)
 
-    @model.process
-    def supervisor(env: Campus):
-        sim.hold(0.1)
-        sim.interrupt(env.zones[1].gates[0].worker[1], 4, 0)
-        sim.suspend()
 
-    @model.collect
-    def collect_stats(env: Campus):
-        env.total = env.zones[1].gates[0].total
 
     assert "env.zones__gates__worker[2]" in \
         model._processes[-1].fn.__cimba_source__
@@ -2717,14 +2766,15 @@ def test_model_process_can_spawn_component_collection_field():
     class Network(sim.Model):
         flows: list[Flow] = [Flow(), Flow()]
 
+        @sim.process
+        def launcher(env: "Network"):
+            handle = sim.spawn(env.flows[1].visitor, env)
+            sim.wait_process(handle)
+            sim.despawn(handle)
+            sim.suspend()
+
     model = Network()
 
-    @model.process
-    def launcher(env: Network):
-        handle = sim.spawn(env.flows[1].visitor, env)
-        sim.wait_process(handle)
-        sim.despawn(handle)
-        sim.suspend()
 
     assert "env.flows__visitor[1]" in model._processes[-1].fn.__cimba_source__
     exp = model.experiment(replications=1, duration=5.0, warmup=0.0,
@@ -2747,14 +2797,15 @@ def test_model_process_can_spawn_nested_component_spawnable_path():
     class Park(sim.Model):
         park: ParkArea = ParkArea()
 
+        @sim.process
+        def arrivals(env: "Park"):
+            handle = sim.spawn(env.park.entrance.visitor, env)
+            sim.wait_process(handle)
+            sim.despawn(handle)
+            sim.suspend()
+
     model = Park()
 
-    @model.process
-    def arrivals(env: Park):
-        handle = sim.spawn(env.park.entrance.visitor, env)
-        sim.wait_process(handle)
-        sim.despawn(handle)
-        sim.suspend()
 
     exp = model.experiment(replications=1, duration=5.0, warmup=0.0,
                            seed=31)
@@ -2855,33 +2906,41 @@ def test_nested_component_declaration_and_namespace_errors_are_rejected():
     class Network(sim.Model):
         parent: Parent = Parent()
 
-    direct = Network()
-    with pytest.raises(ValueError, match="cannot use env.parent.child"):
-        @direct.process
-        def direct_actor(env: Network):
+    class Direct(Network):
+        @sim.process
+        def direct_actor(env: "Network"):
             _ = env.parent.child
             sim.suspend()
 
-    unknown = Network()
-    with pytest.raises(ValueError, match="unknown component field"):
-        @unknown.process
-        def unknown_actor(env: Network):
+    class Unknown(Network):
+        @sim.process
+        def unknown_actor(env: "Network"):
             env.parent.child.missing = 1
             sim.suspend()
 
-    dynamic = Network()
-    with pytest.raises(ValueError, match="dynamic getattr"):
-        @dynamic.process
-        def dynamic_actor(env: Network):
+    class Dynamic(Network):
+        @sim.process
+        def dynamic_actor(env: "Network"):
             env.parent.child.count = getattr(env.parent.child, "count")
             sim.suspend()
 
-    nested_field = Network()
-    with pytest.raises(ValueError, match="below component field"):
-        @nested_field.process
-        def nested_actor(env: Network):
+    class Nested(Network):
+        @sim.process
+        def nested_actor(env: "Network"):
             _ = env.parent.child.count.extra
             sim.suspend()
+
+    with pytest.raises(ValueError, match="cannot use env.parent.child"):
+        Direct()
+
+    with pytest.raises(ValueError, match="unknown component field"):
+        Unknown()
+
+    with pytest.raises(ValueError, match="dynamic getattr"):
+        Dynamic()
+
+    with pytest.raises(ValueError, match="below component field"):
+        Nested()
 
 
 def test_component_collection_declaration_errors_are_rejected():
@@ -2950,40 +3009,50 @@ def test_component_collection_namespace_errors_are_rejected():
     class Network(sim.Model):
         items: list[Item] = [Item()]
 
-    direct = Network()
-    with pytest.raises(ValueError, match="cannot use env.items directly"):
-        @direct.process
-        def direct_actor(env: Network):
+    class Direct(Network):
+        @sim.process
+        def direct_actor(env: "Network"):
             _ = env.items
             sim.suspend()
 
-    item_alias = Network()
-    with pytest.raises(ValueError, match=r"env.items\[\.\.\.\] directly"):
-        @item_alias.process
-        def item_alias_actor(env: Network):
+    class ItemAlias(Network):
+        @sim.process
+        def item_alias_actor(env: "Network"):
             _ = env.items[0]
             sim.suspend()
 
-    unknown = Network()
-    with pytest.raises(ValueError, match="unknown component collection field"):
-        @unknown.process
-        def unknown_actor(env: Network):
+    class Unknown(Network):
+        @sim.process
+        def unknown_actor(env: "Network"):
             env.items[0].missing = 1
             sim.suspend()
 
-    dynamic = Network()
-    with pytest.raises(ValueError, match="dynamic getattr"):
-        @dynamic.process
-        def dynamic_actor(env: Network):
+    class Dynamic(Network):
+        @sim.process
+        def dynamic_actor(env: "Network"):
             env.items[0].count = getattr(env.items[0], "count")
             sim.suspend()
 
-    unsupported_constant = Network()
-    with pytest.raises(ValueError, match="unknown component collection field"):
-        @unsupported_constant.process
-        def unsupported_actor(env: Network):
+    class Unsupported(Network):
+        @sim.process
+        def unsupported_actor(env: "Network"):
             env.items[0].count = env.items[0].values[0]
             sim.suspend()
+
+    with pytest.raises(ValueError, match="cannot use env.items directly"):
+        Direct()
+
+    with pytest.raises(ValueError, match=r"env.items\[\.\.\.\] directly"):
+        ItemAlias()
+
+    with pytest.raises(ValueError, match="unknown component collection field"):
+        Unknown()
+
+    with pytest.raises(ValueError, match="dynamic getattr"):
+        Dynamic()
+
+    with pytest.raises(ValueError, match="unknown component collection field"):
+        Unsupported()
 
 class Stage(sim.Component):
     seen: sim.State
@@ -3008,6 +3077,14 @@ def test_component_store_wiring_shares_entity_and_runs():
         first: Stage = Stage()
         second: Stage = Stage(inbox=first.outbox)
 
+        @sim.process
+        def feed(env: "Line"):
+            env.first.inbox.put(7)
+
+        @sim.process
+        def drain(env: "Line"):
+            env.done = float(env.second.outbox.take())
+
     model = Line()
     assert model.stores == {"first__inbox": None, "first__outbox": None,
                             "second__outbox": None}
@@ -3017,13 +3094,7 @@ def test_component_store_wiring_shares_entity_and_runs():
     assert second_decl.direct_field_map["inbox"] == "first__outbox"
     assert second_decl.aliased_fields == ("inbox",)
 
-    @model.process
-    def feed(env: Line):
-        env.first.inbox.put(7)
 
-    @model.process
-    def drain(env: Line):
-        env.done = float(env.second.outbox.take())
 
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=3)
     assert exp.run() == 0
@@ -3216,12 +3287,13 @@ def test_component_ref_chain_supports_forward_declaration_order():
         relay2: RefRelay = second
         sink: RefNode = end
 
+        @sim.process
+        def feed(env: "Line"):
+            env.relay1.inbox.put(1)
+            env.relay1.inbox.put(2)
+
     model = Line()
 
-    @model.process
-    def feed(env: Line):
-        env.relay1.inbox.put(1)
-        env.relay1.inbox.put(2)
 
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=5)
     assert exp.run() == 0
@@ -3251,16 +3323,18 @@ def test_component_refs_table_routes_by_condition():
         dispatch: Dispatcher = Dispatcher(routes=(nodes[0], nodes[1],
                                                   nodes[2]))
 
+        @sim.process
+        def feed(env: "Shop"):
+            for i in range(7):
+                env.dispatch.inbox.put(i)
+
+        @sim.process
+        def probe(env: "Shop"):
+            env.dispatch.routes[1].inbox.put(100)
+
     model = Shop()
 
-    @model.process
-    def feed(env: Shop):
-        for i in range(7):
-            env.dispatch.inbox.put(i)
 
-    @model.process
-    def probe(env: Shop):
-        env.dispatch.routes[1].inbox.put(100)
 
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=5)
     assert exp.run() == 0
@@ -3278,11 +3352,12 @@ def test_component_collection_items_can_reference_mixed_targets():
         relays: list[RefRelay] = [first, second]
         sink: RefNode = end
 
+        @sim.process
+        def feed(env: "Chain"):
+            env.relays[0].inbox.put(9)
+
     model = Chain()
 
-    @model.process
-    def feed(env: Chain):
-        env.relays[0].inbox.put(9)
 
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=5)
     assert exp.run() == 0
@@ -3299,12 +3374,13 @@ def test_model_callback_can_follow_refs_with_dynamic_index():
     class Ring(sim.Model):
         nodes: list[RefNode] = [a, b, c]
 
+        @sim.process
+        def probe(env: "Ring"):
+            for j in range(3):
+                env.nodes[j].downstream.inbox.put(j)
+
     model = Ring()
 
-    @model.process
-    def probe(env: Ring):
-        for j in range(3):
-            env.nodes[j].downstream.inbox.put(j)
 
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=5)
     assert exp.run() == 0
@@ -3429,12 +3505,13 @@ def test_component_refs_table_accepts_a_single_item_collection():
         nodes: list[RefNode] = solo
         router: Router = Router(targets=tuple(solo))
 
+        @sim.process
+        def feed(env: "Single"):
+            for i in range(6):
+                env.router.inbox.put(i)
+
     model = Single()
 
-    @model.process
-    def feed(env: Single):
-        for i in range(6):
-            env.router.inbox.put(i)
 
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=5)
     assert exp.run() == 0
@@ -3487,11 +3564,12 @@ def test_component_refs_tables_may_differ_in_length_per_instance():
             Router(targets=(pool[0], pool[1])),
         ]
 
+        @sim.process
+        def run(env: "Fleet"):
+            sim.suspend()
+
     model = Fleet()
 
-    @model.process
-    def run(env: Fleet):
-        sim.suspend()
 
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=5)
     assert exp.run() == 0
@@ -3552,15 +3630,16 @@ def test_len_component_collection_works_in_model_callback():
         items: list[Item] = [Item(2.0), Item(5.0)]
         total: sim.Output
 
+        @sim.process
+        def sum_items(env: "Shop"):
+            total = 0.0
+            for index in range(len(env.items)):
+                total += env.items[index].value
+            env.total = total
+            sim.suspend()
+
     model = Shop()
 
-    @model.process
-    def sum_items(env: Shop):
-        total = 0.0
-        for index in range(len(env.items)):
-            total += env.items[index].value
-        env.total = total
-        sim.suspend()
 
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0)
     assert exp.run() == 0
@@ -3676,13 +3755,14 @@ def test_component_ref_usage_errors_are_rejected():
         a: RefNode = left
         b: RefNode = right
 
-    bare = Pair()
-    with pytest.raises(ValueError, match="cannot use env.a.downstream "
-                                         "directly"):
-        @bare.process
-        def bare_ref(env: Pair):
+        @sim.process
+        def bare_ref(env: "Pair"):
             _ = env.a.downstream
             sim.suspend()
+
+    with pytest.raises(ValueError, match="cannot use env.a.downstream "
+                                         "directly"):
+        Pair()
 
     class Router(sim.Component):
         inbox: sim.Store
@@ -3699,18 +3779,22 @@ def test_component_ref_usage_errors_are_rejected():
         nodes: list[RefNode] = [RefNode(), RefNode()]
         router: Router = Router(routes=(nodes[0], nodes[1]))
 
-    unindexed = Routed()
-    with pytest.raises(ValueError, match="must index env.router.routes"):
-        @unindexed.process
-        def bare_table(env: Routed):
+    class Unindexed(Routed):
+        @sim.process
+        def bare_table(env: "Routed"):
             _ = env.router.routes
             sim.suspend()
 
-    out_of_range = Routed()
-    with pytest.raises(ValueError, match="out of range"):
-        @out_of_range.process
-        def oob(env: Routed):
+    class OutOfRange(Routed):
+        @sim.process
+        def oob(env: "Routed"):
             env.router.routes[5].inbox.put(1)
+
+    with pytest.raises(ValueError, match="must index env.router.routes"):
+        Unindexed()
+
+    with pytest.raises(ValueError, match="out of range"):
+        OutOfRange()
 
     hetero_sink = RefNode()
     x, y = RefNode(), RefNode()
@@ -3721,12 +3805,13 @@ def test_component_ref_usage_errors_are_rejected():
         nodes: list[RefNode] = [x, y]
         sink: RefNode = hetero_sink
 
-    hetero = Hetero()
-    with pytest.raises(ValueError, match="same component declaration"):
-        @hetero.process
-        def dynamic(env: Hetero):
+        @sim.process
+        def dynamic(env: "Hetero"):
             for j in range(2):
                 env.nodes[j].downstream.inbox.put(j)
+
+    with pytest.raises(ValueError, match="same component declaration"):
+        Hetero()
 
 
 def test_component_function_indexes_a_collection_by_loop_variable():
@@ -3844,12 +3929,13 @@ def test_component_function_loop_index_works_across_call_contexts():
         groups: list[Group] = [Group(), Group(), Group()]
         from_model: sim.Output
 
+        @sim.process
+        def driver(env: "Net"):
+            env.from_model = env.groups[2].total()
+            sim.suspend()
+
     model = Net()
 
-    @model.process
-    def driver(env: Net):
-        env.from_model = env.groups[2].total()
-        sim.suspend()
 
     exp = model.experiment(
         groups__legs__w=[1.0, 2.0, 10.0, 20.0, 100.0, 200.0],

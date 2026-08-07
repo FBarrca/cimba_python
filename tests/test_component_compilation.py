@@ -19,9 +19,7 @@ from tutorial import tut_3_1, tut_5_1
 def _build_amusement_park() -> sim.Model:
     """Create a fresh park and include its aggregate collection callback."""
 
-    model = tut_3_1.Park()
-    model.collect(tut_3_1.park_stats)
-    return model
+    return tut_3_1.Park()
 
 
 def _representative_models(tmp_path: Path) -> tuple[

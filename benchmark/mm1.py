@@ -33,30 +33,33 @@ class MM1Bench(sim.Model):
     queue: sim.Store
     obj_cnt: sim.State
 
+    @sim.process
+    def arrival(env: "MM1Bench"):
+        for _ in range(NUM_OBJECTS):
+            sim.hold(random.exponential(env.arr_mean))
+            env.queue.put(sim.f2i(sim.now()))
+
+    @sim.process
+    def service(env: "MM1Bench"):
+        env.sum_wait = 0.0
+        while True:
+            job = env.queue.take()
+            sim.hold(random.exponential(env.srv_mean))
+            env.sum_wait = env.sum_wait + (sim.now() - sim.i2f(job))
+            env.obj_cnt = env.obj_cnt + 1
+
+    @sim.collect
+    def stats(env: "MM1Bench"):
+        env.avg_wait = env.sum_wait / env.obj_cnt
+
 
 mm1 = MM1Bench("mm1_bench")
 
 
-@mm1.process
-def arrival(env: MM1Bench):
-    for _ in range(NUM_OBJECTS):
-        sim.hold(random.exponential(env.arr_mean))
-        env.queue.put(sim.f2i(sim.now()))
 
 
-@mm1.process
-def service(env: MM1Bench):
-    env.sum_wait = 0.0
-    while True:
-        job = env.queue.take()
-        sim.hold(random.exponential(env.srv_mean))
-        env.sum_wait = env.sum_wait + (sim.now() - sim.i2f(job))
-        env.obj_cnt = env.obj_cnt + 1
 
 
-@mm1.collect
-def stats(env: MM1Bench):
-    env.avg_wait = env.sum_wait / env.obj_cnt
 
 
 def run_trial() -> tuple[float, float]:

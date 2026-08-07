@@ -17,19 +17,19 @@ when Cimba should choose independent seeds for you. In model code, import
        served: sim.Output
        queue: sim.Queue
 
+       @sim.process
+       def arrivals(env: "Clinic"):
+           while True:
+               sim.hold(random.exponential(env.mean_interarrival))
+               env.queue.put(1)
+
+       @sim.process
+       def server(env: "Clinic"):
+           while True:
+               env.queue.get(1)
+               sim.hold(random.gamma(shape=2.0, scale=env.mean_service / 2.0))
+
    model = Clinic()
-
-   @model.process
-   def arrivals(env: Clinic):
-       while True:
-           sim.hold(random.exponential(env.mean_interarrival))
-           env.queue.put(1)
-
-   @model.process
-   def server(env: Clinic):
-       while True:
-           env.queue.get(1)
-           sim.hold(random.gamma(shape=2.0, scale=env.mean_service / 2.0))
 
 Use ``cimba.random`` in both model code and ordinary Python code. Importing it
 as ``random`` keeps process bodies compact, while the package boundary stays
@@ -65,11 +65,12 @@ Keyword arguments are supported in compiled model callbacks and standalone
 
 .. code-block:: python
 
-   @model.process
-   def customer(env):
-       patience = random.triangular(min=0.5, mode=1.0, max=2.0)
-       priority = 5 if random.bernoulli(p=0.25) else 0
-       sim.hold(random.normal(mu=patience, sigma=0.1))
+   class Clinic(sim.Model):
+       @sim.process
+       def customer(env: "Clinic"):
+           patience = random.triangular(min=0.5, mode=1.0, max=2.0)
+           priority = 5 if random.bernoulli(p=0.25) else 0
+           sim.hold(random.normal(mu=patience, sigma=0.1))
 
 Continuous Draws
 ----------------
@@ -168,10 +169,11 @@ it convenient for arrays:
    DESTINATION = (0.55, 0.30, 0.15)
    WALK_TIME = (2.0, 5.0, 12.0)
 
-   @model.process
-   def visitor(env):
-       i = random.categorical(DESTINATION)
-       sim.hold(WALK_TIME[i])
+   class Park(sim.Model):
+       @sim.process
+       def visitor(env: "Park"):
+           i = random.categorical(DESTINATION)
+           sim.hold(WALK_TIME[i])
 
 For repeated categorical sampling outside model code, ``cimba.random`` also
 provides ``AliasSampler``:

@@ -13,16 +13,18 @@ def test_process_dag_infers_queue_flow_with_aliases_and_helpers():
     class Line(sim.Model):
         queue: sim.Queue
 
+        @sim.process
+        def producer(env: "Line"):
+            q = env.queue
+            q.put(1)
+
+        @sim.process
+        def consumer(env: "Line"):
+            _take_from_helper(env)
+
     model = Line()
 
-    @model.process
-    def producer(env: Line):
-        q = env.queue
-        q.put(1)
 
-    @model.process
-    def consumer(env: Line):
-        _take_from_helper(env)
 
     graph = model.process_dag()
 
@@ -43,15 +45,18 @@ def test_process_dag_infers_queue_flow_with_aliases_and_helpers():
 
 
 def test_process_dag_mermaid_and_dot_output_are_stable():
-    model = sim.Model("mm1", queues=["queue"])
+    class MM1(sim.Model):
+        queue: sim.Queue
 
-    @model.process
-    def arrivals(env):
-        env.queue.put(1)
+        @sim.process
+        def arrivals(env):
+            env.queue.put(1)
 
-    @model.process
-    def service(env):
-        env.queue.get(1)
+        @sim.process
+        def service(env):
+            env.queue.get(1)
+
+    model = MM1("mm1")
 
     graph = model.process_dag()
 
@@ -82,27 +87,31 @@ def test_process_dag_infers_spawn_store_pqueues_and_conditions():
         ready: sim.Condition
         ready_pred: sim.Predicate
 
+        @sim.process
+        def arrivals(env: "Park"):
+            sim.spawn(env.visitor, env)
+            env.ready.signal()
+
+        @sim.process(spawnable=True)
+        def visitor(env: "Park"):
+            env.ride_queues[0].put(sim.current(), 0)
+            env.ready.wait_for(env.ready_pred)
+            env.departed.put(sim.current())
+
+        @sim.process
+        def server(env: "Park"):
+            q = env.ride_queues[0]
+            q.take()
+
+        @sim.process
+        def departures(env: "Park"):
+            sim.despawn(env.departed.take())
+
     model = Park()
 
-    @model.process
-    def arrivals(env: Park):
-        sim.spawn(env.visitor, env)
-        env.ready.signal()
 
-    @model.process(spawnable=True)
-    def visitor(env: Park):
-        env.ride_queues[0].put(sim.current(), 0)
-        env.ready.wait_for(env.ready_pred)
-        env.departed.put(sim.current())
 
-    @model.process
-    def server(env: Park):
-        q = env.ride_queues[0]
-        q.take()
 
-    @model.process
-    def departures(env: Park):
-        sim.despawn(env.departed.take())
 
     graph = model.process_dag()
 
@@ -121,22 +130,24 @@ def test_process_dag_infers_process_handle_interactions():
     class Work(sim.Model):
         worker: sim.Processes
 
+        @sim.process(field="worker")
+        def worker_process(env: "Work"):
+            sim.suspend()
+
+        @sim.process
+        def supervisor(env: "Work"):
+            target = env.worker[0]
+            sim.interrupt(target, 42, 0)
+
     model = Work()
 
-    @model.process
-    def worker(env: Work):
-        sim.suspend()
 
-    @model.process
-    def supervisor(env: Work):
-        target = env.worker[0]
-        sim.interrupt(target, 42, 0)
 
     graph = model.process_dag()
 
     assert sim.ProcessDAGEdge(
         "process:supervisor",
-        "process:worker",
+        "process:worker_process",
         "interrupt",
     ) in graph.edges
 
@@ -145,16 +156,18 @@ def test_process_dag_tracks_shared_resource_usage_without_fake_dependencies():
     class Shop(sim.Model):
         crew: sim.Pool = 2
 
+        @sim.process
+        def worker(env: "Shop"):
+            env.crew.acquire(1)
+            env.crew.release(1)
+
+        @sim.process
+        def inspector(env: "Shop"):
+            env.crew.available()
+
     model = Shop()
 
-    @model.process
-    def worker(env: Shop):
-        env.crew.acquire(1)
-        env.crew.release(1)
 
-    @model.process
-    def inspector(env: Shop):
-        env.crew.available()
 
     graph = model.process_dag()
 
@@ -176,17 +189,19 @@ def test_process_dag_infers_state_and_float_state_dependencies():
         level: sim.FloatState
         count: sim.State
 
+        @sim.process
+        def sampler(env: "Telemetry"):
+            env.level = 10.0
+            env.count = 1
+
+        @sim.process
+        def controller(env: "Telemetry"):
+            if env.level > 5.0 and env.count > 0:
+                sim.suspend()
+
     model = Telemetry()
 
-    @model.process
-    def sampler(env: Telemetry):
-        env.level = 10.0
-        env.count = 1
 
-    @model.process
-    def controller(env: Telemetry):
-        if env.level > 5.0 and env.count > 0:
-            sim.suspend()
 
     graph = model.process_dag()
 
@@ -203,17 +218,19 @@ def test_process_dag_infers_events_waits_and_callback_state():
         tick: sim.Event
         fired: sim.State
 
+        @sim.event(field="tick")
+        def on_tick(env: "Clock"):
+            env.fired = env.fired + 1
+            env.tick.schedule(1.0)
+
+        @sim.process
+        def timer(env: "Clock"):
+            handle = env.tick.schedule(1.0)
+            handle.wait_event()
+
     model = Clock()
 
-    @model.event
-    def tick(env: Clock):
-        env.fired = env.fired + 1
-        env.tick.schedule(1.0)
 
-    @model.process
-    def timer(env: Clock):
-        handle = env.tick.schedule(1.0)
-        handle.wait_event()
 
     graph = model.process_dag()
 
@@ -232,12 +249,15 @@ def test_process_dag_infers_events_waits_and_callback_state():
 
 
 def test_process_dag_renders_cycles_but_topological_order_rejects_them():
-    model = sim.Model("cycle", queues=["queue"])
+    class Cycle(sim.Model):
+        queue: sim.Queue
 
-    @model.process
-    def actor(env):
-        env.queue.put(1)
-        env.queue.get(1)
+        @sim.process
+        def actor(env):
+            env.queue.put(1)
+            env.queue.get(1)
+
+    model = Cycle("cycle")
 
     graph = model.process_dag()
 

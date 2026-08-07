@@ -43,24 +43,8 @@ class ReportingModel(sim.Model):
     store: sim.Store = sim.capacity(4)
     pqs: sim.PQueues = sim.count(1)
 
-
-class DatasetMethodModel(sim.Model):
-    ok: sim.Output
-    n: sim.Output
-    avg: sim.Output
-    sd: sim.Output
-    q25: sim.Output
-    lo: sim.Output
-    hi: sim.Output
-    med: sim.Output
-    d: sim.Dataset
-
-
-def build_reporting_model() -> ReportingModel:
-    model = ReportingModel()
-
-    @model.process
-    def driver(env: ReportingModel):
+    @sim.process
+    def driver(env: "ReportingModel"):
         for i in range(12):
             env.d.add(float(i % 4))
 
@@ -80,33 +64,53 @@ def build_reporting_model() -> ReportingModel:
 
         env.q.get(1)
         sim.suspend()
+
+
+class DatasetMethodModel(sim.Model):
+    ok: sim.Output
+    n: sim.Output
+    avg: sim.Output
+    sd: sim.Output
+    q25: sim.Output
+    lo: sim.Output
+    hi: sim.Output
+    med: sim.Output
+    d: sim.Dataset
+
+    @sim.process
+    def driver(env: "DatasetMethodModel"):
+        for value in range(1, 5):
+            env.d.add(float(value))
+
+def build_reporting_model() -> ReportingModel:
+    model = ReportingModel()
+
     return model
 
 
 def test_sim_dataset_methods_compile_in_model_callbacks(tmp_path):
     report = tmp_path / "dataset_methods.txt"
     report_handle = sim.log_text(str(report))
-    model = DatasetMethodModel()
 
-    @model.process
-    def driver(env: DatasetMethodModel):
-        for value in range(1, 5):
-            env.d.add(float(value))
+    class ConfiguredDatasetMethodModel(DatasetMethodModel):
+        @sim.collect
+        def collect(env: "DatasetMethodModel"):
+            env.n = float(env.d.count())
+            env.avg = env.d.mean()
+            env.sd = env.d.std()
+            env.q25 = env.d.quantile(0.25)
+            env.lo = env.d.min()
+            env.hi = env.d.max()
+            env.med = env.d.median()
+            ok = env.d.print_file(report_handle, append=0)
+            ok += env.d.fivenum_file(report_handle, append=1)
+            ok += env.d.histogram_file(
+                report_handle, append=1, bins=4, low=0.0, high=0.0)
+            env.ok = float(ok)
 
-    @model.collect
-    def collect(env: DatasetMethodModel):
-        env.n = float(env.d.count())
-        env.avg = env.d.mean()
-        env.sd = env.d.std()
-        env.q25 = env.d.quantile(0.25)
-        env.lo = env.d.min()
-        env.hi = env.d.max()
-        env.med = env.d.median()
-        ok = env.d.print_file(report_handle, append=0)
-        ok += env.d.fivenum_file(report_handle, append=1)
-        ok += env.d.histogram_file(
-            report_handle, append=1, bins=4, low=0.0, high=0.0)
-        env.ok = float(ok)
+    model = ConfiguredDatasetMethodModel()
+
+
 
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0, seed=29)
     assert exp.run() == 0
@@ -127,18 +131,20 @@ def test_dataset_capture_returns_per_trial_arrays():
         n: sim.Output
         d: sim.Dataset
 
+        @sim.process
+        def driver(env: "Samples"):
+            for i in range(4):
+                env.d.add(float(i + 1))
+
+        @sim.collect
+        def collect(env: "Samples"):
+            env.avg = env.d.mean()
+            env.n = float(env.d.count())
+            env.d.capture()
+
     model = Samples()
 
-    @model.process
-    def driver(env: Samples):
-        for i in range(4):
-            env.d.add(float(i + 1))
 
-    @model.collect
-    def collect(env: Samples):
-        env.avg = env.d.mean()
-        env.n = float(env.d.count())
-        env.d.capture()
 
     exp = model.experiment(replications=3, duration=1.0, warmup=0.0,
                            seed=41)
@@ -173,11 +179,12 @@ def test_dataset_capture_model_collect_uses_component_path():
     class Clinic(sim.Model):
         station: Station = Station()
 
+        @sim.collect
+        def collect(env: "Clinic"):
+            env.station.samples.capture()
+
     model = Clinic()
 
-    @model.collect
-    def collect(env: Clinic):
-        env.station.samples.capture()
 
     exp = model.experiment(replications=1, duration=1.0, warmup=0.0,
                            seed=19)
@@ -189,16 +196,16 @@ def test_dataset_capture_rejects_invalid_targets():
     class Samples(sim.Model):
         d: sim.Dataset
 
-    model = Samples()
+        @sim.process
+        def driver(env: "Samples"):
+            env.d.add(1.0)
 
-    @model.process
-    def driver(env: Samples):
-        env.d.add(1.0)
+        @sim.collect
+        def collect_with_args(env: "Samples"):
+            env.d.capture(1)
 
     with pytest.raises(ValueError, match="dataset capture\\(\\) takes no"):
-        @model.collect
-        def collect_with_args(env: Samples):
-            env.d.capture(1)
+        Samples()
 
     class ComponentSamples(sim.Component):
         d: sim.Dataset
@@ -221,28 +228,30 @@ def test_dataset_capture_rejects_invalid_targets():
 def test_native_text_report_file_variants_cover_dataset_methods(tmp_path):
     report = tmp_path / "native_reports.txt"
     report_handle = sim.log_text(str(report))
-    model = build_reporting_model()
 
-    @model.collect
-    def collect(env: ReportingModel):
-        env.n = float(env.q.history().count())
-        ok = env.q.report_file(report_handle, 0)
-        ok += env.resource.report_file(report_handle, 1)
-        ok += env.pool.report_file(report_handle, 1)
-        ok += env.store.report_file(report_handle, 1)
-        ok += env.pqs[0].report_file(report_handle, 1)
-        ok += env.q.history().print_file(report_handle, 1)
-        ok += env.q.history().fivenum_file(report_handle, 1)
-        ok += env.q.history().histogram_file(report_handle, 1,
-                                             4, 0.0, 4.0)
-        ok += env.q.history().correlogram_file(report_handle, 1, 2)
-        ok += env.q.history().pacf_correlogram_file(report_handle, 1, 2)
-        ok += env.d.print_file(report_handle, 1)
-        ok += env.d.fivenum_file(report_handle, 1)
-        ok += env.d.histogram_file(report_handle, 1, 4, 0.0, 0.0)
-        ok += env.d.correlogram_file(report_handle, 1, 2)
-        ok += env.d.pacf_correlogram_file(report_handle, 1, 2)
-        env.ok = float(ok)
+    class FileReportingModel(ReportingModel):
+        @sim.collect
+        def collect(env: "ReportingModel"):
+            env.n = float(env.q.history().count())
+            ok = env.q.report_file(report_handle, 0)
+            ok += env.resource.report_file(report_handle, 1)
+            ok += env.pool.report_file(report_handle, 1)
+            ok += env.store.report_file(report_handle, 1)
+            ok += env.pqs[0].report_file(report_handle, 1)
+            ok += env.q.history().print_file(report_handle, 1)
+            ok += env.q.history().fivenum_file(report_handle, 1)
+            ok += env.q.history().histogram_file(report_handle, 1,
+                                                 4, 0.0, 4.0)
+            ok += env.q.history().correlogram_file(report_handle, 1, 2)
+            ok += env.q.history().pacf_correlogram_file(report_handle, 1, 2)
+            ok += env.d.print_file(report_handle, 1)
+            ok += env.d.fivenum_file(report_handle, 1)
+            ok += env.d.histogram_file(report_handle, 1, 4, 0.0, 0.0)
+            ok += env.d.correlogram_file(report_handle, 1, 2)
+            ok += env.d.pacf_correlogram_file(report_handle, 1, 2)
+            env.ok = float(ok)
+
+    model = FileReportingModel()
 
     exp = model.experiment(replications=1, duration=5.0, warmup=0.0, seed=17)
     assert exp.run() == 0
@@ -260,12 +269,13 @@ def test_native_text_report_file_variants_cover_dataset_methods(tmp_path):
 
 
 def test_timeseries_history_method_compiles_in_model_callbacks():
-    model = build_reporting_model()
+    class TimeseriesReportingModel(ReportingModel):
+        @sim.collect
+        def collect(env: "ReportingModel"):
+            env.n = float(env.q.history().count())
+            env.ok = env.q.history().mean() + env.pqs[0].history().mean()
 
-    @model.collect
-    def collect(env: ReportingModel):
-        env.n = float(env.q.history().count())
-        env.ok = env.q.history().mean() + env.pqs[0].history().mean()
+    model = TimeseriesReportingModel()
 
     exp = model.experiment(replications=1, duration=5.0, warmup=0.0, seed=17)
     assert exp.run() == 0
@@ -278,21 +288,23 @@ def test_timeseries_history_capture_returns_per_trial_arrays():
         mean: sim.Output
         q: sim.Queue = sim.capacity(5)
 
+        @sim.process
+        def driver(env: "CaptureModel"):
+            for _ in range(3):
+                env.q.put(1)
+                sim.hold(1.0)
+                env.q.get(1)
+                sim.hold(1.0)
+            sim.suspend()
+
+        @sim.collect
+        def collect(env: "CaptureModel"):
+            env.mean = env.q.history().mean()
+            env.q.history().capture()
+
     model = CaptureModel()
 
-    @model.process
-    def driver(env: CaptureModel):
-        for _ in range(3):
-            env.q.put(1)
-            sim.hold(1.0)
-            env.q.get(1)
-            sim.hold(1.0)
-        sim.suspend()
 
-    @model.collect
-    def collect(env: CaptureModel):
-        env.mean = env.q.history().mean()
-        env.q.history().capture()
 
     exp = model.experiment(replications=2, duration=10.0, warmup=0.0,
                            seed=17)
@@ -331,25 +343,27 @@ def test_indexed_component_history_capture_returns_item_per_trial():
         counters: list[Counter] = [Counter(), Counter(), Counter()]
         q: sim.Queue = sim.capacity(5)
 
+        @sim.process
+        def arrivals(env: "QueueModel"):
+            env.q.put(1)
+            for index in range(len(env.counters)):
+                for _ in range(index + 1):
+                    env.counters[index].line.put(1)
+                env.counters[index].resource.acquire()
+                env.counters[index].store.put(index)
+            sim.suspend()
+
+        @sim.collect
+        def collect(env: "QueueModel"):
+            env.q.history().capture()
+            for index in range(len(env.counters)):
+                env.counters[index].line.history().capture()
+                env.counters[index].resource.history().capture()
+                env.counters[index].store.history().capture()
+
     model = QueueModel()
 
-    @model.process
-    def arrivals(env: QueueModel):
-        env.q.put(1)
-        for index in range(len(env.counters)):
-            for _ in range(index + 1):
-                env.counters[index].line.put(1)
-            env.counters[index].resource.acquire()
-            env.counters[index].store.put(index)
-        sim.suspend()
 
-    @model.collect
-    def collect(env: QueueModel):
-        env.q.history().capture()
-        for index in range(len(env.counters)):
-            env.counters[index].line.history().capture()
-            env.counters[index].resource.history().capture()
-            env.counters[index].store.history().capture()
 
     exp = model.experiment(replications=2, duration=1.0, warmup=0.0,
                            seed=23)
@@ -387,21 +401,23 @@ def test_indexed_component_history_capture_rejects_unbounded_index():
     class QueueModel(sim.Model):
         counters: list[Counter] = [Counter(), Counter()]
 
-    model = QueueModel()
-    with pytest.raises(ValueError, match="unbounded index"):
-        @model.collect
-        def collect(env: QueueModel):
+        @sim.collect
+        def collect(env: "QueueModel"):
             index = 1
             env.counters[index].line.history().capture()
+
+    with pytest.raises(ValueError, match="unbounded index"):
+        QueueModel()
 
     class ConstantModel(sim.Model):
         counters: list[Counter] = [Counter(), Counter()]
 
-    constant_model = ConstantModel()
-    with pytest.raises(ValueError, match="out of range"):
-        @constant_model.collect
-        def constant_collect(env: ConstantModel):
+        @sim.collect
+        def constant_collect(env: "ConstantModel"):
             env.counters[2].line.history().capture()
+
+    with pytest.raises(ValueError, match="out of range"):
+        ConstantModel()
 
 
 def test_one_item_component_history_capture_keeps_collection_dimension():
@@ -411,16 +427,18 @@ def test_one_item_component_history_capture_keeps_collection_dimension():
     class QueueModel(sim.Model):
         counters: list[Counter] = [Counter()]
 
+        @sim.process
+        def driver(env: "QueueModel"):
+            env.counters[0].line.put(1)
+            sim.suspend()
+
+        @sim.collect
+        def collect(env: "QueueModel"):
+            env.counters[0].line.history().capture()
+
     model = QueueModel()
 
-    @model.process
-    def driver(env: QueueModel):
-        env.counters[0].line.put(1)
-        sim.suspend()
 
-    @model.collect
-    def collect(env: QueueModel):
-        env.counters[0].line.history().capture()
 
     exp = model.experiment(duration=1.0, warmup=0.0, seed=24)
     assert exp.run() == 0
@@ -436,16 +454,18 @@ def test_constant_indexed_history_capture_leaves_other_items_empty():
     class QueueModel(sim.Model):
         counters: list[Counter] = [Counter(), Counter(), Counter()]
 
+        @sim.process
+        def driver(env: "QueueModel"):
+            env.counters[1].line.put(1)
+            sim.suspend()
+
+        @sim.collect
+        def collect(env: "QueueModel"):
+            env.counters[1].line.history().capture()
+
     model = QueueModel()
 
-    @model.process
-    def driver(env: QueueModel):
-        env.counters[1].line.put(1)
-        sim.suspend()
 
-    @model.collect
-    def collect(env: QueueModel):
-        env.counters[1].line.history().capture()
 
     exp = model.experiment(duration=1.0, warmup=0.0, seed=25)
     assert exp.run() == 0
@@ -458,30 +478,30 @@ def test_timeseries_history_capture_rejects_invalid_targets():
     class DatasetCapture(sim.Model):
         d: sim.Dataset
 
-    model = DatasetCapture()
+        @sim.process
+        def dataset_driver(env: "DatasetCapture"):
+            env.d.add(1.0)
 
-    @model.process
-    def dataset_driver(env: DatasetCapture):
-        env.d.add(1.0)
+        @sim.collect
+        def dataset_collect(env: "DatasetCapture"):
+            env.d.history().capture()
 
     with pytest.raises(ValueError, match="unknown history field"):
-        @model.collect
-        def dataset_collect(env: DatasetCapture):
-            env.d.history().capture()
+        DatasetCapture()
 
     class IndexedCapture(sim.Model):
         pqs: sim.PQueues = sim.count(1)
 
-    indexed = IndexedCapture()
+        @sim.process
+        def indexed_driver(env: "IndexedCapture"):
+            env.pqs[0].put(1, 0)
 
-    @indexed.process
-    def indexed_driver(env: IndexedCapture):
-        env.pqs[0].put(1, 0)
+        @sim.collect
+        def indexed_collect(env: "IndexedCapture"):
+            env.pqs[0].history().capture()
 
     with pytest.raises(ValueError, match="indexed entity"):
-        @indexed.collect
-        def indexed_collect(env: IndexedCapture):
-            env.pqs[0].history().capture()
+        IndexedCapture()
 
 
 def test_timeseries_history_capture_rejects_component_collect():
@@ -515,11 +535,12 @@ def test_timeseries_history_capture_model_collect_uses_component_path():
     class Clinic(sim.Model):
         station: Station = Station()
 
+        @sim.collect
+        def collect(env: "Clinic"):
+            env.station.q.history().capture()
+
     model = Clinic()
 
-    @model.collect
-    def collect(env: Clinic):
-        env.station.q.history().capture()
 
     exp = model.experiment(replications=1, duration=2.0, warmup=0.0,
                            seed=18)
@@ -566,18 +587,19 @@ def test_timeseries_history_method_compiles_in_components():
 
 
 def test_native_text_report_stdout_variants_print_to_console():
-    model = build_reporting_model()
+    class StdoutReportingModel(ReportingModel):
+        @sim.collect
+        def collect(env: "ReportingModel"):
+            ok = env.q.report()
+            ok += env.resource.report()
+            ok += env.pool.report()
+            ok += env.store.report()
+            ok += env.pqs[0].report()
+            ok += env.q.history().histogram(4, 0.0, 4.0)
+            ok += env.d.histogram(4, 0.0, 0.0)
+            env.ok = float(ok)
 
-    @model.collect
-    def collect(env: ReportingModel):
-        ok = env.q.report()
-        ok += env.resource.report()
-        ok += env.pool.report()
-        ok += env.store.report()
-        ok += env.pqs[0].report()
-        ok += env.q.history().histogram(4, 0.0, 4.0)
-        ok += env.d.histogram(4, 0.0, 0.0)
-        env.ok = float(ok)
+    model = StdoutReportingModel()
 
     exp = model.experiment(replications=1, duration=5.0, warmup=0.0, seed=23)
     text = capture_native_stdout(exp.run)

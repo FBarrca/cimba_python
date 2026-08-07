@@ -290,7 +290,7 @@ if TYPE_CHECKING:
         def signal(self) -> int: ...
         def wait_for(self, predicate: int) -> int: ...
 
-    Predicate = int      #: address of the matching @model.predicate
+    Predicate = int      #: address published by ``@sim.predicate``
 
     class ScheduledEvent(int):
         """Scheduled-instance handle returned by ``Event.schedule()``/
@@ -305,14 +305,14 @@ if TYPE_CHECKING:
         def wait_event(self) -> int: ...
 
     class Event(int):
-        """address of the matching @model.event callback."""
+        """address published by ``@sim.event``."""
 
         def schedule(self, delay: float, data: int = 0,
                      priority: int = 0) -> ScheduledEvent: ...
         def schedule_at(self, at: float, data: int = 0,
                         priority: int = 0) -> ScheduledEvent: ...
 
-    #: handles of the same-named @model.process's copies, indexable
+    #: handles published by a bound ``@sim.process`` callback, indexable
     Processes = Sequence[Handle]
 
     class _PQueueHandle(int):
@@ -534,7 +534,6 @@ def _field_declarations(
         if hint is Spawnable:
             raise ValueError(
                 f"field '{fname}': sim.Spawnable has been replaced by "
-                "@model.process(spawnable=True) or "
                 "@sim.process(spawnable=True)")
         if isinstance(hint, _RefHint):
             if not allow_refs:
@@ -560,6 +559,20 @@ def _field_declarations(
         if kind is None:
             continue
         default = getattr(cls, fname, _MISSING)
+        callback_binding = any(
+            getattr(default, marker, None) is not None
+            for marker in (
+                "__cimba_process__",
+                "__cimba_collect__",
+                "__cimba_predicate__",
+                "__cimba_event__",
+            )
+        )
+        if callback_binding and not allow_refs:
+            raise ValueError(
+                f"model callback '{cls.__name__}.{fname}' collides with a "
+                "declared field; use a differently named callback and "
+                "field= when binding callback fields")
         if kind.capacitated:
             if default is _MISSING:
                 default = None
@@ -584,11 +597,10 @@ def _field_declarations(
             )
             decls.add(_FieldDecl(fname, kind, default=param_default))
         else:
-            method_binding = (
-                kind.name in ("processes", "spawnable")
-                and getattr(default, "__cimba_component_process__", None)
-                is not None
-            )
+            # Component Processes fields retain their established same-name
+            # method binding. Model callback/field collisions were rejected
+            # above before the function could be mistaken for a field default.
+            method_binding = callback_binding
             if (default is not _MISSING and default is not None
                     and not method_binding):
                 raise ValueError(

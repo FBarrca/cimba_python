@@ -18,13 +18,13 @@ static type of `env`, so fields are checked and completed:
         avg_queue_length: sim.Output    # result
         queue: sim.Queue                # cmb_buffer handle
 
-    mg1 = MG1()
+        @sim.process
+        def arrivals(env: "MG1"):
+            while True:
+                sim.hold(cimba.random.exponential(1.0 / env.utilization))
+                env.queue.put(1)
 
-    @mg1.process
-    def arrivals(env: MG1):
-        while True:
-            sim.hold(cimba.random.exponential(1.0 / env.utilization))
-            env.queue.put(1)
+    mg1 = MG1()
 
 Every declared Queue/Resource/Pool/Store/PQueues-element/Condition/Event
 field carries its verbs as methods: ``env.queue.put(1)``,
@@ -34,12 +34,12 @@ same sugar through ``self.<field>.<method>(...)``.
 
 Concept translation (cimba -> sim API):
 
-    cmb_process       @model.process (copies=, priority=, struct=),
+    cmb_process       @sim.process (copies=, priority=, struct=, field=),
                       sim.hold(), sim.current(), sim.interrupt(),
                       sim.stop(), sim.wait_process(), sim.wait_event(),
                       sim.resume(), sim.timer_set()/sim.timer_add()/
                       sim.timer_cancel(); dynamic creation via
-                      @model.process(spawnable=True), sim.spawn()/sim.despawn()
+                      @sim.process(spawnable=True), sim.spawn()/sim.despawn()
     derived structs   sim.Struct subclasses; a process declares its own
                       fields with a final `vip: Visitor` parameter, and
                       Visitor(handle) views any such process's fields
@@ -54,9 +54,9 @@ Concept translation (cimba -> sim API):
                       space()/position()/mean_length()
                       (objects are opaque int64 values; sim.f2i()/
                       sim.i2f() bit-cast timestamps in and out)
-    cmb_condition     sim.Condition + sim.Predicate + @model.predicate,
+    cmb_condition     sim.Condition + sim.Predicate + @sim.predicate,
                       env.<cond>.wait_for(predicate)/signal()
-    cmb_event         sim.Event + @model.event, env.<event>.schedule()/
+    cmb_event         sim.Event + @sim.event, env.<event>.schedule()/
                       schedule_at() (returns a scheduled-instance handle
                       with its own .cancel()/.reschedule()/.reprioritize()/
                       .scheduled()/.time()/.priority()/.wait_event()),
@@ -96,7 +96,7 @@ Component methods marked with top-level ``@sim.process`` are authoring-time
 methods; Model lowers them into ordinary flat process functions before Numba
 compilation. A component method marked with top-level ``@sim.collect`` runs
 once per instance at the end of each trial (before the model-level
-``@model.collect``, which can then aggregate), typically assigning the
+``@sim.collect``, which can then aggregate), typically assigning the
 component's own Output fields from ``self``. Model callbacks can use ``env.retailer.orders``; trial-table
 fields remain flattened with names such as ``retailer__orders``. Components
 can also expose explicitly typed, read-only synchronous methods with
@@ -135,8 +135,8 @@ from numba import types as _nbtypes
 from . import _bindings as _b
 from ._intrinsics import ptr_caster as _ptr_caster
 from ._intrinsics import record_addr as _record_addr
-from ._components import (Component, SpawnableProcess, collect, function,
-                          process)
+from ._components import (Component, SpawnableProcess, collect, event,
+                          function, predicate, process)
 from ._declarations import (Condition, Const, Dataset, Env, Event, FloatState,
                             Handle, Output, Param, Pool, PQueues, Predicate,
                             Processes, Queue, Ref, Refs, Resource, Spawnable,
@@ -158,7 +158,8 @@ __all__ = [
     "PQueues", "Ref", "Refs", "Const", "Struct", "Trace",
     "SpawnableProcess",
     "capacity",
-    "collect", "count", "function", "process", "trace_rng",
+    "collect", "count", "event", "function", "predicate", "process",
+    "trace_rng",
     "ProcessDAG", "ProcessDAGBlock", "ProcessDAGNode", "ProcessDAGEdge",
     "SUCCESS", "PREEMPTED", "INTERRUPTED", "STOPPED", "CANCELLED", "TIMEOUT",
     "LOGGER_FATAL", "LOGGER_ERROR", "LOGGER_WARNING", "LOGGER_INFO",

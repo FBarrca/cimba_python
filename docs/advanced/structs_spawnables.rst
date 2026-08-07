@@ -23,14 +23,12 @@ or ``float``:
    class Clinic(sim.Model):
        completed: sim.State
 
+       @sim.process(spawnable=True)
+       def patients(env: "Clinic", patient: Patient):
+           patient.wait_started = sim.now()
+           # The process can use its own fields throughout the visit.
 
    model = Clinic("clinic")
-
-
-   @model.process(spawnable=True)
-   def patients(env: Clinic, patient: Patient):
-       patient.wait_started = sim.now()
-       # The process can use its own fields throughout the visit.
 
 The final annotated process parameter receives the current process's struct
 view. Multi-copy static processes can also receive a copy index before the
@@ -46,14 +44,21 @@ from a regular process:
 
    import cimba.random as random
 
-   @model.process
-   def arrivals(env: Clinic):
-       while True:
-           sim.hold(random.exponential(1.0 / env.arrival_rate))
-           handle = sim.spawn(env.patients, env)
-           patient = Patient(handle)
-           patient.arrival = sim.now()
-           patient.acuity = 1 if random.uniform() < 0.2 else 0
+   class Clinic(sim.Model):
+       arrival_rate: sim.Param
+
+       @sim.process(spawnable=True)
+       def patients(env: "Clinic", patient: Patient):
+           patient.wait_started = sim.now()
+
+       @sim.process
+       def arrivals(env: "Clinic"):
+           while True:
+               sim.hold(random.exponential(1.0 / env.arrival_rate))
+               handle = sim.spawn(env.patients, env)
+               patient = Patient(handle)
+               patient.arrival = sim.now()
+               patient.acuity = 1 if random.uniform() < 0.2 else 0
 
 The spawned process begins only after the current process blocks. That gives
 the spawning process a clean initialization window: create the process, write
@@ -67,12 +72,17 @@ Joining and reclaiming
 
 .. code-block:: python
 
-   @model.process
-   def arrivals(env: Clinic):
-       handle = sim.spawn(env.patients, env)
-       Patient(handle).arrival = sim.now()
-       sim.wait_process(handle)
-       sim.despawn(handle)
+   class Clinic(sim.Model):
+       @sim.process(spawnable=True)
+       def patients(env: "Clinic", patient: Patient):
+           sim.hold(1.0)
+
+       @sim.process
+       def arrivals(env: "Clinic"):
+           handle = sim.spawn(env.patients, env)
+           Patient(handle).arrival = sim.now()
+           sim.wait_process(handle)
+           sim.despawn(handle)
 
 Long-running models should reclaim finished dynamic processes when they are no
 longer needed. A common pattern is to put finished handles into a ``sim.Store``
@@ -83,18 +93,16 @@ and have a cleanup process despawn them:
    class Clinic(sim.Model):
        departures: sim.Store
 
+       @sim.process
+       def cleanup(env: "Clinic"):
+           while True:
+               handle = env.departures.take()
+               sim.despawn(handle)
 
-   @model.process
-   def cleanup(env: Clinic):
-       while True:
-           handle = env.departures.take()
-           sim.despawn(handle)
-
-
-   @model.process(spawnable=True)
-   def patients(env: Clinic, patient: Patient):
-       # ... patient journey ...
-       env.departures.put(sim.current())
+       @sim.process(spawnable=True)
+       def patients(env: "Clinic", patient: Patient):
+           # ... patient journey ...
+           env.departures.put(sim.current())
 
 Leftover spawned processes are stopped and reclaimed at the end of a trial, but
 explicit cleanup keeps long trials from accumulating completed agents.
@@ -118,7 +126,7 @@ subsystem that creates them:
            sim.hold(random.exponential(env.mean_service))
 
 Use this when the dynamic process is naturally part of a component. Use a
-model-level ``@model.process(spawnable=True)`` when it crosses many domains.
+model-level ``@sim.process(spawnable=True)`` when it crosses many domains.
 
 For a larger worked example with dynamic agents and resources, see
 :doc:`../tutorial`.

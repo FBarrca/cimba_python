@@ -21,6 +21,12 @@ processes use to interact.
        doctor: sim.Resource
        served: sim.State
 
+       @sim.process
+       def arrivals(env: "Clinic"):
+           while True:
+               sim.hold(random.exponential(1.0 / env.arrival_rate))
+               env.waiting_room.put(1)
+
    model = Clinic("clinic")
 
 The class is not one patient or one run. It is the declaration for every trial
@@ -34,11 +40,15 @@ Process functions receive the current trial as ``env``:
 
 .. code-block:: python
 
-   @model.process
-   def arrivals(env: Clinic):
-       while True:
-           sim.hold(random.exponential(1.0 / env.arrival_rate))
-           env.waiting_room.put(1)
+   class Clinic(sim.Model):
+       arrival_rate: sim.Param
+       waiting_room: sim.Queue
+
+       @sim.process
+       def arrivals(env: "Clinic"):
+           while True:
+               sim.hold(random.exponential(1.0 / env.arrival_rate))
+               env.waiting_room.put(1)
 
 The ``env`` object is trial-local. Reading ``env.arrival_rate`` reads the value
 for this trial, and ``env.waiting_room`` is the queue handle created for this

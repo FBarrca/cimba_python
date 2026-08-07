@@ -15,21 +15,18 @@ collect function, and an experiment.
        tick_count: sim.Output   # scalar result reported per trial
        ticks: sim.State         # trial-local counter, auto-zeroed
 
+       @sim.process
+       def ticker(env: "Clock"):
+           while True:
+               sim.hold(1.0)
+               env.ticks = env.ticks + 1
+
+       @sim.collect
+       def collect(env: "Clock"):
+           env.tick_count = env.ticks
+
 
    model = Clock("Clock")
-
-
-   @model.process
-   def ticker(env: Clock):
-       while True:
-           sim.hold(1.0)
-           env.ticks = env.ticks + 1
-
-
-   @model.collect
-   def collect(env: Clock):
-       env.tick_count = env.ticks
-
 
    def main() -> None:
        exp = model.experiment(replications=1, duration=3.5, warmup=0.0, seed=12)

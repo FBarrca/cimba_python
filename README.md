@@ -58,28 +58,24 @@ class MM1(sim.Model):
     avg_queue_length: sim.Output
     queue: sim.Queue
 
+    @sim.process
+    def arrival(env: "MM1"):
+        while True:
+            sim.hold(random.exponential(1.0 / env.utilization))
+            env.queue.put(1)
+
+    @sim.process
+    def service(env: "MM1"):
+        while True:
+            env.queue.get(1)
+            sim.hold(random.exponential(1.0))
+
+    @sim.collect
+    def collect_stats(env: "MM1"):
+        env.avg_queue_length = env.queue.mean_level()
+
 
 model = MM1("MM1")
-
-
-@model.process
-def arrival(env: MM1):
-    while True:
-        sim.hold(random.exponential(1.0 / env.utilization))
-        env.queue.put(1)
-
-
-@model.process
-def service(env: MM1):
-    while True:
-        env.queue.get(1)
-        sim.hold(random.exponential(1.0))
-
-
-@model.collect
-def collect_stats(env: MM1):
-    env.avg_queue_length = env.queue.mean_level()
-
 
 exp = model.experiment(
     utilization=0.75,

@@ -59,7 +59,7 @@ choose per object, independent of any process's own priority; see
 
 ``env.<condition>.signal()`` wakes the condition's waiters;
 ``env.<condition>.wait_for(predicate)`` blocks until ``predicate`` (an
-``env.<name>`` field bound by ``@model.predicate``) is satisfied, and is
+``env.<name>`` field bound by ``@sim.predicate``) is satisfied, and is
 re-evaluated on every ``.signal()``.
 
 Stores and priority-queue elements have ``.history()`` too:

@@ -329,21 +329,22 @@ class Park(sim.Model):
         Attraction(attraction) for attraction in range(1, NUM_ATTRACTIONS + 1)
     ]
 
+    @sim.collect
+    def park_stats(env: "Park"):
+        env.avg_rides = env.flow.d_rides.mean()
+        env.avg_time_in_park = env.flow.d_park.mean()
+        env.avg_riding = env.flow.d_riding.mean()
+        env.avg_waiting = env.flow.d_waiting.mean()
+        env.avg_walking = env.flow.d_walking.mean()
+        env.n_visitors = env.flow.d_park.count()
+        env.n_balks = env.flow.balks
+        env.n_jockeys = env.flow.jockeys
+        env.n_reneges = env.flow.reneges
+
 
 park = Park()
 
 
-@park.collect
-def park_stats(env: Park):
-    env.avg_rides = env.flow.d_rides.mean()
-    env.avg_time_in_park = env.flow.d_park.mean()
-    env.avg_riding = env.flow.d_riding.mean()
-    env.avg_waiting = env.flow.d_waiting.mean()
-    env.avg_walking = env.flow.d_walking.mean()
-    env.n_visitors = env.flow.d_park.count()
-    env.n_balks = env.flow.balks
-    env.n_jockeys = env.flow.jockeys
-    env.n_reneges = env.flow.reneges
 
 
 def main() -> None:

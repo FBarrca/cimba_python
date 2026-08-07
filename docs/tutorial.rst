@@ -48,6 +48,24 @@ simulation entities are declared as fields on a ``sim.Model`` subclass:
         avg_queue_length: sim.Output
         queue: sim.Queue
 
+        @sim.process
+        def arrival(env: "MM1"):
+            while True:
+                t_ia = random.exponential(1.0 / env.utilization)
+                sim.hold(t_ia)
+                env.queue.put(1)
+
+        @sim.process
+        def service(env: "MM1"):
+            while True:
+                env.queue.get(1)
+                t_srv = random.exponential(1.0)
+                sim.hold(t_srv)
+
+        @sim.collect
+        def collect_stats(env: "MM1"):
+            env.avg_queue_length = env.queue.mean_level()
+
     model = MM1("MM1")
 
 ``utilization`` is a parameter supplied by the experiment. ``avg_queue_length``
@@ -60,19 +78,22 @@ simple:
 
 .. code-block:: python
 
-    @model.process
-    def arrival(env: MM1):
-        while True:
-            t_ia = random.exponential(1.0 / env.utilization)
-            sim.hold(t_ia)
-            env.queue.put(1)
+    class MM1(sim.Model):
+        # ... field declarations ...
 
-    @model.process
-    def service(env: MM1):
-        while True:
-            env.queue.get(1)
-            t_srv = random.exponential(1.0)
-            sim.hold(t_srv)
+        @sim.process
+        def arrival(env: "MM1"):
+            while True:
+                t_ia = random.exponential(1.0 / env.utilization)
+                sim.hold(t_ia)
+                env.queue.put(1)
+
+        @sim.process
+        def service(env: "MM1"):
+            while True:
+                env.queue.get(1)
+                t_srv = random.exponential(1.0)
+                sim.hold(t_srv)
 
 This should hopefully be quite intuitive. The arrival process generates an
 exponentially distributed random value with mean ``1 / utilization``, holds for
@@ -98,9 +119,12 @@ Finally, collect a time-weighted queue statistic:
 
 .. code-block:: python
 
-    @model.collect
-    def collect_stats(env: MM1):
-        env.avg_queue_length = env.queue.mean_level()
+    class MM1(sim.Model):
+        # ... field and process declarations ...
+
+        @sim.collect
+        def collect_stats(env: "MM1"):
+            env.avg_queue_length = env.queue.mean_level()
 
 The collector runs after the trial finishes. ``env.queue.mean_level()`` uses
 the recording window controlled by the experiment's ``warmup`` and
@@ -158,7 +182,7 @@ a weather process keeps updating, and an arrival process keeps generating work.
 A trial therefore needs a separate end condition.
 
 The normal Python way is to pass ``duration`` to ``model.experiment(...)``. The
-generated trial starts the registered processes, opens the measurement window
+generated trial starts the class-declared processes, opens the measurement window
 after ``warmup``, closes it at ``warmup + duration``, runs the collectors, and
 stops the remaining model processes. For a first model, this is both the
 simplest and the least surprising way to stop:
@@ -189,21 +213,33 @@ Use an event callback for that:
         service: sim.Processes
         stop_now: sim.Event
 
+        @sim.process(field="arrival")
+        def arrival_loop(env: "StopAtCount"):
+            while True:
+                sim.hold(1.0)
+                env.queue.put(1)
+
+        @sim.process(field="service")
+        def service_loop(env: "StopAtCount"):
+            while True:
+                env.queue.get(1)
+                env.served += 1
+
+        @sim.event(field="stop_now")
+        def handle_stop(env: "StopAtCount"):
+            sim.stop(env.arrival[0], 0)
+            sim.stop(env.service[0], 0)
+            sim.clear_events()
+
+        @sim.process
+        def monitor(env: "StopAtCount"):
+            while env.served < 100:
+                sim.hold(1.0)
+            env.stop_now.schedule(0.0)
+
     model = StopAtCount("stop-at-count")
 
-    @model.event
-    def stop_now(env: StopAtCount):
-        sim.stop(env.arrival[0], 0)
-        sim.stop(env.service[0], 0)
-        sim.clear_events()
-
-    @model.process
-    def monitor(env: StopAtCount):
-        while env.served < 100:
-            sim.hold(1.0)
-        env.stop_now.schedule(0.0)
-
-``sim.Processes`` fields publish handles for registered processes. Since
+``sim.Processes`` fields publish handles for bound class-declared processes. Since
 ``arrival`` and ``service`` each have one copy, ``env.arrival[0]`` and
 ``env.service[0]`` identify the running processes. ``env.<event>.schedule()``
 schedules the callback relative to the current simulation time;
@@ -255,23 +291,27 @@ process body:
     MSG_SRV_GET = sim.log_text("Gets one from the queue")
     MSG_SRV_HOLD = sim.log_text("Got one, services it for")
 
-    @model.process
-    def arrival(env: MM1):
-        while True:
-            t_ia = random.exponential(1.0 / env.utilization)
-            sim.log_user_f64(USERFLAG1, MSG_ARR_HOLD, t_ia)
-            sim.hold(t_ia)
-            sim.log_user(USERFLAG1, MSG_ARR_PUT)
-            env.queue.put(1)
+    class MM1(sim.Model):
+        utilization: sim.Param
+        queue: sim.Queue
 
-    @model.process
-    def service(env: MM1):
-        while True:
-            sim.log_user(USERFLAG1, MSG_SRV_GET)
-            env.queue.get(1)
-            t_srv = random.exponential(1.0)
-            sim.log_user_f64(USERFLAG1, MSG_SRV_HOLD, t_srv)
-            sim.hold(t_srv)
+        @sim.process
+        def arrival(env: "MM1"):
+            while True:
+                t_ia = random.exponential(1.0 / env.utilization)
+                sim.log_user_f64(USERFLAG1, MSG_ARR_HOLD, t_ia)
+                sim.hold(t_ia)
+                sim.log_user(USERFLAG1, MSG_ARR_PUT)
+                env.queue.put(1)
+
+        @sim.process
+        def service(env: "MM1"):
+            while True:
+                sim.log_user(USERFLAG1, MSG_SRV_GET)
+                env.queue.get(1)
+                t_srv = random.exponential(1.0)
+                sim.log_user_f64(USERFLAG1, MSG_SRV_HOLD, t_srv)
+                sim.hold(t_srv)
 
 And choose the flags for the run:
 
@@ -381,11 +421,13 @@ two assignments are equivalent:
 
 .. code-block:: python
 
-    @model.collect
-    def collect_stats(env: MM1):
-        env.avg_queue_length = env.queue.mean_level()
+    class MM1(sim.Model):
+        # ... declarations ...
 
-        env.avg_queue_length = env.queue.history().mean()
+        @sim.collect
+        def collect_stats(env: "MM1"):
+            env.avg_queue_length = env.queue.mean_level()
+            env.avg_queue_length = env.queue.history().mean()
 
 When you want the raw path of a single run rather than only a scalar summary,
 declare a capture in the collector and read it from the experiment after
@@ -401,22 +443,20 @@ and also records sampled interarrival times in a dataset:
         queue: sim.Queue
         interarrival_times: sim.Dataset
 
-    @model.process
-    def arrival(env: MM1):
-        while True:
-            t_ia = random.exponential(1.0 / env.utilization)
-            env.interarrival_times.add(t_ia)
-            sim.hold(t_ia)
-            env.queue.put(1)
+        @sim.process
+        def arrival(env: "MM1"):
+            while True:
+                t_ia = random.exponential(1.0 / env.utilization)
+                env.interarrival_times.add(t_ia)
+                sim.hold(t_ia)
+                env.queue.put(1)
 
-.. code-block:: python
-
-    @model.collect
-    def collect_stats(env: MM1):
-        env.avg_queue_length = env.queue.history().mean()
-        env.avg_interarrival_time = env.interarrival_times.mean()
-        env.queue.history().capture()
-        env.interarrival_times.capture()
+        @sim.collect
+        def collect_stats(env: "MM1"):
+            env.avg_queue_length = env.queue.history().mean()
+            env.avg_interarrival_time = env.interarrival_times.mean()
+            env.queue.history().capture()
+            env.interarrival_times.capture()
 
     exp.run()
     queue_history = exp.results.queue
@@ -435,11 +475,14 @@ autocorrelation correlogram directly from the collector:
 
 .. code-block:: python
 
-    @model.collect
-    def collect_stats(env: MM1):
-        env.avg_queue_length = env.queue.history().mean()
-        env.queue.report()
-        env.queue.history().pacf_correlogram(lags=20)
+    class MM1(sim.Model):
+        # ... declarations ...
+
+        @sim.collect
+        def collect_stats(env: "MM1"):
+            env.avg_queue_length = env.queue.history().mean()
+            env.queue.report()
+            env.queue.history().pacf_correlogram(lags=20)
 
 Very shortly thereafter, output appears. This block is from an actual run of
 ``.venv/bin/python tutorial/tut_1_4.py``:
@@ -513,9 +556,12 @@ with ``sim.log_text()``:
 
     REPORT = sim.log_text("mm1_queue_report.txt")
 
-    @model.collect
-    def collect_stats(env: MM1):
-        env.queue.report_file(REPORT, append=0)
+    class MM1(sim.Model):
+        # ... declarations ...
+
+        @sim.collect
+        def collect_stats(env: "MM1"):
+            env.queue.report_file(REPORT, append=0)
 
 Use stdout reports for short single-trial runs. In parallel experiments, text
 from several trials may interleave; prefer scalar outputs for final analysis
@@ -531,17 +577,17 @@ customer's time in system:
         wait_std: sim.Output
         waits: sim.Dataset
 
-    @model.process
-    def observer(env: Waits):
-        env.waits.add(2.5)
-        env.waits.add(3.0)
-        sim.suspend()
+        @sim.process
+        def observer(env: "Waits"):
+            env.waits.add(2.5)
+            env.waits.add(3.0)
+            sim.suspend()
 
-    @model.collect
-    def collect(env: Waits):
-        env.wait_mean = env.waits.mean()
-        env.wait_std = env.waits.std()
-        env.waits.capture()
+        @sim.collect
+        def collect(env: "Waits"):
+            env.wait_mean = env.waits.mean()
+            env.wait_std = env.waits.std()
+            env.waits.capture()
 
 After ``exp.run()``, ``exp.results.waits[0]`` returns that trial's raw samples
 as a one-dimensional NumPy array, and ``exp.results.waits`` returns one array
@@ -552,15 +598,17 @@ text-reporting style:
 
 .. code-block:: python
 
-    @model.collect
-    def collect(env: Waits):
-        env.wait_mean = env.waits.mean()
-        env.wait_std = env.waits.std()
+    class Waits(sim.Model):
+        # ... declarations ...
 
-        env.waits.fivenum()
-        env.waits.histogram(bins=20)
-        env.waits.correlogram(lags=20)
-        env.waits.pacf_correlogram(lags=20)
+        @sim.collect
+        def collect(env: "Waits"):
+            env.wait_mean = env.waits.mean()
+            env.wait_std = env.waits.std()
+            env.waits.fivenum()
+            env.waits.histogram(bins=20)
+            env.waits.correlogram(lags=20)
+            env.waits.pacf_correlogram(lags=20)
 
 Use ``env.waits.print()`` when you want the raw sample values themselves.
 Use ``env.waits.print_file()``, ``env.waits.fivenum_file()``,
@@ -601,23 +649,22 @@ natural station:
         avg_queue_length: sim.Output
         station: MM1Station = MM1Station()
 
+        @sim.collect
+        def collect_stats(env: "MM1"):
+            env.avg_queue_length = env.station.queue.mean_level()
+
 Component process methods are lowered into ordinary model processes before
 compilation. Inside the component, ``self.queue`` refers to the queue declared
 on the station instance. The compiled trial record remains flat, but the source
 code can stay grouped around the station concept.
 
-The builder now only needs to create the model and register the collector:
+The collector is part of the model declaration, so the builder only constructs
+the model:
 
 .. code-block:: python
 
     def build_model() -> MM1:
-        model = MM1("MM1")
-
-        @model.collect
-        def collect_stats(env: MM1):
-            env.avg_queue_length = env.station.queue.mean_level()
-
-        return model
+        return MM1("MM1")
 
 This pattern makes it easy to write tests, command-line scripts, notebooks, and
 benchmarks that all build the same model. It also separates model declaration
@@ -860,33 +907,36 @@ The typical usage pattern is also the reason the time-delay function is called
         station: sim.Resource
         tools: sim.Pool = 8
 
+        @sim.process
+        def job(env: "Shop"):
+            station_sig = env.station.acquire()
+            if station_sig != sim.SUCCESS:
+                return
+
+            tool_sig = env.tools.acquire(3)
+            if tool_sig == sim.SUCCESS:
+                sim.hold(5.0)
+                env.tools.release(3)
+
+            env.station.release()
+
     model = Shop("shop")
-
-    @model.process
-    def job(env: Shop):
-        station_sig = env.station.acquire()
-        if station_sig != sim.SUCCESS:
-            return
-
-        tool_sig = env.tools.acquire(3)
-        if tool_sig == sim.SUCCESS:
-            sim.hold(5.0)
-            env.tools.release(3)
-
-        env.station.release()
 
 Or, for a pool:
 
 .. code-block:: python
 
-    @model.process
-    def job(env: Shop):
-        sig = env.tools.acquire(6)
-        if sig == sim.SUCCESS:
-            sim.hold(2.0)
-            env.tools.release(3)
-            sim.hold(1.0)
-            env.tools.release(3)
+    class Shop(sim.Model):
+        tools: sim.Pool = 8
+
+        @sim.process
+        def job(env: "Shop"):
+            sig = env.tools.acquire(6)
+            if sig == sim.SUCCESS:
+                sim.hold(2.0)
+                env.tools.release(3)
+                sim.hold(1.0)
+                env.tools.release(3)
 
 Note that resources and pools are different from count queues. It is meaningful
 to put 100 items into a queue with capacity 10; the process can fill the queue,
@@ -934,36 +984,36 @@ process handle is woken with a signal.
         interrupted: sim.State
         preempted: sim.State
 
+        @sim.process(copies=4, field="worker")
+        def worker_process(env: "Crew", idx: int):
+            me = sim.current()
+            held = 0
+            while True:
+                sim.set_priority(me, idx)
+                sig = env.tools.acquire(4)
+                held = env.tools.held(me)
+                if sig == sim.PREEMPTED:
+                    env.preempted += 1
+                elif sig != sim.SUCCESS:
+                    env.interrupted += 1
+
+                sig = sim.hold(100.0)
+                held = env.tools.held(me)
+                if sig == sim.PREEMPTED:
+                    env.preempted += 1
+                elif sig != sim.SUCCESS:
+                    env.interrupted += 1
+
+                if held:
+                    env.tools.release(held)
+
+        @sim.process
+        def supervisor(env: "Crew"):
+            sim.hold(1.0)
+            sim.interrupt(env.worker[0], sim.INTERRUPTED, 0)
+            env.tools.preempt(6)
+
     model = Crew("crew")
-
-    @model.process(copies=4)
-    def worker(env: Crew, idx: int):
-        me = sim.current()
-        held = 0
-        while True:
-            sim.set_priority(me, idx)
-            sig = env.tools.acquire(4)
-            held = env.tools.held(me)
-            if sig == sim.PREEMPTED:
-                env.preempted += 1
-            elif sig != sim.SUCCESS:
-                env.interrupted += 1
-
-            sig = sim.hold(100.0)
-            held = env.tools.held(me)
-            if sig == sim.PREEMPTED:
-                env.preempted += 1
-            elif sig != sim.SUCCESS:
-                env.interrupted += 1
-
-            if held:
-                env.tools.release(held)
-
-    @model.process
-    def supervisor(env: Crew):
-        sim.hold(1.0)
-        sim.interrupt(env.worker[0], sim.INTERRUPTED, 0)
-        env.tools.preempt(6)
 
 The supervisor uses the process handles published by ``env.worker``. In a real
 model this could be an emergency dispatcher interrupting a crew, a maintenance
@@ -999,21 +1049,21 @@ block, so the same signal discipline applies.
         jobs: sim.Store = 10
         completed: sim.State
 
+        @sim.process
+        def producer(env: "Inbox"):
+            for job_id in range(100):
+                sig = env.jobs.put(job_id)
+                if sig != sim.SUCCESS:
+                    return
+
+        @sim.process
+        def consumer(env: "Inbox"):
+            while True:
+                status, job_id = env.jobs.get()
+                sim.hold(1.0 + job_id % 3)
+                env.completed += 1
+
     model = Inbox("inbox")
-
-    @model.process
-    def producer(env: Inbox):
-        for job_id in range(100):
-            sig = env.jobs.put(job_id)
-            if sig != sim.SUCCESS:
-                return
-
-    @model.process
-    def consumer(env: Inbox):
-        while True:
-            status, job_id = env.jobs.get()
-            sim.hold(1.0 + job_id % 3)
-            env.completed += 1
 
 Use ``env.<store>.take()`` when a process needs a specific payload, not simply
 the next available one. Priority queue elements (indexed with
@@ -1043,40 +1093,40 @@ targeting:
         resource: sim.Pool = 20
         controller_actions: sim.State
 
-    model = Game("game")
+        @sim.process(copies=5, field="polite")
+        def polite_agents(env: "Game", index: int):
+            me = sim.current()
+            while True:
+                amount = random.dice(1, 5)
+                sim.set_priority(me, random.dice(-10, 10))
+                sig = env.resource.acquire(amount)
+                if sig == sim.SUCCESS:
+                    sim.hold(random.exponential(1.0))
+                    held = env.resource.held(me)
+                    if held:
+                        env.resource.release(random.dice(1, held))
 
-    @model.process(copies=5)
-    def polite(env: Game):
-        me = sim.current()
-        while True:
-            amount = random.dice(1, 5)
-            sim.set_priority(me, random.dice(-10, 10))
-            sig = env.resource.acquire(amount)
-            if sig == sim.SUCCESS:
+        @sim.process(copies=2, field="aggressive")
+        def aggressive_agents(env: "Game", index: int):
+            me = sim.current()
+            while True:
+                amount = random.dice(3, 10)
+                sim.set_priority(me, random.dice(-5, 15))
+                env.resource.preempt(amount)
                 sim.hold(random.exponential(1.0))
-                held = env.resource.held(me)
-                if held:
-                    env.resource.release(random.dice(1, held))
 
-    @model.process(copies=2)
-    def aggressive(env: Game):
-        me = sim.current()
-        while True:
-            amount = random.dice(3, 10)
-            sim.set_priority(me, random.dice(-5, 15))
-            env.resource.preempt(amount)
-            sim.hold(random.exponential(1.0))
+        @sim.process
+        def controller(env: "Game"):
+            while True:
+                sim.hold(random.exponential(5.0))
+                if random.bernoulli(0.5) == 1:
+                    target = env.polite[random.dice(0, 4)]
+                else:
+                    target = env.aggressive[random.dice(0, 1)]
+                sim.interrupt(target, sim.INTERRUPTED, 0)
+                env.controller_actions += 1
 
-    @model.process
-    def controller(env: Game):
-        while True:
-            sim.hold(random.exponential(5.0))
-            if random.bernoulli(0.5) == 1:
-                target = env.polite[random.dice(0, 4)]
-            else:
-                target = env.aggressive[random.dice(0, 1)]
-            sim.interrupt(target, sim.INTERRUPTED, 0)
-            env.controller_actions += 1
+    model = Game("game")
 
 The lesson is not the particular story. The lesson is that handles let one
 process act on another, and signals let the target process learn why it woke.
@@ -1585,12 +1635,11 @@ model grows:
         completed: sim.Output
         ships_done: sim.State
 
+        @sim.process
+        def placeholder(env: "Harbor"):
+            sim.suspend()
+
     harbor = Harbor("harbor")
-
-    @harbor.process
-    def placeholder(env: Harbor):
-        sim.suspend()
-
     exp = harbor.experiment(replications=1, duration=24.0, warmup=0.0, seed=1)
     exp.run()
 
@@ -1646,6 +1695,10 @@ contents for the simulated world:
         facilities: HarborFacilities = HarborFacilities()
         traffic: ShipTraffic = ShipTraffic()
 
+        @sim.predicate(field="harbormaster_called")
+        def can_wake_harbormaster(env: "Harbor") -> bool:
+            return True
+
 ``sim.capacity("num_tugs")`` means each trial sizes the pool from that
 parameter value. This lets one experiment sweep infrastructure choices without
 rewriting the model. The same idea is used for small and large berths.
@@ -1656,9 +1709,12 @@ Conditions combine a wait list with a predicate:
 
 .. code-block:: python
 
-    @harbor.predicate
-    def harbormaster_called(env: Harbor) -> bool:
-        return True
+    class Harbor(sim.Model):
+        harbormaster_called: sim.Predicate
+
+        @sim.predicate(field="harbormaster_called")
+        def can_wake_harbormaster(env: "Harbor") -> bool:
+            return True
 
     class SeaConditions(sim.Component):
         water_depth: sim.FloatState
@@ -1863,15 +1919,18 @@ can also print the same text reports we used earlier:
 
 .. code-block:: python
 
-    @harbor.collect
-    def harbor_stats(env: Harbor):
-        env.avg_time_small = env.traffic.time_small.mean()
-        env.avg_time_large = env.traffic.time_large.mean()
-        env.tug_util = env.facilities.tugs.mean_in_use()
+    class Harbor(sim.Model):
+        # ... declarations and processes ...
 
-        env.traffic.time_small.fivenum()
-        env.traffic.time_small.histogram(bins=20)
-        env.facilities.tugs.report()
+        @sim.collect
+        def harbor_stats(env: "Harbor"):
+            env.avg_time_small = env.traffic.time_small.mean()
+            env.avg_time_large = env.traffic.time_large.mean()
+            env.tug_util = env.facilities.tugs.mean_in_use()
+
+            env.traffic.time_small.fivenum()
+            env.traffic.time_small.histogram(bins=20)
+            env.facilities.tugs.report()
 
 This gives us scalar outputs for the experiment table, plus readable diagnostic
 reports while we are still validating the model. Once the model is trusted, the
@@ -1915,21 +1974,24 @@ collector:
 
 .. code-block:: python
 
-    @harbor.collect
-    def harbor_stats(env: Harbor):
-        env.avg_time_small = env.traffic.time_small.mean()
-        env.avg_time_large = env.traffic.time_large.mean()
-        env.tug_util = env.facilities.tugs.mean_in_use()
+    class Harbor(sim.Model):
+        # ... declarations and processes ...
 
-        env.traffic.time_large.fivenum()
-        env.traffic.time_large.histogram(bins=20)
-        env.facilities.tugs.report()
-        env.facilities.berths_small.report()
-        env.facilities.berths_large.report()
-        env.facilities.comms.report()
+        @sim.collect
+        def harbor_stats(env: "Harbor"):
+            env.avg_time_small = env.traffic.time_small.mean()
+            env.avg_time_large = env.traffic.time_large.mean()
+            env.tug_util = env.facilities.tugs.mean_in_use()
 
-        env.facilities.tugs.history().fivenum()
-        env.facilities.tugs.history().histogram(bins=20)
+            env.traffic.time_large.fivenum()
+            env.traffic.time_large.histogram(bins=20)
+            env.facilities.tugs.report()
+            env.facilities.berths_small.report()
+            env.facilities.berths_large.report()
+            env.facilities.comms.report()
+
+            env.facilities.tugs.history().fivenum()
+            env.facilities.tugs.history().histogram(bins=20)
 
 Output from a single report-oriented run will contain sections like:
 

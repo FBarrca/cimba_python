@@ -228,7 +228,7 @@ _STATE_KINDS = {"state", "fstate"}
 #: object-oriented sugar. Used directly against a process's *unlowered*
 #: source -- e.g. a plain helper function's own body, inlined via
 #: ``_handle_helper_call`` below, which never goes through
-#: ``Model.process()``'s entity-method lowering.
+#: model callback registration's entity-method lowering.
 _ENTITY_METHOD_VERBS: dict[tuple[str, str], tuple[str, str]] = {
     ("queue", "put"): ("produce", "put"),
     ("queue", "get"): ("consume", "get"),
@@ -286,7 +286,7 @@ _ENTITY_HELPER_METHOD_OVERRIDES = {
 
 #: By the time a *registered* process/predicate/event/collect function
 #: reaches DAG inference, the ``env.<entity>.method(...)`` sugar in its own
-#: body has already been lowered (in ``Model.process()``/
+#: body has already been lowered (during model callback registration/
 #: ``_lower_component_process()``) into calls to these internal helpers
 #: (see ``store/methods.py``), which structurally mirror the old
 #: ``sim.put(entity, ...)``-style free functions: a plain call with the
@@ -317,7 +317,7 @@ def infer_process_dag(
     extra_nodes: Iterable[ProcessDAGNode] = (),
     extra_edges: Iterable[ProcessDAGEdge] = (),
 ) -> ProcessDAG:
-    """Infer a model-field-aware process graph from registered process bodies."""
+    """Infer a model-field-aware graph from class-declared process bodies."""
     process_list = tuple(processes)
     process_names = {p.name for p in process_list}
     process_field_names = set(process_fields)
@@ -538,8 +538,8 @@ class _ProcessAnalyzer(ast.NodeVisitor):
         the indexed ``env.<entity>[i].method(...)`` form), as it appears in
         a plain helper function's own source -- helper functions are
         inlined by AST for this analysis (see ``_handle_helper_call``
-        below) but never go through ``Model.process()``'s entity-method
-        lowering, since they aren't registered process/predicate/event/
+        below) but never go through model callback entity-method
+        lowering, since they aren't class-declared process/predicate/event/
         collect callbacks. Returns whether the call was recognized."""
         func = node.func
         if not isinstance(func, ast.Attribute):
