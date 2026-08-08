@@ -59,38 +59,30 @@ import numpy as np
 from numba import njit, types
 
 from ._callbacks import (
-    _CallbackOwner,
+    _DeclarationOwner,
     _ProcessSpec,
-    _bind_callback_fields,
     _callback_arg_count,
-    _callback_set,
     _process_signature,
 )
 from ._dataset.methods import (
     dataset_lowering_namespace,
-    lower_dataset_method_call,
     lower_env_dataset_method_calls,
 )
-from ._declarations import (_DECL_KINDS, _FIELD_KINDS, _MISSING, _check_name,
-                            _ConstHint, _Declarations, _RefHint,
-                            _field_declarations, _FieldDecl, _param_default,
+from ._declarations import (_DECL_KINDS, _FIELD_KINDS, _MISSING,
+                            _STANDARD_FIELDS, _ConstHint, _Declarations,
+                            _RefHint, _FieldDecl, _param_default,
                             class_type_hints)
 from ._timeseries.methods import (
-    HISTORY_GETTER_NAMES,
     lower_env_history_method_calls,
-    lower_history_getter_call,
-    lower_timeseries_method_call,
     timeseries_lowering_namespace,
 )
 from .random._lowering import (
-    lower_random_calls_in_function,
     lower_random_calls_in_node,
     random_lowering_namespace,
 )
 from .store.methods import (
     ENTITY_METHOD_NAMES,
     entity_lowering_namespace,
-    lower_entity_method_call,
     lower_env_entity_method_calls,
 )
 
@@ -99,27 +91,6 @@ from .store.methods import (
 # The Component base class and values captured from instance defaults.
 
 _wirable_fields_cache: dict[type, dict[str, str]] = {}
-
-#: declared field kind -> ``_FieldKind.binding``, for the scalar entity
-#: kinds whose ``self.<field>.history.method()`` sugar is lowered directly
-#: inside component methods. Priority queues are indexed (``self.pq[i]``)
-#: before ``.history`` can apply, so they are lowered by the later
-#: env-based pass (``lower_env_history_method_calls``) instead.
-_COMPONENT_HISTORY_BINDINGS = {
-    "queue": "buffer",
-    "resource": "resource",
-    "pool": "resourcepool",
-    "store": "objectqueue",
-}
-
-#: scalar entity field kinds whose ``self.<field>.method(...)`` sugar
-#: (put/get/acquire/release/...) is lowered directly inside component
-#: methods, same restriction as ``_COMPONENT_HISTORY_BINDINGS``: PQueues
-#: elements are indexed (``self.pq[i]``) before a method applies, so they
-#: are lowered by the later env-based pass (``lower_env_entity_method_calls``)
-#: instead.
-_COMPONENT_ENTITY_KINDS = frozenset(
-    {"queue", "resource", "pool", "store", "condition", "event"})
 
 
 def _wirable_fields(cls: type) -> dict[str, str]:
@@ -138,7 +109,7 @@ def _wirable_fields(cls: type) -> dict[str, str]:
     return kinds
 
 
-class Component(_CallbackOwner):
+class Component(_DeclarationOwner):
     """Authoring-time grouping of model fields and process methods.
 
     Component instances are declared as defaults on a ``Model`` subclass. Their
@@ -332,7 +303,7 @@ class _ComponentRefDecl:
 
 
 @dataclass
-class _ComponentDecl:
+class _OwnerDecl:
     """One node of a model's component tree.
 
     A *collection* decl covers every item of a ``list[Component]`` field;
@@ -351,13 +322,13 @@ class _ComponentDecl:
     #: compatibility constraint from the annotation. ``cls`` remains the
     #: concrete class for homogeneous declarations for backwards-compatible
     #: private introspection; polymorphic declarations use the annotated base.
-    cls: type[Component]
-    declared_cls: type[Component]
+    cls: type[Any]
+    declared_cls: type[Any]
     #: exact class selected by each template instance.
-    instance_classes: tuple[type[Component], ...]
+    instance_classes: tuple[type[Any], ...]
     collection: bool
     #: bound template instances, one per (parent instance x item)
-    instances: tuple[Component, ...]
+    instances: tuple[Any, ...]
     #: this class's own field declarations
     decls: _Declarations
     #: field name on the Model subclass that declared this node's root
@@ -386,7 +357,7 @@ class _ComponentDecl:
     wiring_raw: dict[str, "_FieldRef"] = field(default_factory=dict)
     #: fields wired to another component's entity (no own model field)
     aliased_fields: tuple[str, ...] = ()
-    children: tuple["_ComponentDecl", ...] = ()
+    children: tuple["_OwnerDecl", ...] = ()
     #: for collections: first item index / item count per parent instance
     parent_offsets: tuple[int, ...] = ()
     parent_lengths: tuple[int, ...] = ()
@@ -398,6 +369,7 @@ class _ComponentDecl:
     field_slots: dict[str, tuple[int, ...]] = field(default_factory=dict)
     constant_owners: dict[str, tuple[int, ...]] = field(default_factory=dict)
     constant_slots: dict[str, tuple[int, ...]] = field(default_factory=dict)
+    owner_root: bool = False
 
     @property
     def count(self) -> int:
@@ -409,7 +381,7 @@ class _ComponentDecl:
         specialization."""
         return len(self.specialization_groups()) > 1
 
-    def class_at(self, index: int = 0) -> type[Component]:
+    def class_at(self, index: int = 0) -> type[Any]:
         return self.instance_classes[index]
 
     def specialization_key(self, index: int) -> tuple[Any, ...]:
@@ -425,12 +397,13 @@ class _ComponentDecl:
                           for item in range(start, start + length)),
                 ))
             else:
-                slot = (child.parent_slots[index]
-                        if child.parent_slots else index)
-                children.append((
-                    child.local_name,
-                    None if slot < 0 else child.specialization_key(slot),
-                ))
+                slot = child.parent_slots[index] if child.parent_slots else index
+                children.append(
+                    (
+                        child.local_name,
+                        None if slot < 0 else child.specialization_key(slot),
+                    )
+                )
         return (self.instance_classes[index], tuple(children))
 
     def specialization_groups(self) -> tuple[tuple[int, ...], ...]:
@@ -454,13 +427,13 @@ class _ComponentDecl:
                 slots[index] = variant
         return tuple(slots)
 
-    def walk(self) -> Iterator["_ComponentDecl"]:
+    def walk(self) -> Iterator["_OwnerDecl"]:
         """This node and all of its descendants, depth-first."""
         yield self
         for child in self.children:
             yield from child.walk()
 
-    def child(self, local_name: str) -> "_ComponentDecl | None":
+    def child(self, local_name: str) -> "_OwnerDecl | None":
         for child in self.children:
             if child.local_name == local_name:
                 return child
@@ -476,21 +449,23 @@ class _ComponentDecl:
         methods: dict[str, tuple[Callable[..., Any],
                                  _ProcessSpec]] = {}
         for cls in dict.fromkeys(self.instance_classes):
-            for callback in _callback_set(cls).processes:
+            for callback in cls._callbacks().processes:
                 methods.setdefault(callback.name, (callback.fn, callback.spec))
         for method_name in methods:
             # A method compiled once for every instance registers under
             # the decl name; instance-specialized methods (spawnables,
             # the per-instance fallback) under the per-instance names.
-            candidates = (f"{self.name}__{method_name}",
-                          *(f"{prefix}__{method_name}"
-                            for prefix in self.process_names))
-            members.extend(f"process:{candidate}"
-                           for candidate in candidates
-                           if candidate in process_names)
+            candidates = (
+                f"{self.name}__{method_name}",
+                *(f"{prefix}__{method_name}" for prefix in self.process_names),
+            )
+            members.extend(
+                f"process:{candidate}"
+                for candidate in candidates
+                if candidate in process_names
+            )
         for field_decl in self.decls.fields.values():
-            if (not field_decl.kind.dag_entity
-                    or field_decl.name in self.aliased_fields):
+            if not field_decl.kind.dag_entity or field_decl.name in self.aliased_fields:
                 continue
             flat_name = self.direct_field_map[field_decl.name]
             graph_kind = entity_kinds.get(flat_name)
@@ -506,9 +481,8 @@ class _ComponentDecl:
 # flattens every declared field into the model-level declarations dict.
 
 def _component_declarations(cls: type[Component]) -> _Declarations:
-    decls = _field_declarations(cls, allow_symbolic_pqueues=True,
-                                allow_refs=True)
-    _bind_callback_fields(cls, decls, owner="component")
+    decls = cls._field_declarations(allow_symbolic_pqueues=True, allow_refs=True)
+    cls._bind_callbacks(decls, owner="component")
     for field_decl in decls.fields.values():
         if not field_decl.kind.on_component:
             raise ValueError(
@@ -588,29 +562,6 @@ def _component_field_map(name: str, decls: _Declarations) -> dict[str, str]:
 
 def _primitive_constant(value: Any) -> bool:
     return type(value) in (bool, int, float)
-
-
-def _component_constants(
-    items: Sequence[Component],
-    field_map: Mapping[str, str],
-    exclude: frozenset[str] = frozenset(),
-) -> dict[str, tuple[Any, ...]]:
-    """Per-instance primitive attribute values (usually set in __init__):
-    names present on every item with a bool/int/float value throughout."""
-    constants: dict[str, tuple[Any, ...]] = {}
-    names = {
-        name
-        for item in items
-        for name in vars(item)
-        if (not name.startswith("_") and name not in field_map
-            and name not in exclude)
-    }
-    for name in names:
-        values = tuple(getattr(item, name, _MISSING) for item in items)
-        if all(value is not _MISSING and _primitive_constant(value)
-               for value in values):
-            constants[name] = values
-    return constants
 
 
 def _polymorphic_component_constants(
@@ -782,16 +733,19 @@ def _resolve_component_processes(
                   else field_owners[fname])
         owned_counts: list[int] = []
         for index in owners:
-            specs = [callback.spec
-                     for callback in _callback_set(classes[index]).processes
-                     if callback.spec.field == fname]
+            specs = [
+                callback.spec
+                for callback in classes[index]._callbacks().processes
+                if callback.spec.field == fname
+            ]
             spec = specs[0] if len(specs) == 1 else None
             if spec is None:
                 raise ValueError(
-                    f"component '{component_name}' Processes field '{fname}' "
-                    "must be bound by exactly one @sim.process(field=...)")
-            owned_counts.append(spec.resolve_copies(
-                templates[index], f"{component_name}.{fname}"))
+                    f"component '{component_name}' Processes field '{fname}' must be bound by exactly one @sim.process(field=...)"
+                )
+            owned_counts.append(
+                spec.resolve_copies(templates[index], f"{component_name}.{fname}")
+            )
         resolved_counts, resolved_offsets = _offsets_from_counts(owned_counts)
         counts = [0] * len(templates)
         offsets = [0] * len(templates)
@@ -871,16 +825,7 @@ _AMBIGUOUS_REF_TARGET: Any = object()
 
 
 class _DeclBuilder:
-    """Builds the component declaration tree of one Model subclass.
-
-    The tree is built first, capturing each node's declared fields and
-    raw wiring references; entity wiring and Ref/Refs targets are resolved
-    afterwards (see ``_class_declarations``), once every instance's decl
-    exists, so references may point forward. Only then are the fields
-    flattened into ``target`` -- the model-level declarations -- because
-    wiring decides which fields alias another entity and declare nothing
-    of their own.
-    """
+    """Build an owner tree, then flatten it after wiring is resolved."""
 
     def __init__(self, target: _Declarations):
         self.target = target
@@ -944,7 +889,7 @@ class _DeclBuilder:
         *,
         owner_positions: Sequence[int],
         parent_count: int,
-    ) -> _ComponentDecl:
+    ) -> _OwnerDecl:
         """Build one component field's decl, gathering its instances from
         each owner (the model class for a root, the parent's instances for
         a child) and deriving the flattened name, per-instance process-name
@@ -998,7 +943,7 @@ class _DeclBuilder:
         parent_offsets: tuple[int, ...] = (),
         parent_lengths: tuple[int, ...] = (),
         parent_slots: tuple[int, ...] = (),
-    ) -> _ComponentDecl:
+    ) -> _OwnerDecl:
         instance_classes = tuple(type(template) for template in templates)
         cls = (instance_classes[0] if len(set(instance_classes)) == 1
                else declared_cls)
@@ -1056,7 +1001,7 @@ class _DeclBuilder:
                     child_order.append(child_name)
                 child_specs[child_name].append(
                     (index, child_cls, child_collection))
-        children_list: list[_ComponentDecl] = []
+        children_list: list[_OwnerDecl] = []
         for child_name in child_order:
             specs = child_specs[child_name]
             collection_values = {spec[2] for spec in specs}
@@ -1073,7 +1018,7 @@ class _DeclBuilder:
                 specs[0][2], owner_positions=positions,
                 parent_count=len(templates)))
         children = tuple(children_list)
-        return _ComponentDecl(
+        return _OwnerDecl(
             name=name,
             cls=cls,
             declared_cls=declared_cls,
@@ -1104,7 +1049,7 @@ class _DeclBuilder:
             constant_slots=constant_slots,
         )
 
-    def flatten(self, decl: _ComponentDecl) -> None:
+    def flatten(self, decl: _OwnerDecl) -> None:
         """Append one built (and wiring-resolved) node's declarations to
         the model-level target under their flattened names; multi-instance
         decls declare shaped fields with one element per instance. Wired
@@ -1189,7 +1134,7 @@ def _class_declarations(cls: type) -> _Declarations:
     in declaration order (base classes first). The component trees are
     built, their wiring and references resolved, and every field flattened
     into the returned declarations."""
-    decls = _field_declarations(cls)
+    decls = cls._field_declarations()
     builder = _DeclBuilder(decls)
     builder.build_model(cls)
     roots = (*decls.components, *decls.component_collections)
@@ -1203,11 +1148,49 @@ def _class_declarations(cls: type) -> _Declarations:
     return decls
 
 
+def _owner_declaration(cls: type, decls: _Declarations) -> _OwnerDecl:
+    """Represent the Model root in the same declaration tree as Components."""
+    owner_decls = _Declarations()
+    owner_decls.fields.update(decls.fields)
+    for name, _format in _STANDARD_FIELDS:
+        kind = _FIELD_KINDS["state" if name == "seed" else "fstate"]
+        owner_decls.fields[name] = _FieldDecl(name, kind)
+    fields = tuple(owner_decls.fields)
+    pqueue_offsets = {name: (0,) for name in owner_decls.names("pqueues")}
+    process_offsets = {name: (0,) for name in owner_decls.names("processes")}
+    return _OwnerDecl(
+        name="model",
+        cls=cls,
+        declared_cls=cls,
+        instance_classes=(cls,),
+        collection=False,
+        instances=(None,),
+        decls=owner_decls,
+        local_name="model",
+        process_names=("model",),
+        display_name="model",
+        item_display_name="model",
+        direct_field_map={name: name for name in fields},
+        constants={},
+        param_defaults={},
+        pqueue_counts={},
+        pqueue_offsets=pqueue_offsets,
+        process_counts={},
+        process_offsets=process_offsets,
+        component_refs={},
+        children=tuple((*decls.components, *decls.component_collections)),
+        field_owners={name: (0,) for name in fields},
+        field_slots={name: (0,) for name in fields},
+        owner_root=True,
+    )
+
+
 # -- Entity wiring resolution: runs after the whole tree is built, so a
 # field may be wired to a target declared later, and chains of wirings
 # resolve through to the entity that actually backs them.
 
-def _resolve_component_wiring(roots: Sequence[_ComponentDecl]) -> None:
+
+def _resolve_component_wiring(roots: Sequence[_OwnerDecl]) -> None:
     """Resolve each wired field to the flattened name of the entity it
     ultimately names, following chains and rejecting cycles."""
     identity = _instance_identity(roots)
@@ -1221,9 +1204,7 @@ def _resolve_component_wiring(roots: Sequence[_ComponentDecl]) -> None:
             decl.aliased_fields = tuple(aliased)
 
 
-def _instance_identity(
-    roots: Sequence[_ComponentDecl],
-) -> dict[int, Any]:
+def _instance_identity(roots: Sequence[_OwnerDecl]) -> dict[int, Any]:
     """Map each template instance to (its decl, item index or None),
     marking instances shared by more than one field as ambiguous."""
     identity: dict[int, Any] = {}
@@ -1239,7 +1220,7 @@ def _instance_identity(
 
 
 def _resolve_wiring_chain(
-    decl: _ComponentDecl,
+    decl: _OwnerDecl,
     fname: str,
     ref: _FieldRef,
     identity: Mapping[int, Any],
@@ -1276,7 +1257,8 @@ def _resolve_wiring_chain(
 # -- Ref/Refs resolution: runs after the whole tree is built, so forward
 # references between components work.
 
-def _resolve_component_refs(roots: Sequence[_ComponentDecl]) -> None:
+
+def _resolve_component_refs(roots: Sequence[_OwnerDecl]) -> None:
     """Resolve raw Ref/Refs targets to (decl, item index) pairs."""
     identity = _instance_identity(roots)
     for root in roots:
@@ -1286,11 +1268,11 @@ def _resolve_component_refs(roots: Sequence[_ComponentDecl]) -> None:
 
 
 def _resolve_component_ref_target(
-    decl: _ComponentDecl,
+    decl: _OwnerDecl,
     ref: _ComponentRefDecl,
     instance: Component,
     identity: Mapping[int, Any],
-) -> tuple[_ComponentDecl, int | None]:
+) -> tuple[_OwnerDecl, int | None]:
     target = identity.get(id(instance))
     if target is None:
         raise ValueError(
@@ -1306,9 +1288,7 @@ def _resolve_component_ref_target(
 
 
 def _resolve_component_ref_decl(
-    decl: _ComponentDecl,
-    ref: _ComponentRefDecl,
-    identity: Mapping[int, Any],
+    decl: _OwnerDecl, ref: _ComponentRefDecl, identity: Mapping[int, Any]
 ) -> None:
     if not ref.table:
         ref.targets = tuple(
@@ -1402,9 +1382,7 @@ def _ref_lengths_symbol(component: str, name: str) -> str:
     return f"_CIMBA_REFLEN_{component}__{name}"
 
 
-def _lowering_namespace(
-    components: Iterable[_ComponentDecl],
-) -> dict[str, Any]:
+def _lowering_namespace(components: Iterable[_OwnerDecl]) -> dict[str, Any]:
     """The numpy lookup tables a lowered function may reference, for the
     given decls, their descendants, and every decl reachable through
     Ref/Refs fields (whose symbols must be present too)."""
@@ -1508,11 +1486,11 @@ def _add(left: ast.expr, right: ast.expr) -> ast.expr:
 
 
 @dataclass(frozen=True)
-class _ComponentAccess:
+class _OwnerAccess:
     """A resolved component-instance path: the decl plus the instance
     index expression (None when the decl has a single instance)."""
 
-    decl: _ComponentDecl
+    decl: _OwnerDecl
     index: ast.expr | None
     text: str
     #: logical indexes this access may select when ``index`` is dynamic.
@@ -1520,10 +1498,10 @@ class _ComponentAccess:
 
 
 @dataclass(frozen=True)
-class _ComponentFieldAccess:
+class _FieldAccess:
     """A resolved path to a declared field or captured constant."""
 
-    decl: _ComponentDecl
+    decl: _OwnerDecl
     index: ast.expr | None
     field: str
     text: str
@@ -1531,25 +1509,25 @@ class _ComponentFieldAccess:
 
 
 @dataclass
-class _ComponentFunctionDependency:
-    """One component value threaded into a compiled function helper.
+class _FunctionDependency:
+    """One owner value threaded into a compiled function helper.
 
     Normally a scalar the caller reads at the call site. When the helper
     indexes a collection with a value it computes itself (a loop target
     or a local), the caller cannot pick the element, so ``array`` threads
     the whole flattened field and the helper subscripts it."""
 
-    access: _ComponentFieldAccess
+    access: _FieldAccess
     parameter: str
     direct: bool = True
     array: bool = False
 
 
 @dataclass
-class _ComponentFunctionSpec:
-    """Lowered helper and dependency metadata for one component declaration."""
+class _FunctionSpec:
+    """A Model/Component synchronous function lowered to one helper."""
 
-    decl: _ComponentDecl
+    decl: _OwnerDecl
     name: str
     method: Callable[..., Any]
     graph_name: str
@@ -1557,9 +1535,9 @@ class _ComponentFunctionSpec:
     parameter_names: tuple[str, ...]
     argument_types: tuple[Any, ...]
     return_type: Any
-    dependencies: tuple[_ComponentFunctionDependency, ...]
+    dependencies: tuple[_FunctionDependency, ...]
     helper: Any
-    callees: tuple[str, ...] = ()
+    callees: tuple[str, ...]
     receiver_indexed: bool = False
     #: None for the homogeneous shared helper; otherwise the recursive
     #: specialization ordinal and its logical instance indexes.
@@ -1567,67 +1545,43 @@ class _ComponentFunctionSpec:
     instance_indices: tuple[int, ...] = ()
 
 
-@dataclass
-class _ModelFunctionSpec:
-    """One read-only helper declared on the root Model callback owner."""
-
-    name: str
-    method: Callable[..., Any]
-    symbol: str
-    parameter_names: tuple[str, ...]
-    argument_types: tuple[Any, ...]
-    return_type: Any
-    helper: Any = None
-    callees: tuple[str, ...] = ()
-
-    @property
-    def graph_name(self) -> str:
-        return f"model:{self.name}"
-
-
 @dataclass(frozen=True)
 class _RefTableAccess:
     """A resolved path to a Refs table, before indexing."""
 
-    parent: _ComponentAccess
+    parent: _OwnerAccess
     name: str
     ref: _ComponentRefDecl
     text: str
 
 
-class _ComponentPathLowerer(ast.NodeTransformer):
+class _OwnerPathLowerer(ast.NodeTransformer):
     #: When set (method lowering with a runtime instance index), literal
     #: indices into a Refs table are checked against every possible instance.
     strict_ref_tables = False
 
     def __init__(
-        self,
-        *,
-        env_name: str,
-        component_functions: Mapping[str, _ComponentFunctionSpec] | None = None,
-        model_functions: Mapping[str, _ModelFunctionSpec] | None = None,
+        self, *, env_name: str, functions: Mapping[str, _FunctionSpec] | None = None
     ):
         self.env_name = env_name
-        self.component_functions = component_functions or {}
-        self.model_functions = model_functions or {}
+        self.functions = functions or {}
         self.called_functions: set[str] = set()
         self._ref_loop_tables: list[tuple[str, str, str | None, str]] = []
 
     # -- path roots, defined by the subclasses -------------------------------
 
-    def _root_namespace_ref(self, node: ast.AST) -> _ComponentAccess | None:
+    def _root_namespace_ref(self, node: ast.AST) -> _OwnerAccess | None:
         return None
 
-    def _root_collection_ref(self, node: ast.AST) -> _ComponentAccess | None:
+    def _root_collection_ref(self, node: ast.AST) -> _OwnerAccess | None:
         return None
 
     def _callback_label(self) -> str:
         raise NotImplementedError
 
     @staticmethod
-    def _possible_positions(access: _ComponentAccess) -> tuple[int, ...]:
-        if (isinstance(access.index, ast.Constant)
-                and type(access.index.value) is int):
+    def _possible_positions(access: _OwnerAccess) -> tuple[int, ...]:
+        if isinstance(access.index, ast.Constant) and type(access.index.value) is int:
             return (access.index.value,)
         if access.possible_indices is not None:
             return access.possible_indices
@@ -1642,15 +1596,6 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             None if index is None else ast.dump(index),
         )
 
-    def _length_expr(
-        self,
-        values: Sequence[int],
-        index: ast.expr | None,
-        symbol: str,
-        what: str,
-    ) -> ast.expr:
-        return self._instance_table_expr(values, index, symbol, what)
-
     def _lower_len_call(self, node: ast.Call) -> ast.expr | None:
         """Lower ``len`` for a resolved component collection or Refs table."""
         if (not isinstance(node.func, ast.Name)
@@ -1661,7 +1606,7 @@ class _ComponentPathLowerer(ast.NodeTransformer):
         collection = self._collection_ref(node.args[0])
         if collection is not None:
             return ast.copy_location(
-                self._length_expr(
+                self._instance_table_expr(
                     collection.decl.parent_lengths,
                     collection.index,
                     _collection_lengths_symbol(collection.decl.name),
@@ -1672,7 +1617,7 @@ class _ComponentPathLowerer(ast.NodeTransformer):
         table = self._ref_table_ref(node.args[0])
         if table is not None:
             return ast.copy_location(
-                self._length_expr(
+                self._instance_table_expr(
                     table.ref.table_lengths,
                     table.parent.index,
                     _ref_lengths_symbol(table.parent.decl.name,
@@ -1685,7 +1630,32 @@ class _ComponentPathLowerer(ast.NodeTransformer):
 
     # -- path resolution -------------------------------------------------------
 
-    def _namespace_ref(self, node: ast.AST) -> _ComponentAccess | None:
+    def _present_position(
+        self,
+        parent: _OwnerAccess,
+        values: Sequence[int],
+        text: str,
+        absent: Callable[[int], bool],
+    ) -> int | None:
+        """Validate a polymorphic child and return a static parent slot."""
+        position = (
+            parent.index.value
+            if isinstance(parent.index, ast.Constant)
+            and type(parent.index.value) is int
+            else (0 if parent.index is None else None)
+        )
+        if position is not None:
+            if absent(values[position]):
+                raise ValueError(
+                    f"{self._callback_label()} accesses {text}, which is not declared by that concrete component type"
+                )
+        elif any(absent(values[item]) for item in self._possible_positions(parent)):
+            raise ValueError(
+                f"{self._callback_label()} dynamically accesses {text}, which is not declared by every concrete component type"
+            )
+        return position
+
+    def _namespace_ref(self, node: ast.AST) -> _OwnerAccess | None:
         root = self._root_namespace_ref(node)
         if root is not None:
             return root
@@ -1694,7 +1664,8 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             collection = self._collection_ref(node.value)
             if collection is not None:
                 index = self._collection_item_index(
-                    collection.decl, collection.index, node.slice)
+                    collection.decl, collection.index, node.slice
+                )
                 possible = None
                 if not (isinstance(index, ast.Constant)
                         and type(index.value) is int):
@@ -1709,9 +1680,9 @@ class _ComponentPathLowerer(ast.NodeTransformer):
                             possible_items.extend(
                                 range(start, start + length))
                         possible = tuple(possible_items)
-                return _ComponentAccess(
-                    collection.decl, index, f"{collection.text}[...]",
-                    possible)
+                return _OwnerAccess(
+                    collection.decl, index, f"{collection.text}[...]", possible
+                )
             table = self._ref_table_ref(node.value)
             if table is not None:
                 return self._ref_table_item(table, node.slice)
@@ -1725,45 +1696,37 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             if child is not None:
                 if child.collection:
                     return None
+                text = f"{parent.text}.{node.attr}"
                 if not child.parent_slots:
                     index = parent.index if child.count > 1 else None
-                elif (isinstance(parent.index, ast.Constant)
-                      and type(parent.index.value) is int):
-                    slot = child.parent_slots[parent.index.value]
-                    if slot < 0:
-                        raise ValueError(
-                            f"{self._callback_label()} accesses "
-                            f"{parent.text}.{node.attr}, which is not "
-                            "declared by that concrete component type")
-                    index = ast.Constant(slot) if child.count > 1 else None
-                elif parent.index is None:
-                    slot = child.parent_slots[0]
-                    if slot < 0:
-                        raise ValueError(
-                            f"{self._callback_label()} accesses "
-                            f"{parent.text}.{node.attr}, which is not "
-                            "declared by that concrete component type")
-                    index = ast.Constant(slot) if child.count > 1 else None
                 else:
-                    parent_possible = self._possible_positions(parent)
-                    if any(child.parent_slots[position] < 0
-                           for position in parent_possible):
-                        raise ValueError(
-                            f"{self._callback_label()} dynamically accesses "
-                            f"{parent.text}.{node.attr}, which is not "
-                            "declared by every concrete component type")
-                    index = _subscript(
-                        ast.Name(id=_component_slots_symbol(child.name),
-                                 ctx=ast.Load()),
-                        parent.index, ast.Load())
+                    position = self._present_position(
+                        parent, child.parent_slots, text, lambda slot: slot < 0
+                    )
+                    index = (
+                        ast.Constant(child.parent_slots[position])
+                        if position is not None and child.count > 1
+                        else (
+                            None
+                            if position is not None
+                            else _subscript(
+                                ast.Name(
+                                    id=_component_slots_symbol(child.name),
+                                    ctx=ast.Load(),
+                                ),
+                                parent.index,
+                                ast.Load(),
+                            )
+                        )
+                    )
                 possible = None
                 if not (isinstance(index, ast.Constant)
                         and type(index.value) is int):
                     possible = tuple(
                         child.parent_slots[position]
-                        for position in self._possible_positions(parent))
-                return _ComponentAccess(
-                    child, index, f"{parent.text}.{node.attr}", possible)
+                        for position in self._possible_positions(parent)
+                    )
+                return _OwnerAccess(child, index, text, possible)
             ref = parent.decl.component_refs.get(node.attr)
             if ref is not None and not ref.table:
                 return self._ref_namespace(parent, node.attr, ref)
@@ -1771,7 +1734,7 @@ class _ComponentPathLowerer(ast.NodeTransformer):
 
         return None
 
-    def _collection_ref(self, node: ast.AST) -> _ComponentAccess | None:
+    def _collection_ref(self, node: ast.AST) -> _OwnerAccess | None:
         root = self._root_collection_ref(node)
         if root is not None:
             return root
@@ -1784,25 +1747,18 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             if child is None or not child.collection:
                 return None
             if child.parent_lengths:
-                if (isinstance(parent.index, ast.Constant)
-                        and type(parent.index.value) is int
-                        and child.parent_lengths[parent.index.value] == 0):
-                    raise ValueError(
-                        f"{self._callback_label()} accesses "
-                        f"{parent.text}.{node.attr}, which is not declared "
-                        "by that concrete component type")
-                if (parent.index is not None
-                        and not isinstance(parent.index, ast.Constant)
-                        and any(child.parent_lengths[position] == 0
-                                for position
-                                in self._possible_positions(parent))):
-                    raise ValueError(
-                        f"{self._callback_label()} dynamically accesses "
-                        f"{parent.text}.{node.attr}, which is not declared "
-                        "by every concrete component type")
-            return _ComponentAccess(
-                child, parent.index, f"{parent.text}.{node.attr}",
-                parent.possible_indices)
+                self._present_position(
+                    parent,
+                    child.parent_lengths,
+                    f"{parent.text}.{node.attr}",
+                    lambda length: length == 0,
+                )
+            return _OwnerAccess(
+                child,
+                parent.index,
+                f"{parent.text}.{node.attr}",
+                parent.possible_indices,
+            )
 
         return None
 
@@ -1819,11 +1775,8 @@ class _ComponentPathLowerer(ast.NodeTransformer):
                                f"{parent.text}.{node.attr}")
 
     def _ref_namespace(
-        self,
-        parent: _ComponentAccess,
-        name: str,
-        ref: _ComponentRefDecl,
-    ) -> _ComponentAccess:
+        self, parent: _OwnerAccess, name: str, ref: _ComponentRefDecl
+    ) -> _OwnerAccess:
         """Dereference a Ref field: a static target when the instance is
         known, else an index lookup through the REFIDX table."""
         text = f"{parent.text}.{name}"
@@ -1834,54 +1787,49 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             target = ref.targets[position]
             if target is None:
                 raise ValueError(
-                    f"{self._callback_label()} dereferences {text}, which "
-                    "has no target for this instance")
+                    f"{self._callback_label()} dereferences {text}, which has no target for this instance"
+                )
             target_decl, target_index = target
-            target_expr = (None if target_index is None
-                           else ast.Constant(target_index))
-            return _ComponentAccess(target_decl, target_expr, text)
+            target_expr = None if target_index is None else ast.Constant(target_index)
+            return _OwnerAccess(target_decl, target_expr, text)
         parent_possible = self._possible_positions(parent)
         if any(ref.targets[position] is None
                for position in parent_possible):
             raise ValueError(
-                f"{self._callback_label()} dereferences {text} with a "
-                "dynamic instance index, but some instances have no target")
+                f"{self._callback_label()} dereferences {text} with a dynamic instance index, but some instances have no target"
+            )
         targets = [ref.targets[position] for position in parent_possible]
         first = targets[0][0]
         if any(target[0] is not first for target in targets):
             raise ValueError(
                 f"{self._callback_label()} dereferences {text} with a "
                 "dynamic instance index, which requires every instance to "
-                "reference the same component declaration")
+                "reference the same component declaration"
+            )
         if first.count <= 1:
-            return _ComponentAccess(first, None, text, (0,))
+            return _OwnerAccess(first, None, text, (0,))
         lookup = _subscript(
-            ast.Name(id=_ref_index_symbol(parent.decl.name, name),
-                     ctx=ast.Load()),
-            index, ast.Load())
-        return _ComponentAccess(
-            first, lookup, text,
-            tuple(target[1] for target in targets))
+            ast.Name(id=_ref_index_symbol(parent.decl.name, name), ctx=ast.Load()),
+            index,
+            ast.Load(),
+        )
+        return _OwnerAccess(first, lookup, text, tuple(target[1] for target in targets))
 
     def _ref_table_item(
-        self,
-        table: _RefTableAccess,
-        item_slice: ast.expr,
-    ) -> _ComponentAccess:
+        self, table: _RefTableAccess, item_slice: ast.expr
+    ) -> _OwnerAccess:
         """Index a Refs table: a static target when both the instance and
         the entry are known, else a lookup through the REFTAB table."""
         item_index = self.visit(copy.deepcopy(item_slice))
         if not isinstance(item_index, ast.expr):
-            raise TypeError("component refs table index did not lower to "
-                            "an expression")
+            raise TypeError("component refs table index did not lower to an expression")
         ref = table.ref
         text = f"{table.text}[...]"
         parent_index = table.parent.index
         parent_pos: int | None
         if parent_index is None:
             parent_pos = 0
-        elif (isinstance(parent_index, ast.Constant)
-                and type(parent_index.value) is int):
+        elif isinstance(parent_index, ast.Constant) and type(parent_index.value) is int:
             parent_pos = parent_index.value
         else:
             parent_pos = None
@@ -1892,17 +1840,15 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             position = item_index.value
             if not 0 <= position < length:
                 raise ValueError(
-                    f"{self._callback_label()} index {position} is out of "
-                    f"range for {table.text} (length {length})")
-            target_index = ref.table_indices[
-                ref.table_offsets[parent_pos] + position]
-            return _ComponentAccess(ref.table_decl,
-                                    ast.Constant(target_index), text)
+                    f"{self._callback_label()} index {position} is out of range for {table.text} (length {length})"
+                )
+            target_index = ref.table_indices[ref.table_offsets[parent_pos] + position]
+            return _OwnerAccess(ref.table_decl, ast.Constant(target_index), text)
 
         if ref.table_decl is None:
             raise ValueError(
-                f"{self._callback_label()} indexes {table.text}, which has "
-                "no entries")
+                f"{self._callback_label()} indexes {table.text}, which has no entries"
+            )
         if parent_pos is None and self.strict_ref_tables:
             lengths = tuple(
                 ref.table_lengths[position]
@@ -1915,42 +1861,53 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             )
             if len(set(lengths)) > 1 and not loop_bound:
                 raise ValueError(
-                    f"{self._callback_label()} indexes {table.text}, whose "
-                    "per-instance lengths differ")
-            if (isinstance(item_index, ast.Constant)
-                    and type(item_index.value) is int
-                    and any(
-                        not 0 <= item_index.value < ref.table_lengths[position]
-                        for position in self._possible_positions(table.parent)
-                    )):
+                    f"{self._callback_label()} indexes {table.text}, whose per-instance lengths differ"
+                )
+            if (
+                isinstance(item_index, ast.Constant)
+                and type(item_index.value) is int
+                and any(
+                    not 0 <= item_index.value < ref.table_lengths[position]
+                    for position in self._possible_positions(table.parent)
+                )
+            ):
                 raise ValueError(
-                    f"{self._callback_label()} index {item_index.value} is "
-                    f"out of range for {table.text} (lengths {lengths})")
+                    f"{self._callback_label()} index {item_index.value} is out of range for {table.text} (lengths {lengths})"
+                )
         if parent_pos is not None:
             offset: ast.expr = ast.Constant(ref.table_offsets[parent_pos])
         else:
             offset = _subscript(
-                ast.Name(id=_ref_offsets_symbol(
-                    table.parent.decl.name, table.name), ctx=ast.Load()),
-                parent_index, ast.Load())
+                ast.Name(
+                    id=_ref_offsets_symbol(table.parent.decl.name, table.name),
+                    ctx=ast.Load(),
+                ),
+                parent_index,
+                ast.Load(),
+            )
         lookup = _subscript(
-            ast.Name(id=_ref_table_symbol(
-                table.parent.decl.name, table.name), ctx=ast.Load()),
-            _add(offset, item_index), ast.Load())
-        return _ComponentAccess(
-            ref.table_decl, lookup, text,
-            tuple(dict.fromkeys(ref.table_indices)))
+            ast.Name(
+                id=_ref_table_symbol(table.parent.decl.name, table.name), ctx=ast.Load()
+            ),
+            _add(offset, item_index),
+            ast.Load(),
+        )
+        return _OwnerAccess(
+            ref.table_decl, lookup, text, tuple(dict.fromkeys(ref.table_indices))
+        )
 
-    def _field_ref(self, node: ast.AST) -> _ComponentFieldAccess | None:
+    def _field_ref(self, node: ast.AST) -> _FieldAccess | None:
         if not isinstance(node, ast.Attribute):
             return None
         namespace = self._namespace_ref(node.value)
         if namespace is None:
             return None
         field_name = node.attr
-        if (field_name in namespace.decl.direct_field_map
-                or field_name in namespace.decl.constants):
-            return _ComponentFieldAccess(
+        if (
+            field_name in namespace.decl.direct_field_map
+            or field_name in namespace.decl.constants
+        ):
+            return _FieldAccess(
                 namespace.decl,
                 namespace.index,
                 field_name,
@@ -1964,19 +1921,14 @@ class _ComponentPathLowerer(ast.NodeTransformer):
         self._raise_unknown_field(namespace, field_name)
 
     def _collection_item_index(
-        self,
-        decl: _ComponentDecl,
-        parent_index: ast.expr | None,
-        item_index: ast.expr,
+        self, decl: _OwnerDecl, parent_index: ast.expr | None, item_index: ast.expr
     ) -> ast.expr:
         """The flattened instance index of a collection item: the item
         index plus the parent instance's start offset."""
         index = self.visit(copy.deepcopy(item_index))
         if not isinstance(index, ast.expr):
-            raise TypeError("component collection index did not lower "
-                            "to an expression")
-        if (isinstance(index, ast.Constant)
-                and type(index.value) is int):
+            raise TypeError("component collection index did not lower to an expression")
+        if isinstance(index, ast.Constant) and type(index.value) is int:
             length: int | None = None
             if len(decl.parent_lengths) <= 1:
                 length = decl.parent_lengths[0] if decl.parent_lengths else 0
@@ -1985,8 +1937,8 @@ class _ComponentPathLowerer(ast.NodeTransformer):
                 length = decl.parent_lengths[parent_index.value]
             if length is not None and not 0 <= index.value < length:
                 raise ValueError(
-                    f"{self._callback_label()} collection index "
-                    f"{index.value} is out of range (length {length})")
+                    f"{self._callback_label()} collection index {index.value} is out of range (length {length})"
+                )
         if len(decl.parent_offsets) <= 1:
             offset_value = decl.parent_offsets[0] if decl.parent_offsets else 0
             if offset_value == 0:
@@ -1994,8 +1946,7 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             return _add(ast.Constant(offset_value), index)
         if parent_index is None:
             raise TypeError("nested component collection has no parent index")
-        if (isinstance(parent_index, ast.Constant)
-                and type(parent_index.value) is int):
+        if isinstance(parent_index, ast.Constant) and type(parent_index.value) is int:
             offset_value = decl.parent_offsets[parent_index.value]
             if offset_value == 0:
                 return index
@@ -2011,130 +1962,88 @@ class _ComponentPathLowerer(ast.NodeTransformer):
     # -- lowered expressions ---------------------------------------------------
 
     def _instance_table_expr(
-        self,
-        values: Sequence[Any],
-        index: ast.expr | None,
-        symbol: str,
-        what: str,
+        self, values: Sequence[Any], index: ast.expr | None, symbol: str, what: str
     ) -> ast.expr:
         """A per-instance value: a constant when the instance is known,
         else an element of the numpy array published under `symbol`."""
         if len(values) == 1:
             return ast.Constant(values[0])
-        if (isinstance(index, ast.Constant) and type(index.value) is int):
+        if isinstance(index, ast.Constant) and type(index.value) is int:
             return ast.Constant(values[index.value])
         if index is None:
             raise TypeError(f"component {what} has no instance index")
         return _subscript(ast.Name(id=symbol, ctx=ast.Load()), index,
                           ast.Load())
 
-    def _field_target(
-        self,
-        access: _ComponentFieldAccess,
-        ctx: ast.expr_context,
-    ) -> ast.expr:
+    def _field_target(self, access: _FieldAccess, ctx: ast.expr_context) -> ast.expr:
         flat_name = access.decl.direct_field_map[access.field]
         target = _env_attr(self.env_name, flat_name, ctx)
         owners = access.decl.field_owners[access.field]
         if len(owners) <= 1:
-            if (isinstance(access.index, ast.Constant)
-                    and type(access.index.value) is int
-                    and access.index.value not in owners):
-                raise ValueError(
-                    f"{self._callback_label()} accesses {access.text}, which "
-                    "is not declared by that concrete component type")
-            if (access.index is not None
-                    and not isinstance(access.index, ast.Constant)
-                    and not set(access.possible_indices
-                                or range(access.decl.count)).issubset(owners)):
-                raise ValueError(
-                    f"{self._callback_label()} dynamically accesses "
-                    f"{access.text}, which is not declared by every concrete "
-                    "component type")
+            self._owned_index(access, owners)
             return target
         if access.index is None:
             raise TypeError("component field has no instance index")
-        slots = access.decl.field_slots[access.field]
-        if (isinstance(access.index, ast.Constant)
-                and type(access.index.value) is int):
-            slot = slots[access.index.value]
-            if slot < 0:
-                raise ValueError(
-                    f"{self._callback_label()} accesses {access.text}, which "
-                    "is not declared by that concrete component type")
-            packed_index: ast.expr = ast.Constant(slot)
-        else:
-            possible = (access.possible_indices
-                        or tuple(range(access.decl.count)))
-            if any(slots[position] < 0 for position in possible):
-                raise ValueError(
-                    f"{self._callback_label()} dynamically accesses "
-                    f"{access.text}, which is not declared by every concrete "
-                    "component type")
-            if slots == tuple(range(len(slots))):
-                packed_index = access.index
-            else:
-                packed_index = _subscript(
-                    ast.Name(id=_field_slots_symbol(
-                        access.decl.name, access.field), ctx=ast.Load()),
-                    access.index, ast.Load())
+        packed_index = self._owned_index(
+            access,
+            owners,
+            access.decl.field_slots[access.field],
+            _field_slots_symbol(access.decl.name, access.field),
+        )
+        assert packed_index is not None
         return _subscript(target, packed_index, ctx)
 
-    def _field_array_target(self, access: _ComponentFieldAccess) -> ast.expr:
+    def _owned_index(
+        self,
+        access: _FieldAccess,
+        owners: tuple[int, ...],
+        slots: tuple[int, ...] | None = None,
+        slot_symbol: str | None = None,
+    ) -> ast.expr | None:
+        """Validate ownership and map a logical component index to storage."""
+        index = access.index
+        if isinstance(index, ast.Constant) and type(index.value) is int:
+            if index.value not in owners:
+                raise ValueError(
+                    f"{self._callback_label()} accesses {access.text}, which is not declared by that concrete component type"
+                )
+            return ast.Constant(slots[index.value]) if slots is not None else index
+        if index is not None:
+            possible = set(access.possible_indices or range(access.decl.count))
+            if not possible.issubset(owners):
+                raise ValueError(
+                    f"{self._callback_label()} dynamically accesses {access.text}, which is not declared by every concrete component type"
+                )
+        if index is None or slots is None or slots == tuple(range(len(slots))):
+            return index
+        assert slot_symbol is not None
+        return _subscript(ast.Name(id=slot_symbol, ctx=ast.Load()), index, ast.Load())
+
+    def _field_array_target(self, access: _FieldAccess) -> ast.expr:
         """The whole flattened field, for a component function helper that
         indexes it itself. Only reached for fields every instance of the
         collection declares, so logical index == storage slot."""
         flat_name = access.decl.direct_field_map[access.field]
         return _env_attr(self.env_name, flat_name, ast.Load())
 
-    def _constant_expr(self, access: _ComponentFieldAccess) -> ast.expr:
+    def _constant_expr(self, access: _FieldAccess) -> ast.expr:
         owners = access.decl.constant_owners[access.field]
-        if len(owners) == 1:
-            if (isinstance(access.index, ast.Constant)
-                    and type(access.index.value) is int
-                    and access.index.value not in owners):
-                raise ValueError(
-                    f"{self._callback_label()} accesses {access.text}, which "
-                    "is not declared by that concrete component type")
-            if (access.index is not None
-                    and not isinstance(access.index, ast.Constant)
-                    and not set(access.possible_indices
-                                or range(access.decl.count)).issubset(owners)):
-                raise ValueError(
-                    f"{self._callback_label()} dynamically accesses "
-                    f"{access.text}, which is not declared by every concrete "
-                    "component type")
         slots = access.decl.constant_slots[access.field]
-        index = access.index
-        if (isinstance(index, ast.Constant)
-                and type(index.value) is int):
-            slot = slots[index.value]
-            if slot < 0:
-                raise ValueError(
-                    f"{self._callback_label()} accesses {access.text}, which "
-                    "is not declared by that concrete component type")
-            index = ast.Constant(slot)
-        elif len(access.decl.constant_owners[access.field]) > 1:
-            possible = (access.possible_indices
-                        or tuple(range(access.decl.count)))
-            if any(slots[position] < 0 for position in possible):
-                raise ValueError(
-                    f"{self._callback_label()} dynamically accesses "
-                    f"{access.text}, which is not declared by every concrete "
-                    "component type")
-            if slots != tuple(range(len(slots))):
-                index = _subscript(
-                    ast.Name(id=_constant_slots_symbol(
-                        access.decl.name, access.field), ctx=ast.Load()),
-                    index, ast.Load())
+        index = self._owned_index(
+            access,
+            owners,
+            slots if len(owners) > 1 else None,
+            _constant_slots_symbol(access.decl.name, access.field),
+        )
         return self._instance_table_expr(
-            access.decl.constants[access.field], index,
-            _const_symbol(access.decl.name, access.field), "constant")
+            access.decl.constants[access.field],
+            index,
+            _const_symbol(access.decl.name, access.field),
+            "constant",
+        )
 
     def _lower_indexed_field(
-        self,
-        access: _ComponentFieldAccess,
-        node: ast.Subscript,
+        self, access: _FieldAccess, node: ast.Subscript
     ) -> ast.Subscript | None:
         """Lower ``<pqueues/processes field>[i]`` to an element of the
         flattened shared array, at the instance's offset plus ``i``."""
@@ -2152,10 +2061,10 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             return None
         item = self.visit(copy.deepcopy(node.slice))
         if not isinstance(item, ast.expr):
-            raise TypeError(f"component {what} index did not lower "
-                            "to an expression")
-        offset = self._instance_table_expr(offsets, access.index, symbol,
-                                           f"{what} field")
+            raise TypeError(f"component {what} index did not lower to an expression")
+        offset = self._instance_table_expr(
+            offsets, access.index, symbol, f"{what} field"
+        )
         if isinstance(offset, ast.Constant) and offset.value == 0:
             index = item
         else:
@@ -2164,24 +2073,22 @@ class _ComponentPathLowerer(ast.NodeTransformer):
                          decl.direct_field_map[access.field], ast.Load())
         return ast.copy_location(_subscript(flat, index, node.ctx), node)
 
-    def _raise_unknown_field(
-        self,
-        namespace: _ComponentAccess,
-        field_name: str,
-    ) -> None:
-        kind = ("component collection field"
-                if namespace.decl.collection else "component field")
+    def _raise_unknown_field(self, namespace: _OwnerAccess, field_name: str) -> None:
+        kind = (
+            "component collection field"
+            if namespace.decl.collection
+            else "component field"
+        )
         raise ValueError(
-            f"{self._callback_label()} references unknown {kind} "
-            f"{namespace.text}.{field_name}")
+            f"{self._callback_label()} references unknown {kind} {namespace.text}.{field_name}"
+        )
 
     def _function_specs(
-        self,
-        namespace: _ComponentAccess,
-        method_name: str,
-    ) -> tuple[_ComponentFunctionSpec, ...]:
+        self, namespace: _OwnerAccess, method_name: str
+    ) -> tuple[_FunctionSpec, ...]:
         candidates = [
-            spec for spec in self.component_functions.values()
+            spec
+            for spec in self.functions.values()
             if spec.decl is namespace.decl and spec.name == method_name
         ]
         if not candidates:
@@ -2189,17 +2096,23 @@ class _ComponentPathLowerer(ast.NodeTransformer):
         if (isinstance(namespace.index, ast.Constant)
                 and type(namespace.index.value) is int):
             return tuple(
-                spec for spec in candidates
-                if namespace.index.value in spec.instance_indices)
+                spec
+                for spec in candidates
+                if namespace.index.value in spec.instance_indices
+            )
         shared = [spec for spec in candidates if spec.variant is None]
         if shared:
             return (shared[0],)
         possible = set(namespace.possible_indices
                        or range(namespace.decl.count))
         ordered = sorted(
-            (spec for spec in candidates
-             if possible.intersection(spec.instance_indices)),
-            key=lambda spec: spec.variant)
+            (
+                spec
+                for spec in candidates
+                if possible.intersection(spec.instance_indices)
+            ),
+            key=lambda spec: spec.variant,
+        )
         covered = {
             index for spec in ordered for index in spec.instance_indices
             if index in possible
@@ -2208,13 +2121,13 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             raise ValueError(
                 f"{self._callback_label()} dynamically calls "
                 f"{namespace.text}.{method_name}(), which is not declared "
-                "as @sim.function by every concrete component type")
+                "as @sim.function by every concrete component type"
+            )
         return tuple(ordered)
 
     @staticmethod
     def _substitute_expr(
-        expression: ast.expr | None,
-        replacements: Mapping[str, ast.expr],
+        expression: ast.expr | None, replacements: Mapping[str, ast.expr]
     ) -> ast.expr | None:
         if expression is None:
             return None
@@ -2228,26 +2141,14 @@ class _ComponentPathLowerer(ast.NodeTransformer):
 
         result = Substitute().visit(copy.deepcopy(expression))
         if not isinstance(result, ast.expr):
-            raise TypeError("component function dependency did not lower "
-                            "to an expression")
+            raise TypeError(
+                "component function dependency did not lower to an expression"
+            )
         return result
 
     def _lower_one_component_function_call(
-        self,
-        node: ast.Call,
-        receiver: _ComponentAccess,
-        spec: _ComponentFunctionSpec,
+        self, node: ast.Call, receiver: _OwnerAccess, spec: _FunctionSpec
     ) -> ast.Call:
-        if node.keywords:
-            raise ValueError(
-                f"{self._callback_label()} call to component function "
-                f"'{spec.graph_name}' must use positional arguments")
-        if len(node.args) != len(spec.parameter_names):
-            raise ValueError(
-                f"{self._callback_label()} call to component function "
-                f"'{spec.graph_name}' takes {len(spec.parameter_names)} "
-                f"argument(s), got {len(node.args)}")
-
         arguments = [self.visit(copy.deepcopy(arg)) for arg in node.args]
         replacements = {
             name: arg
@@ -2259,7 +2160,7 @@ class _ComponentPathLowerer(ast.NodeTransformer):
         dependency_args: list[ast.expr] = []
         for dependency in spec.dependencies:
             access = dependency.access
-            bound = _ComponentFieldAccess(
+            bound = _FieldAccess(
                 access.decl,
                 self._substitute_expr(access.index, replacements),
                 access.field,
@@ -2291,32 +2192,42 @@ class _ComponentPathLowerer(ast.NodeTransformer):
             node,
         )
 
-    def _lower_component_function_call(
+    def _validate_function_call(self, node: ast.Call, spec: _FunctionSpec) -> None:
+        if node.keywords:
+            raise ValueError(
+                f"{self._callback_label()} call to component function '{spec.graph_name}' must use positional arguments"
+            )
+        if len(node.args) != len(spec.parameter_names):
+            raise ValueError(
+                f"{self._callback_label()} call to component function '{spec.graph_name}' takes {len(spec.parameter_names)} argument(s), got {len(node.args)}"
+            )
+
+    def _dispatch_function_call(
         self,
         node: ast.Call,
-        receiver: _ComponentAccess,
-        specs: Sequence[_ComponentFunctionSpec],
+        receiver: _OwnerAccess,
+        specs: Sequence[_FunctionSpec],
+        lower_one: Callable[[ast.Call, _OwnerAccess, _FunctionSpec], ast.Call],
     ) -> ast.expr:
+        self._validate_function_call(node, specs[0])
         if len(specs) == 1:
-            return self._lower_one_component_function_call(
-                node, receiver, specs[0])
+            return lower_one(node, receiver, specs[0])
         first = specs[0]
         contract = (first.parameter_names, first.argument_types,
                     first.return_type)
         if any((spec.parameter_names, spec.argument_types, spec.return_type)
                != contract for spec in specs[1:]):
             raise TypeError(
-                f"{self._callback_label()} dynamically calls "
-                f"{receiver.text}.{node.func.attr}(), whose concrete "
-                "implementations have incompatible signatures")
+                f"{self._callback_label()} dynamically calls {receiver.text}.{node.func.attr}(), whose concrete implementations have incompatible signatures"
+            )
         if receiver.index is None:
             raise TypeError("polymorphic component function has no index")
-        expression = self._lower_one_component_function_call(
-            copy.deepcopy(node), receiver, specs[-1])
+        expression = lower_one(copy.deepcopy(node), receiver, specs[-1])
         variant_expr = _subscript(
-            ast.Name(id=_variant_slots_symbol(receiver.decl.name),
-                     ctx=ast.Load()),
-            copy.deepcopy(receiver.index), ast.Load())
+            ast.Name(id=_variant_slots_symbol(receiver.decl.name), ctx=ast.Load()),
+            copy.deepcopy(receiver.index),
+            ast.Load(),
+        )
         for spec in reversed(specs[:-1]):
             expression = ast.IfExp(
                 test=ast.Compare(
@@ -2324,11 +2235,17 @@ class _ComponentPathLowerer(ast.NodeTransformer):
                     ops=[ast.Eq()],
                     comparators=[ast.Constant(spec.variant)],
                 ),
-                body=self._lower_one_component_function_call(
-                    copy.deepcopy(node), receiver, spec),
+                body=lower_one(copy.deepcopy(node), receiver, spec),
                 orelse=expression,
             )
         return ast.copy_location(expression, node)
+
+    def _lower_component_function_call(
+        self, node: ast.Call, receiver: _OwnerAccess, specs: Sequence[_FunctionSpec]
+    ) -> ast.expr:
+        return self._dispatch_function_call(
+            node, receiver, specs, self._lower_one_component_function_call
+        )
 
     # -- node visitors -----------------------------------------------------------
 
@@ -2374,177 +2291,63 @@ class _ComponentPathLowerer(ast.NodeTransformer):
         lowered_len = self._lower_len_call(node)
         if lowered_len is not None:
             return lowered_len
-        if (isinstance(node.func, ast.Attribute)
-                and isinstance(node.func.value, ast.Name)
-                and node.func.value.id == self.env_name
-                and node.func.attr in self.model_functions):
-            spec = self.model_functions[node.func.attr]
-            if node.keywords:
-                raise ValueError(
-                    f"{self._callback_label()} call to model function "
-                    f"'{spec.name}' must use positional arguments")
-            if len(node.args) != len(spec.parameter_names):
-                raise ValueError(
-                    f"{self._callback_label()} call to model function "
-                    f"'{spec.name}' takes {len(spec.parameter_names)} "
-                    f"argument(s), got {len(node.args)}")
-            self.called_functions.add(f"model:{spec.name}")
-            return ast.copy_location(
-                ast.Call(
-                    func=ast.Name(id=spec.symbol, ctx=ast.Load()),
-                    args=[
-                        ast.Name(id=self.env_name, ctx=ast.Load()),
-                        *(self.visit(copy.deepcopy(arg))
-                          for arg in node.args),
-                    ],
-                    keywords=[],
-                ),
-                node,
+        if isinstance(node.func, ast.Name) and node.func.id == "getattr" and node.args:
+            target = (
+                self._namespace_ref(node.args[0])
+                or self._collection_ref(node.args[0])
+                or self._ref_table_ref(node.args[0])
             )
-        if (isinstance(node.func, ast.Name) and node.func.id == "getattr"
-                and node.args):
-            target = (self._namespace_ref(node.args[0])
-                      or self._collection_ref(node.args[0])
-                      or self._ref_table_ref(node.args[0]))
             if target is not None:
                 raise ValueError(
-                    f"{self._callback_label()} uses dynamic "
-                    f"getattr({target.text}, ...), which is not supported")
+                    f"{self._callback_label()} uses dynamic getattr({target.text}, ...), which is not supported"
+                )
         if isinstance(node.func, ast.Attribute):
             receiver = self._namespace_ref(node.func.value)
             if receiver is not None:
                 specs = self._function_specs(receiver, node.func.attr)
                 if specs:
-                    return self._lower_component_function_call(
-                        node, receiver, specs)
-            # Leave ``.history().capture()`` as a history call after lowering
-            # the component path; model collector registration handles capture.
-            if node.func.attr == "capture":
-                history_call = node.func.value
-                if (isinstance(history_call, ast.Call)
-                        and isinstance(history_call.func, ast.Attribute)
-                        and history_call.func.attr == "history"
-                        and not history_call.args
-                        and not history_call.keywords):
-                    access = self._field_ref(history_call.func.value)
-                    if access is not None:
-                        lowered_history = ast.Call(
-                            func=ast.Attribute(
-                                value=self._field_target(access, ast.Load()),
-                                attr="history",
-                                ctx=ast.Load(),
-                            ),
-                            args=[],
-                            keywords=[],
-                        )
-                        args = [self.visit(arg) for arg in node.args]
-                        keywords = [
-                            ast.keyword(
-                                arg=kw.arg,
-                                value=self.visit(kw.value),
-                            )
-                            for kw in node.keywords
-                        ]
-                        self.changed = True
-                        return ast.copy_location(
-                            ast.Call(
-                                func=ast.Attribute(
-                                    value=lowered_history,
-                                    attr="capture",
-                                    ctx=ast.Load(),
-                                ),
-                                args=args,
-                                keywords=keywords,
-                            ),
-                            node,
-                        )
-                access = self._field_ref(node.func.value)
-                if (access is not None
-                        and access.decl.decls.kind_of(access.field)
-                        == "dataset"):
-                    args = [self.visit(arg) for arg in node.args]
-                    keywords = [
-                        ast.keyword(
-                            arg=kw.arg,
-                            value=self.visit(kw.value),
-                        )
-                        for kw in node.keywords
-                    ]
-                    self.changed = True
-                    return ast.copy_location(
-                        ast.Call(
-                            func=ast.Attribute(
-                                value=self._field_target(access, ast.Load()),
-                                attr="capture",
-                                ctx=ast.Load(),
-                            ),
-                            args=args,
-                            keywords=keywords,
+                    return self._lower_component_function_call(node, receiver, specs)
+            access = self._field_ref(node.func.value)
+            if access is not None and access.decl.owner_root:
+                node.args = [self.visit(arg) for arg in node.args]
+                node.keywords = [
+                    ast.keyword(arg=item.arg, value=self.visit(item.value))
+                    for item in node.keywords
+                ]
+                return node
+            if access is not None:
+                kind = access.decl.decls.kind_of(access.field)
+                if kind == "pqueues" or (
+                    access.decl.decls.fields[access.field].kind.binding is None
+                    and kind not in ("condition", "event")
+                ):
+                    raise ValueError(
+                        f"{self._callback_label()} cannot call {access.text}.{node.func.attr}() inside compiled code"
+                    )
+                return ast.copy_location(
+                    ast.Call(
+                        func=ast.Attribute(
+                            value=self._field_target(access, ast.Load()),
+                            attr=node.func.attr,
+                            ctx=ast.Load(),
                         ),
-                        node,
-                    )
-            # self.<field>.history().method(...)
-            history_call = node.func.value
-            if (isinstance(history_call, ast.Call)
-                    and isinstance(history_call.func, ast.Attribute)
-                    and history_call.func.attr == "history"
-                    and not history_call.args and not history_call.keywords):
-                access = self._field_ref(history_call.func.value)
-                if access is not None:
-                    binding = _COMPONENT_HISTORY_BINDINGS.get(
-                        access.decl.decls.kind_of(access.field))
-                    if binding is not None:
-                        return lower_timeseries_method_call(
-                            node,
-                            self._field_target(access, ast.Load()),
-                            binding=binding,
-                            visit=self.visit,
-                            label=self._callback_label(),
-                        )
-        # bare self.<field>.history()
-        if (isinstance(node.func, ast.Attribute) and node.func.attr == "history"
-                and not node.args and not node.keywords):
-            access = self._field_ref(node.func.value)
-            if access is not None:
-                binding = _COMPONENT_HISTORY_BINDINGS.get(
-                    access.decl.decls.kind_of(access.field))
-                if binding is not None:
-                    return lower_history_getter_call(
-                        node,
-                        self._field_target(access, ast.Load()),
-                        binding=binding,
-                        label=self._callback_label(),
-                    )
-        if isinstance(node.func, ast.Attribute):
-            access = self._field_ref(node.func.value)
-            if access is not None:
-                field_kind = access.decl.decls.kind_of(access.field)
-                if field_kind == "dataset":
-                    return lower_dataset_method_call(
-                        node,
-                        self._field_target(access, ast.Load()),
-                        visit=self.visit,
-                        label=self._callback_label(),
-                    )
-                if field_kind in _COMPONENT_ENTITY_KINDS:
-                    return lower_entity_method_call(
-                        node,
-                        self._field_target(access, ast.Load()),
-                        kind=field_kind,
-                        visit=self.visit,
-                        label=self._callback_label(),
-                        env_expr=ast.Name(id=self.env_name, ctx=ast.Load()),
-                    )
-                raise ValueError(
-                    f"{self._callback_label()} cannot call "
-                    f"{access.text}.{node.func.attr}() inside compiled code")
-            target = (self._namespace_ref(node.func.value)
-                      or self._collection_ref(node.func.value)
-                      or self._ref_table_ref(node.func.value))
+                        args=[self.visit(arg) for arg in node.args],
+                        keywords=[
+                            ast.keyword(arg=item.arg, value=self.visit(item.value))
+                            for item in node.keywords
+                        ],
+                    ),
+                    node,
+                )
+            target = (
+                self._namespace_ref(node.func.value)
+                or self._collection_ref(node.func.value)
+                or self._ref_table_ref(node.func.value)
+            )
             if target is not None:
                 raise ValueError(
-                    f"{self._callback_label()} cannot call "
-                    f"{target.text}.{node.func.attr}() inside compiled code")
+                    f"{self._callback_label()} cannot call {target.text}.{node.func.attr}() inside compiled code"
+                )
         return self.generic_visit(node)
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
@@ -2556,175 +2359,159 @@ class _ComponentPathLowerer(ast.NodeTransformer):
         collection = self._collection_ref(node.value)
         if collection is not None:
             raise ValueError(
-                f"{self._callback_label()} uses {collection.text}[...] "
-                "directly; access one of its fields")
+                f"{self._callback_label()} uses {collection.text}[...] directly; access one of its fields"
+            )
         table = self._ref_table_ref(node.value)
         if table is not None:
             raise ValueError(
-                f"{self._callback_label()} uses {table.text}[...] "
-                "directly; access one of its fields")
+                f"{self._callback_label()} uses {table.text}[...] directly; access one of its fields"
+            )
         return self.generic_visit(node)
+
+    def _lower_attribute(self, access: _FieldAccess, node: ast.Attribute) -> ast.AST:
+        if access.decl.decls.kind_of(access.field) in ("pqueues", "processes"):
+            raise ValueError(
+                f"{self._callback_label()} must index {access.text} before using it"
+            )
+        if access.field in access.decl.constants:
+            if not isinstance(node.ctx, ast.Load):
+                raise ValueError(
+                    f"{self._callback_label()} cannot assign to constant {access.text}"
+                )
+            return ast.copy_location(self._constant_expr(access), node)
+        return ast.copy_location(self._field_target(access, node.ctx), node)
+
+    def _direct_path_error(self, kind: str, text: str) -> ValueError:
+        suffix = {
+            "namespace": "directly; access one of its fields",
+            "collection": "directly; index it and access one of its fields",
+            "table": "before using it",
+        }[kind]
+        action = "must index" if kind == "table" else "cannot use"
+        return ValueError(f"{self._callback_label()} {action} {text} {suffix}")
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
         nested = self._field_ref(node.value)
         if nested is not None:
             raise ValueError(
-                f"{self._callback_label()} cannot access attributes below "
-                f"component field {nested.text}")
-
+                f"{self._callback_label()} cannot access attributes below component field {nested.text}"
+            )
         access = self._field_ref(node)
         if access is not None:
-            if access.decl.decls.kind_of(access.field) in ("pqueues",
-                                                           "processes"):
-                raise ValueError(
-                    f"{self._callback_label()} must index {access.text} "
-                    "before using it")
-            if access.field in access.decl.constants:
-                if not isinstance(node.ctx, ast.Load):
-                    raise ValueError(
-                        f"{self._callback_label()} cannot assign to "
-                        f"constant {access.text}")
-                return ast.copy_location(self._constant_expr(access), node)
-            return ast.copy_location(self._field_target(access, node.ctx),
-                                     node)
-
-        namespace = self._namespace_ref(node)
-        if namespace is not None:
-            raise ValueError(
-                f"{self._callback_label()} cannot use {namespace.text} "
-                "directly; access one of its fields")
-        collection = self._collection_ref(node)
-        if collection is not None:
-            raise ValueError(
-                f"{self._callback_label()} cannot use {collection.text} "
-                "directly; index it and access one of its fields")
-        table = self._ref_table_ref(node)
-        if table is not None:
-            raise ValueError(
-                f"{self._callback_label()} must index {table.text} before "
-                "using it")
+            return self._lower_attribute(access, node)
+        for kind, resolve in (
+            ("namespace", self._namespace_ref),
+            ("collection", self._collection_ref),
+            ("table", self._ref_table_ref),
+        ):
+            if (path := resolve(node)) is not None:
+                raise self._direct_path_error(kind, path.text)
         return self.generic_visit(node)
 
 
-class _ComponentMethodLowerer(_ComponentPathLowerer):
-    """Lowers a component method body: `self` is the path root, resolved
-    to the given instance-index expression -- a constant when the method
-    is specialized to one instance, or the runtime ``__cimba_inst``
-    value when one compiled function covers every instance."""
+class _RootedOwnerLowerer(_OwnerPathLowerer):
+    """One path lowerer shared by component and model callbacks."""
 
     def __init__(
         self,
         *,
-        component_name: str,
-        receiver_name: str,
         env_name: str,
-        component_decl: _ComponentDecl,
-        instance_index: ast.expr,
+        label: str,
+        component_decl: _OwnerDecl | None = None,
+        receiver_name: str | None = None,
+        instance_index: ast.expr | None = None,
         possible_indices: tuple[int, ...] | None = None,
-        kind: str = "process",
-        component_functions: Mapping[
-            str, _ComponentFunctionSpec] | None = None,
-        model_functions: Mapping[str, _ModelFunctionSpec] | None = None,
+        owner_decl: _OwnerDecl | None = None,
+        component_roots: Mapping[str, _OwnerDecl] | None = None,
+        track_changes: bool = False,
+        functions: Mapping[str, _FunctionSpec] | None = None,
     ):
-        super().__init__(
-            env_name=env_name, component_functions=component_functions,
-            model_functions=model_functions)
-        self.component_name = component_name
-        self.receiver_name = receiver_name
+        super().__init__(env_name=env_name, functions=functions)
+        self.label = label
         self.component_decl = component_decl
+        self.receiver_name = receiver_name
         self.instance_index = instance_index
         self.possible_indices = possible_indices
-        self.strict_ref_tables = not isinstance(instance_index, ast.Constant)
-        self.kind = kind
+        self.owner_decl = owner_decl
+        self.component_roots = component_roots or {}
+        self.strict_ref_tables = instance_index is not None and not isinstance(
+            instance_index, ast.Constant
+        )
+        self.changed = False
+        self._track_changes = track_changes
 
-    def _root_namespace_ref(self, node: ast.AST) -> _ComponentAccess | None:
-        if isinstance(node, ast.Name) and node.id == self.receiver_name:
-            index = (copy.deepcopy(self.instance_index)
-                     if self.component_decl.count > 1 else None)
-            return _ComponentAccess(self.component_decl, index,
-                                    self.receiver_name,
-                                    self.possible_indices)
+    def _root_namespace_ref(self, node: ast.AST) -> _OwnerAccess | None:
+        if self.component_decl is not None:
+            if isinstance(node, ast.Name) and node.id == self.receiver_name:
+                index = (
+                    copy.deepcopy(self.instance_index)
+                    if self.component_decl.count > 1
+                    else None
+                )
+                return _OwnerAccess(
+                    self.component_decl,
+                    index,
+                    self.receiver_name,
+                    self.possible_indices,
+                )
+            if (
+                self.owner_decl is not None
+                and isinstance(node, ast.Name)
+                and node.id == self.env_name
+            ):
+                return _OwnerAccess(self.owner_decl, None, self.env_name, (0,))
+            return None
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == self.env_name
+        ):
+            decl = self.component_roots.get(node.attr)
+            if decl is not None and not decl.collection:
+                return _OwnerAccess(decl, None, f"{self.env_name}.{node.attr}")
+        return None
+
+    def _root_collection_ref(self, node: ast.AST) -> _OwnerAccess | None:
+        if self.component_decl is not None:
+            return None
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == self.env_name
+        ):
+            decl = self.component_roots.get(node.attr)
+            if decl is not None and decl.collection:
+                return _OwnerAccess(decl, None, f"{self.env_name}.{node.attr}")
         return None
 
     def _callback_label(self) -> str:
-        return f"component '{self.component_name}' {self.kind}"
+        return self.label
 
-    def _raise_unknown_field(
-        self,
-        namespace: _ComponentAccess,
-        field_name: str,
-    ) -> None:
+    def _raise_unknown_field(self, namespace: _OwnerAccess, field_name: str) -> None:
+        if self.component_decl is None or (
+            self.component_decl.owner_root and not namespace.decl.owner_root
+        ):
+            return super()._raise_unknown_field(namespace, field_name)
         raise ValueError(
-            f"component '{self.component_name}' {self.kind} references "
-            f"unsupported {namespace.text}.{field_name}")
+            f"{self.label} references unsupported {namespace.text}.{field_name}"
+        )
+
+    def visit(self, node: ast.AST) -> ast.AST:
+        lowered = super().visit(node)
+        if self._track_changes and lowered is not node:
+            self.changed = True
+        return lowered
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
-        if node.id == self.receiver_name:
+        if (
+            self.component_decl is not None
+            and not self.component_decl.owner_root
+            and node.id == self.receiver_name
+        ):
             raise ValueError(
-                f"component '{self.component_name}' {self.kind} cannot use "
-                "self directly inside compiled code")
+                f"{self.label} cannot use self directly inside compiled code"
+            )
         return node
-
-
-class _ModelComponentRefLowerer(_ComponentPathLowerer):
-    """Lowers a model callback body: `self.<component field>` is the path
-    root; `changed` records whether anything was rewritten."""
-
-    def __init__(self, *, model_name: str, fn_name: str, env_name: str,
-                 component_roots: Mapping[str, _ComponentDecl],
-                 component_functions: Mapping[
-                     str, _ComponentFunctionSpec] | None = None,
-                 model_functions: Mapping[
-                     str, _ModelFunctionSpec] | None = None):
-        super().__init__(
-            env_name=env_name, component_functions=component_functions,
-            model_functions=model_functions)
-        self.model_name = model_name
-        self.fn_name = fn_name
-        self.component_roots = component_roots
-        self.changed = False
-
-    def _root_ref(self, node: ast.AST) -> _ComponentDecl | None:
-        if (isinstance(node, ast.Attribute)
-                and isinstance(node.value, ast.Name)
-                and node.value.id == self.env_name):
-            return self.component_roots.get(node.attr)
-        return None
-
-    def _root_namespace_ref(self, node: ast.AST) -> _ComponentAccess | None:
-        decl = self._root_ref(node)
-        if decl is not None and not decl.collection:
-            return _ComponentAccess(decl, None,
-                                    f"{self.env_name}.{node.attr}")
-        return None
-
-    def _root_collection_ref(self, node: ast.AST) -> _ComponentAccess | None:
-        decl = self._root_ref(node)
-        if decl is not None and decl.collection:
-            return _ComponentAccess(decl, None,
-                                    f"{self.env_name}.{node.attr}")
-        return None
-
-    def _callback_label(self) -> str:
-        return f"model '{self.model_name}' callback '{self.fn_name}'"
-
-    def visit_Call(self, node: ast.Call) -> ast.AST:
-        lowered = super().visit_Call(node)
-        if lowered is not node:
-            self.changed = True
-        return lowered
-
-    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
-        lowered = super().visit_Subscript(node)
-        if lowered is not node:
-            self.changed = True
-        return lowered
-
-    def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
-        lowered = super().visit_Attribute(node)
-        if lowered is not node:
-            self.changed = True
-        return lowered
 
 
 # --- Codegen ------------------------------------------------------------------
@@ -2760,17 +2547,11 @@ def _function_def_from_source(fn: Callable[..., Any]) -> ast.FunctionDef:
 def _component_method_source(fn: Callable[..., Any],
                              kind: str) -> ast.FunctionDef:
     try:
-        source = _function_source(fn)
+        return _function_def_from_source(fn)
     except (OSError, TypeError) as exc:
         raise ValueError(
             f"component {kind} '{fn.__qualname__}' needs inspectable source"
         ) from exc
-    tree = ast.parse(source)
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef):
-            return node
-    raise ValueError(f"component {kind} '{fn.__qualname__}' source does not "
-                     "contain a function definition")
 
 
 def _compile_lowered(
@@ -2805,6 +2586,13 @@ def _compile_lowered(
     return generated
 
 
+def _strip_function_annotations(node: ast.FunctionDef) -> None:
+    node.decorator_list = []
+    node.returns = node.type_comment = None
+    for arg in node.args.args:
+        arg.annotation = arg.type_comment = None
+
+
 _FUNCTION_SCALAR_TYPES = {
     bool: types.boolean,
     int: types.int64,
@@ -2817,8 +2605,9 @@ _FORBIDDEN_FUNCTION_SIM_CALLS = frozenset({
     "timer_add", "timer_cancel", "timers_clear", "clear_events",
 })
 
-_COMPONENT_FUNCTION_CACHE: weakref.WeakValueDictionary[
-    tuple[Any, ...], Any] = weakref.WeakValueDictionary()
+_FUNCTION_CACHE: weakref.WeakValueDictionary[tuple[Any, ...], Any] = (
+    weakref.WeakValueDictionary()
+)
 
 
 def _function_scalar_type(annotation: Any, label: str) -> Any:
@@ -2913,7 +2702,7 @@ def _locally_bound_names(node: ast.AST) -> set[str]:
     return bound
 
 
-class _ComponentFunctionValidator(ast.NodeVisitor):
+class _FunctionValidator(ast.NodeVisitor):
     """Reject side effects that must never enter a synchronous helper."""
 
     def __init__(self, *, receiver_name: str, method: Callable[..., Any],
@@ -2925,8 +2714,8 @@ class _ComponentFunctionValidator(ast.NodeVisitor):
     def _check_target(self, node: ast.AST) -> None:
         if _rooted_at_name(node, self.receiver_name):
             raise ValueError(
-                f"{self.label} cannot mutate component field "
-                f"{ast.unparse(node)}")
+                f"{self.label} cannot mutate component field {ast.unparse(node)}"
+            )
         if isinstance(node, (ast.Tuple, ast.List)):
             for item in node.elts:
                 self._check_target(item)
@@ -2967,19 +2756,19 @@ class _ComponentFunctionValidator(ast.NodeVisitor):
                     forbidden = obj_name
         if forbidden is not None:
             raise ValueError(
-                f"{self.label} cannot call scheduling/process operation "
-                f"sim.{forbidden}()")
+                f"{self.label} cannot call scheduling/process operation sim.{forbidden}()"
+            )
         self.generic_visit(node)
 
 
-class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
+class _FunctionBodyLowerer(_OwnerPathLowerer):
     """Turn a component function body into a scalar-only helper body."""
 
     def __init__(
         self,
         *,
-        builder: "_ComponentFunctionBuilder",
-        decl: _ComponentDecl,
+        builder: "_FunctionBuilder",
+        decl: _OwnerDecl,
         method_name: str,
         receiver_name: str,
         parameter_names: tuple[str, ...],
@@ -2994,7 +2783,7 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
         self.parameter_names = parameter_names
         self.instance_indices = instance_indices
         self.variant = variant
-        self.dependencies: list[_ComponentFunctionDependency] = []
+        self.dependencies: list[_FunctionDependency] = []
         self._dependency_keys: dict[tuple[Any, ...], int] = {}
         self.callees: list[str] = []
         self.helper_namespace: dict[str, Any] = {}
@@ -3006,31 +2795,28 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
         self._local_names = _locally_bound_names(node)
         return self.generic_visit(node)
 
-    def _root_namespace_ref(self, node: ast.AST) -> _ComponentAccess | None:
+    def _root_namespace_ref(self, node: ast.AST) -> _OwnerAccess | None:
         if isinstance(node, ast.Name) and node.id == self.receiver_name:
             if self.variant is not None and len(self.instance_indices) == 1:
                 index = (ast.Constant(self.instance_indices[0])
                          if self.decl.count > 1 else None)
             else:
-                index = (ast.Name(
-                    id="__cimba_receiver_index", ctx=ast.Load())
-                    if self.decl.count > 1 else None)
-            possible = (self.instance_indices
-                        if not isinstance(index, ast.Constant) else None)
-            return _ComponentAccess(
-                self.decl, index, self.receiver_name, possible)
+                index = (
+                    ast.Name(id="__cimba_receiver_index", ctx=ast.Load())
+                    if self.decl.count > 1
+                    else None
+                )
+            possible = (
+                self.instance_indices if not isinstance(index, ast.Constant) else None
+            )
+            return _OwnerAccess(self.decl, index, self.receiver_name, possible)
         return None
 
     def _callback_label(self) -> str:
-        return (f"component function "
-                f"'{self.decl.name}.{self.method_name}'")
+        return f"component function '{self.decl.name}.{self.method_name}'"
 
     def _dependency(
-        self,
-        access: _ComponentFieldAccess,
-        *,
-        direct: bool,
-        array: bool = False,
+        self, access: _FieldAccess, *, direct: bool, array: bool = False
     ) -> ast.Name:
         key = (
             access.decl.name,
@@ -3042,12 +2828,14 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
         if index is None:
             index = len(self.dependencies)
             self._dependency_keys[key] = index
-            self.dependencies.append(_ComponentFunctionDependency(
-                access=copy.deepcopy(access),
-                parameter=f"__cimba_dep_{index}",
-                direct=direct,
-                array=array,
-            ))
+            self.dependencies.append(
+                _FunctionDependency(
+                    access=copy.deepcopy(access),
+                    parameter=f"__cimba_dep_{index}",
+                    direct=direct,
+                    array=array,
+                )
+            )
         elif direct:
             self.dependencies[index].direct = True
         return ast.Name(
@@ -3061,26 +2849,24 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
         return any(isinstance(sub, ast.Name) and sub.id in self._local_names
                    for sub in ast.walk(index))
 
-    def _array_dependency(self, access: _ComponentFieldAccess) -> ast.expr:
+    def _array_dependency(self, access: _FieldAccess) -> ast.expr:
         """Thread the whole flattened field in and subscript it here, for a
         collection read whose index the body computes for itself."""
         label = self._callback_label()
-        detail = (f"{label} indexes {access.text} with a value computed "
-                  f"inside the function")
+        detail = (
+            f"{label} indexes {access.text} with a value computed inside the function"
+        )
         if access.field in access.decl.constants:
             raise ValueError(
-                f"{detail}, which is only supported for Param, Output, "
-                f"State, and FloatState fields; index '{access.field}' with "
-                "a function argument instead")
+                f"{detail}, which is only supported for Param, Output, State, and FloatState fields; index '{access.field}' with a function argument instead"
+            )
         owners = access.decl.field_owners[access.field]
         slots = access.decl.field_slots[access.field]
         if len(owners) > 1 and slots != tuple(range(len(slots))):
             raise ValueError(
-                f"{detail}, which requires every instance of "
-                f"'{access.decl.name}' to declare '{access.field}'; index it "
-                "with a function argument instead")
-        whole = _ComponentFieldAccess(
-            access.decl, None, access.field, access.text, None)
+                f"{detail}, which requires every instance of '{access.decl.name}' to declare '{access.field}'; index it with a function argument instead"
+            )
+        whole = _FieldAccess(access.decl, None, access.field, access.text, None)
         if len(owners) <= 1:
             # A single owner means the flattened field is a plain scalar;
             # there is no array to index and the index is irrelevant.
@@ -3088,21 +2874,22 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
         parameter = self._dependency(whole, direct=True, array=True)
         return _subscript(parameter, access.index, ast.Load())
 
-    def _validate_scalar_field(self, access: _ComponentFieldAccess) -> None:
+    def _validate_scalar_field(self, access: _FieldAccess) -> None:
         if access.field in access.decl.constants:
             if access.field not in access.decl.decls.consts:
                 raise ValueError(
-                    f"{self._callback_label()} cannot read undeclared "
-                    f"constant {access.text}; declare it as sim.Const")
+                    f"{self._callback_label()} cannot read undeclared constant {access.text}; declare it as sim.Const"
+                )
             ctype = access.decl.decls.consts[access.field]
             _function_scalar_type(
-                ctype, f"{self._callback_label()} constant '{access.field}'")
+                ctype, f"{self._callback_label()} constant '{access.field}'"
+            )
             return
         kind = access.decl.decls.kind_of(access.field)
         if kind not in ("param", "output", "state", "fstate"):
             raise ValueError(
-                f"{self._callback_label()} cannot read non-scalar component "
-                f"field {access.text} ({kind})")
+                f"{self._callback_label()} cannot read non-scalar component field {access.text} ({kind})"
+            )
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         lowered_len = self._lower_len_call(node)
@@ -3112,188 +2899,86 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
             receiver = self._namespace_ref(node.func.value)
             if receiver is not None:
                 candidates = self.builder.specs_for(
-                    receiver.decl, receiver.index, node.func.attr,
-                    receiver.possible_indices)
+                    receiver.decl,
+                    receiver.index,
+                    node.func.attr,
+                    receiver.possible_indices,
+                )
                 if candidates:
-                    if len(candidates) != 1:
-                        return self._lower_polymorphic_call(
-                            node, receiver, candidates)
-                    callee = candidates[0]
-                    if node.keywords:
-                        raise ValueError(
-                            f"{self._callback_label()} call to component "
-                            f"function '{callee.graph_name}' must use "
-                            "positional arguments")
-                    if len(node.args) != len(callee.parameter_names):
-                        raise ValueError(
-                            f"{self._callback_label()} call to component "
-                            f"function '{callee.graph_name}' takes "
-                            f"{len(callee.parameter_names)} argument(s), got "
-                            f"{len(node.args)}")
-                    arguments = [
-                        self.visit(copy.deepcopy(arg)) for arg in node.args]
-                    replacements = {
-                        name: arg for name, arg
-                        in zip(callee.parameter_names, arguments)
-                    }
-                    if receiver.index is not None:
-                        replacements["__cimba_receiver_index"] = \
-                            receiver.index
-                    dependency_args = []
-                    for dependency in callee.dependencies:
-                        access = dependency.access
-                        bound = _ComponentFieldAccess(
-                            access.decl,
-                            self._substitute_expr(
-                                access.index, replacements),
-                            access.field,
-                            access.text,
-                            access.possible_indices,
-                        )
-                        value = self._dependency(
-                            bound, direct=False, array=dependency.array)
-                        dependency_args.append(value)
-                        replacements[dependency.parameter] = value
-                    self.helper_namespace[callee.symbol] = callee.helper
-                    if callee.graph_name not in self.callees:
-                        self.callees.append(callee.graph_name)
-                    helper_args = list(arguments)
-                    if callee.receiver_indexed:
-                        if receiver.index is None:
-                            raise TypeError(
-                                "indexed component function has no "
-                                "receiver index")
-                        helper_args.append(copy.deepcopy(receiver.index))
-                    return ast.copy_location(ast.Call(
-                        func=ast.Name(id=callee.symbol, ctx=ast.Load()),
-                        args=[*helper_args, *dependency_args],
-                        keywords=[],
-                    ), node)
+                    return self._dispatch_function_call(
+                        node, receiver, candidates, self._callee_call
+                    )
 
             access = self._field_ref(node.func.value)
             if access is not None:
+                operation = (
+                    "entity or runtime operation"
+                    if self.decl.owner_root
+                    else "component field operation"
+                )
                 raise ValueError(
-                    f"{self._callback_label()} cannot call component field "
-                    f"operation {access.text}.{node.func.attr}()")
+                    f"{self._callback_label()} cannot call {operation} {access.text}.{node.func.attr}()"
+                )
             if receiver is not None:
                 raise ValueError(
-                    f"{self._callback_label()} cannot call unmarked "
-                    f"component method {receiver.text}.{node.func.attr}()")
-        return self.generic_visit(node)
-
-    def _lower_polymorphic_call(
-        self,
-        node: ast.Call,
-        receiver: _ComponentAccess,
-        candidates: Sequence[_ComponentFunctionSpec],
-    ) -> ast.expr:
-        first = candidates[0]
-        if node.keywords:
-            raise ValueError(
-                f"{self._callback_label()} call to component function "
-                f"'{first.graph_name}' must use positional arguments")
-        if len(node.args) != len(first.parameter_names):
-            raise ValueError(
-                f"{self._callback_label()} call to component function "
-                f"'{first.graph_name}' takes "
-                f"{len(first.parameter_names)} argument(s), got "
-                f"{len(node.args)}")
-        contract = (first.parameter_names, first.argument_types,
-                    first.return_type)
-        if any((spec.parameter_names, spec.argument_types, spec.return_type)
-               != contract for spec in candidates[1:]):
-            raise TypeError(
-                f"{self._callback_label()} dynamically calls "
-                f"{receiver.text}.{node.func.attr}(), whose concrete "
-                "implementations have incompatible signatures")
-        if receiver.index is None:
-            raise TypeError("polymorphic component function has no index")
-
-        def branch(callee: _ComponentFunctionSpec) -> ast.Call:
-            arguments = [
-                self.visit(copy.deepcopy(arg)) for arg in node.args]
-            replacements = {
-                name: arg for name, arg
-                in zip(callee.parameter_names, arguments)
-            }
-            dependency_args: list[ast.expr] = []
-            for dependency in callee.dependencies:
-                access = dependency.access
-                bound = _ComponentFieldAccess(
-                    access.decl,
-                    self._substitute_expr(access.index, replacements),
-                    access.field,
-                    access.text,
-                    access.possible_indices,
+                    f"{self._callback_label()} cannot call unmarked component method {receiver.text}.{node.func.attr}()"
                 )
-                value = self._dependency(
-                    bound, direct=False, array=dependency.array)
-                dependency_args.append(value)
-                replacements[dependency.parameter] = value
-            self.helper_namespace[callee.symbol] = callee.helper
-            if callee.graph_name not in self.callees:
-                self.callees.append(callee.graph_name)
-            helper_args = list(arguments)
-            if callee.receiver_indexed:
-                if receiver.index is None:
-                    raise TypeError(
-                        "indexed component function has no receiver index")
-                helper_args.append(copy.deepcopy(receiver.index))
-            return ast.Call(
-                func=ast.Name(id=callee.symbol, ctx=ast.Load()),
-                args=[*helper_args, *dependency_args],
-                keywords=[],
-            )
-
-        expression: ast.expr = branch(candidates[-1])
-        variant_expr = _subscript(
-            ast.Name(id=_variant_slots_symbol(receiver.decl.name),
-                     ctx=ast.Load()),
-            copy.deepcopy(receiver.index), ast.Load())
-        for callee in reversed(candidates[:-1]):
-            expression = ast.IfExp(
-                test=ast.Compare(
-                    left=copy.deepcopy(variant_expr),
-                    ops=[ast.Eq()],
-                    comparators=[ast.Constant(callee.variant)],
-                ),
-                body=branch(callee),
-                orelse=expression,
-            )
-        return ast.copy_location(expression, node)
-
-    def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
-        nested = self._field_ref(node.value)
-        if nested is not None:
-            raise ValueError(
-                f"{self._callback_label()} cannot access attributes below "
-                f"component field {nested.text}")
-        access = self._field_ref(node)
-        if access is not None:
-            if not isinstance(node.ctx, ast.Load):
-                raise ValueError(
-                    f"{self._callback_label()} cannot mutate component "
-                    f"field {access.text}")
-            self._validate_scalar_field(access)
-            if self._index_is_local(access.index):
-                return ast.copy_location(self._array_dependency(access), node)
-            return ast.copy_location(
-                self._dependency(access, direct=True), node)
-        namespace = self._namespace_ref(node)
-        if namespace is not None:
-            raise ValueError(
-                f"{self._callback_label()} cannot use {namespace.text} "
-                "directly; access a scalar field or marked function")
-        collection = self._collection_ref(node)
-        if collection is not None:
-            raise ValueError(
-                f"{self._callback_label()} cannot use {collection.text} "
-                "directly; index it")
-        table = self._ref_table_ref(node)
-        if table is not None:
-            raise ValueError(
-                f"{self._callback_label()} must index {table.text}")
         return self.generic_visit(node)
+
+    def _callee_call(
+        self, node: ast.Call, receiver: _OwnerAccess, callee: _FunctionSpec
+    ) -> ast.Call:
+        arguments = [self.visit(copy.deepcopy(arg)) for arg in node.args]
+        replacements = dict(zip(callee.parameter_names, arguments))
+        if receiver.index is not None:
+            replacements["__cimba_receiver_index"] = receiver.index
+        dependencies: list[ast.expr] = []
+        for dependency in callee.dependencies:
+            access = dependency.access
+            bound = _FieldAccess(
+                access.decl,
+                self._substitute_expr(access.index, replacements),
+                access.field,
+                access.text,
+                access.possible_indices,
+            )
+            value = self._dependency(bound, direct=False, array=dependency.array)
+            dependencies.append(value)
+            replacements[dependency.parameter] = value
+        self.helper_namespace[callee.symbol] = callee.helper
+        if callee.graph_name not in self.callees:
+            self.callees.append(callee.graph_name)
+        if callee.receiver_indexed:
+            if receiver.index is None:
+                raise TypeError("indexed component function has no receiver index")
+            arguments.append(copy.deepcopy(receiver.index))
+        return ast.Call(
+            func=ast.Name(id=callee.symbol, ctx=ast.Load()),
+            args=[*arguments, *dependencies],
+            keywords=[],
+        )
+
+    def _lower_attribute(self, access: _FieldAccess, node: ast.Attribute) -> ast.AST:
+        if not isinstance(node.ctx, ast.Load):
+            raise ValueError(
+                f"{self._callback_label()} cannot mutate component field {access.text}"
+            )
+        self._validate_scalar_field(access)
+        value = (
+            self._array_dependency(access)
+            if self._index_is_local(access.index)
+            else self._dependency(access, direct=True)
+        )
+        return ast.copy_location(value, node)
+
+    def _direct_path_error(self, kind: str, text: str) -> ValueError:
+        suffix = {
+            "namespace": "directly; access a scalar field or marked function",
+            "collection": "directly; index it",
+            "table": "",
+        }[kind]
+        action = "must index" if kind == "table" else "cannot use"
+        return ValueError(f"{self._callback_label()} {action} {text} {suffix}".rstrip())
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
         if node.id == self.receiver_name:
@@ -3302,20 +2987,21 @@ class _ComponentFunctionBodyLowerer(_ComponentPathLowerer):
         return node
 
 
-class _ComponentFunctionBuilder:
+class _FunctionBuilder:
     """Validate and compile all synchronous functions for one model tree."""
 
     def __init__(self):
-        self.specs: dict[str, _ComponentFunctionSpec] = {}
+        self.specs: dict[str, _FunctionSpec] = {}
         self._building: list[str] = []
 
     @staticmethod
-    def _dependency_type(dependency: _ComponentFunctionDependency) -> Any:
+    def _dependency_type(dependency: _FunctionDependency) -> Any:
         access = dependency.access
         if access.field in access.decl.constants:
             return _function_scalar_type(
                 access.decl.decls.consts[access.field],
-                f"component function constant '{access.field}'")
+                f"component function constant '{access.field}'",
+            )
         kind = access.decl.decls.kind_of(access.field)
         scalar = types.int64 if kind == "state" else types.float64
         # A shaped env field reaches the helper as a NestedArray, which
@@ -3324,36 +3010,41 @@ class _ComponentFunctionBuilder:
 
     def build(
         self,
-        decl: _ComponentDecl,
+        decl: _OwnerDecl,
         method_name: str,
         method: Callable[..., Any],
         variant: int | None,
         instance_indices: tuple[int, ...],
-    ) -> _ComponentFunctionSpec:
-        base_name = f"{decl.name}__{method_name}"
-        graph_name = (base_name if variant is None
-                      else f"{base_name}__variant_{variant}")
+    ) -> _FunctionSpec:
+        owner = "model" if decl.owner_root else "component"
+        base_name = (
+            f"model:{method_name}" if decl.owner_root else f"{decl.name}__{method_name}"
+        )
+        graph_name = base_name if variant is None else f"{base_name}__variant_{variant}"
         existing = self.specs.get(graph_name)
         if existing is not None:
             return existing
         if graph_name in self._building:
             start = self._building.index(graph_name)
             cycle = [*self._building[start:], graph_name]
-            raise ValueError(
-                "recursive component function call: "
-                + " -> ".join(cycle))
+            raise ValueError(f"recursive {owner} function call: " + " -> ".join(cycle))
 
         self._building.append(graph_name)
         try:
-            node = copy.deepcopy(
-                _component_method_source(method, "function"))
-            label = f"component function '{decl.name}.{method_name}'"
-            parameter_names, argument_types, return_type = \
-                _function_signature(node, method, label, "self")
+            node = copy.deepcopy(_component_method_source(method, "function"))
+            display_name = decl.cls.__name__ if decl.owner_root else decl.name
+            label = f"{owner} function '{display_name}.{method_name}'"
+            parameter_names, argument_types, return_type = _function_signature(
+                node,
+                method,
+                label,
+                "self",
+                {base.__name__: base for base in decl.cls.__mro__},
+            )
             receiver_name = node.args.args[0].arg
-            _ComponentFunctionValidator(
-                receiver_name=receiver_name, method=method,
-                label=label).visit(node)
+            _FunctionValidator(
+                receiver_name=receiver_name, method=method, label=label
+            ).visit(node)
 
             # Two names, because callers and the compiler want different
             # things. `symbol` identifies the declaration: callers bind
@@ -3364,12 +3055,16 @@ class _ComponentFunctionBuilder:
             # `canonical` names the generated function itself and so decides
             # source_key: keeping it per class/method lets structurally
             # identical declarations share one compiled helper via the cache.
-            symbol = f"_CIMBA_FUNCTION_{graph_name}_{id(method):x}"
+            symbol = (
+                f"_CIMBA_MODEL_FUNCTION_{method_name}_{id(method):x}"
+                if decl.owner_root
+                else f"_CIMBA_FUNCTION_{graph_name}_{id(method):x}"
+            )
             canonical = (
-                f"_CIMBA_FUNCTION_{decl.cls.__name__}_{method_name}_"
-                f"{id(method):x}"
-                + ("" if variant is None else f"_V{variant}"))
-            lowerer = _ComponentFunctionBodyLowerer(
+                f"_CIMBA_FUNCTION_{decl.cls.__name__}_{method_name}_{id(method):x}"
+                + ("" if variant is None else f"_V{variant}")
+            )
+            lowerer = _FunctionBodyLowerer(
                 builder=self,
                 decl=decl,
                 method_name=method_name,
@@ -3382,21 +3077,15 @@ class _ComponentFunctionBuilder:
             if not isinstance(lowered, ast.FunctionDef):
                 raise TypeError(f"{label} lowering produced a non-function")
             lowered.name = canonical
-            lowered.decorator_list = []
-            lowered.type_comment = None
-            lowered.returns = None
+            _strip_function_annotations(lowered)
             lowered.args.args = lowered.args.args[1:]
-            for arg in lowered.args.args:
-                arg.annotation = None
-                arg.type_comment = None
-            receiver_indexed = (
-                decl.count > 1 and len(instance_indices) > 1)
+            receiver_indexed = decl.count > 1 and len(instance_indices) > 1
             if receiver_indexed:
                 lowered.args.args.append(
                     ast.arg(arg="__cimba_receiver_index"))
             lowered.args.args.extend(
-                ast.arg(arg=dependency.parameter)
-                for dependency in lowerer.dependencies)
+                ast.arg(arg=dependency.parameter) for dependency in lowerer.dependencies
+            )
 
             namespace = _closure_namespace(method)
             # An array dependency keeps its index expression inside the
@@ -3405,27 +3094,29 @@ class _ComponentFunctionBuilder:
             namespace.update(_lowering_namespace((decl,)))
             namespace.update(lowerer.helper_namespace)
             lowered, random_changed = lower_random_calls_in_node(
-                lowered, namespace=namespace, label=label)
+                lowered, namespace=namespace, label=label
+            )
             if random_changed:
                 namespace.update(random_lowering_namespace())
             ast.fix_missing_locations(lowered)
             source_key = ast.unparse(
                 ast.Module(body=[lowered], type_ignores=[]))
             dependency_types = tuple(
-                self._dependency_type(dependency)
-                for dependency in lowerer.dependencies)
+                self._dependency_type(dependency) for dependency in lowerer.dependencies
+            )
             signature = return_type(
                 *argument_types,
                 *((types.int64,) if receiver_indexed else ()),
-                *dependency_types)
+                *dependency_types,
+            )
             closure_key = tuple(
                 (name,
                  value if _primitive_constant(value) else id(value))
                 for name, value in (
                     (name, cell.cell_contents)
                     for name, cell in zip(
-                        method.__code__.co_freevars,
-                        method.__closure__ or ())
+                        method.__code__.co_freevars, method.__closure__ or ()
+                    )
                 )
             )
             length_table_key = tuple(
@@ -3446,12 +3137,11 @@ class _ComponentFunctionBuilder:
                 tuple(id(value)
                       for value in lowerer.helper_namespace.values()),
             )
-            helper = _COMPONENT_FUNCTION_CACHE.get(cache_key)
+            helper = _FUNCTION_CACHE.get(cache_key)
             if helper is None:
                 plain = _compile_lowered(
                     lowered,
-                    filename=f"<cimba component function "
-                             f"'{decl.name}.{method_name}'>",
+                    filename=f"<cimba {owner} function '{decl.name}.{method_name}'>",
                     fn_name=canonical,
                     qualname=canonical,
                     namespace=namespace,
@@ -3465,9 +3155,9 @@ class _ComponentFunctionBuilder:
                         f"{label} failed Numba nopython compilation"
                     ) from exc
                 helper.__cimba_source__ = plain.__cimba_source__
-                _COMPONENT_FUNCTION_CACHE[cache_key] = helper
+                _FUNCTION_CACHE[cache_key] = helper
 
-            spec = _ComponentFunctionSpec(
+            spec = _FunctionSpec(
                 decl=decl,
                 name=method_name,
                 method=method,
@@ -3488,56 +3178,63 @@ class _ComponentFunctionBuilder:
         finally:
             self._building.pop()
 
-    def build_all(
-        self,
-        roots: Iterable[_ComponentDecl],
-    ) -> dict[str, _ComponentFunctionSpec]:
+    def build_all(self, roots: Iterable[_OwnerDecl]) -> dict[str, _FunctionSpec]:
         for root in roots:
             for decl in root.walk():
                 groups = decl.specialization_groups()
                 for ordinal, instance_indices in enumerate(groups):
                     variant = None if len(groups) == 1 else ordinal
                     cls = decl.class_at(instance_indices[0])
-                    for callback in _callback_set(cls).functions:
+                    for callback in cls._callbacks().functions:
                         self.build(
-                            decl, callback.name, callback.fn, variant,
-                            instance_indices)
+                            decl, callback.name, callback.fn, variant, instance_indices
+                        )
         return self.specs
 
     def specs_for(
         self,
-        decl: _ComponentDecl,
+        decl: _OwnerDecl,
         index: ast.expr | None,
         method_name: str,
         possible_indices: tuple[int, ...] | None = None,
-    ) -> tuple[_ComponentFunctionSpec, ...]:
+    ) -> tuple[_FunctionSpec, ...]:
         """Resolve/build the concrete helper candidates for an access."""
-        if (isinstance(index, ast.Constant)
-                and type(index.value) is int):
+        if isinstance(index, ast.Constant) and type(index.value) is int:
             instance_index = index.value
             groups = decl.specialization_groups()
-            variant = (None if len(groups) == 1
-                       else decl.specialization_slots()[instance_index])
-            group = (groups[0] if variant is None else groups[variant])
+            variant = (
+                None
+                if len(groups) == 1
+                else decl.specialization_slots()[instance_index]
+            )
+            group = groups[0] if variant is None else groups[variant]
             cls = decl.class_at(index.value)
             method = next(
-                (callback.fn for callback in _callback_set(cls).functions
-                 if callback.name == method_name), None)
+                (
+                    callback.fn
+                    for callback in cls._callbacks().functions
+                    if callback.name == method_name
+                ),
+                None,
+            )
             if method is None:
                 return ()
             return (self.build(
                 decl, method_name, method, variant, group),)
         if not decl.polymorphic:
             method = next(
-                (callback.fn for callback in
-                 _callback_set(decl.class_at()).functions
-                 if callback.name == method_name), None)
+                (
+                    callback.fn
+                    for callback in decl.class_at()._callbacks().functions
+                    if callback.name == method_name
+                ),
+                None,
+            )
             if method is None:
                 return ()
             group = decl.specialization_groups()[0]
-            return (self.build(
-                decl, method_name, method, None, group),)
-        candidates: list[_ComponentFunctionSpec] = []
+            return (self.build(decl, method_name, method, None, group),)
+        candidates: list[_FunctionSpec] = []
         possible = set(possible_indices or range(decl.count))
         groups = decl.specialization_groups()
         for variant, group in enumerate(groups):
@@ -3545,22 +3242,23 @@ class _ComponentFunctionBuilder:
                 continue
             cls = decl.class_at(group[0])
             method = next(
-                (callback.fn for callback in _callback_set(cls).functions
-                 if callback.name == method_name), None)
+                (
+                    callback.fn
+                    for callback in cls._callbacks().functions
+                    if callback.name == method_name
+                ),
+                None,
+            )
             if method is None:
                 raise ValueError(
-                    f"dynamic component function call to "
-                    f"'{decl.name}.{method_name}' requires every concrete "
-                    "component type to declare that @sim.function")
-            candidates.append(self.build(
-                decl, method_name, method, variant, group))
+                    f"dynamic component function call to '{decl.name}.{method_name}' requires every concrete component type to declare that @sim.function"
+                )
+            candidates.append(self.build(decl, method_name, method, variant, group))
         return tuple(candidates)
 
 
-def _build_component_functions(
-    roots: Iterable[_ComponentDecl],
-) -> dict[str, _ComponentFunctionSpec]:
-    return _ComponentFunctionBuilder().build_all(roots)
+def _build_functions(roots: Iterable[_OwnerDecl]) -> dict[str, _FunctionSpec]:
+    return _FunctionBuilder().build_all(roots)
 
 
 @dataclass(frozen=True)
@@ -3568,8 +3266,62 @@ class _CallbackLoweringContext:
     datasets: Sequence[str]
     histories: Mapping[str, str]
     entities: Mapping[str, str]
-    component_functions: Mapping[str, _ComponentFunctionSpec]
-    model_functions: Mapping[str, _ModelFunctionSpec]
+    owner_decl: _OwnerDecl
+    functions: Mapping[str, _FunctionSpec]
+
+
+def _lower_owner_methods(
+    node: ast.FunctionDef,
+    fn: Callable[..., Any],
+    *,
+    env_name: str,
+    label: str,
+    owner_name: str,
+    context: _CallbackLoweringContext,
+    namespace: dict[str, Any],
+    entity_fields: Mapping[str, str] | None = None,
+) -> tuple[ast.FunctionDef, bool]:
+    """Apply the method-sugar passes shared by both owner callback types."""
+    changed = False
+    for lower, fields, keyword, helpers in (
+        (
+            lower_env_dataset_method_calls,
+            context.datasets,
+            "dataset_fields",
+            dataset_lowering_namespace,
+        ),
+        (
+            lower_env_history_method_calls,
+            context.histories,
+            "history_fields",
+            timeseries_lowering_namespace,
+        ),
+    ):
+        node, lowered = lower(node, env_name=env_name, label=label, **{keyword: fields})
+        if lowered:
+            namespace.update(helpers())
+            changed = True
+
+    entities = context.entities if entity_fields is None else entity_fields
+    helpers_changed = _rewire_entity_method_helpers(
+        namespace,
+        set(fn.__code__.co_names),
+        model_name=owner_name,
+        entity_fields=entities,
+        cache={},
+    )
+    node, lowered = lower_env_entity_method_calls(
+        node, env_name=env_name, entity_fields=entities, label=label
+    )
+    if lowered or helpers_changed:
+        namespace.update(entity_lowering_namespace())
+        changed = True
+
+    node, lowered = lower_random_calls_in_node(node, namespace=namespace, label=label)
+    if lowered:
+        namespace.update(random_lowering_namespace())
+        changed = True
+    return node, changed
 
 
 def _lower_component_method(
@@ -3577,7 +3329,7 @@ def _lower_component_method(
     *,
     kind: str,
     component_name: str,
-    component_decl: _ComponentDecl,
+    component_decl: _OwnerDecl,
     instance_index: ast.expr,
     possible_indices: tuple[int, ...] | None = None,
     method_name: str,
@@ -3609,75 +3361,41 @@ def _lower_component_method(
             arg.annotation = None
         arg.type_comment = None
 
-    lowerer = _ComponentMethodLowerer(
-        component_name=component_name,
+    lowerer = _RootedOwnerLowerer(
+        label=f"component '{component_name}' {kind}",
         receiver_name=receiver_name,
         env_name=env_name,
         component_decl=component_decl,
+        owner_decl=context.owner_decl,
         instance_index=instance_index,
         possible_indices=possible_indices,
-        kind=kind,
-        component_functions=context.component_functions,
-        model_functions=context.model_functions,
+        functions=context.functions,
     )
     lowered = lowerer.visit(node)
     if not isinstance(lowered, ast.FunctionDef):
         raise TypeError(f"component {kind} lowering produced a non-function")
-    if context.datasets:
-        lowered, _ = lower_env_dataset_method_calls(
-            lowered,
-            env_name=env_name,
-            dataset_fields=context.datasets,
-            label=f"component {kind} '{component_name}.{method_name}'",
-        )
-    if context.histories:
-        lowered, _ = lower_env_history_method_calls(
-            lowered,
-            env_name=env_name,
-            history_fields=context.histories,
-            label=f"component {kind} '{component_name}.{method_name}'",
-        )
-    if context.entities:
-        lowered, _ = lower_env_entity_method_calls(
-            lowered,
-            env_name=env_name,
-            entity_fields=context.entities,
-            label=f"component {kind} '{component_name}.{method_name}'",
-        )
+    label = f"component {kind} '{component_name}.{method_name}'"
+    namespace = _closure_namespace(method)
+    lowered, _ = _lower_owner_methods(
+        lowered,
+        method,
+        env_name=env_name,
+        label=label,
+        owner_name=component_name,
+        context=context,
+        namespace=namespace,
+    )
     lowered.body[:0] = list(prologue)
 
-    namespace = _closure_namespace(method)
-    if context.entities:
-        _rewire_entity_method_helpers(
-            namespace, set(method.__code__.co_names),
-            model_name=component_name, entity_fields=context.entities,
-            cache={})
-    lowered, random_changed = lower_random_calls_in_node(
-        lowered,
-        namespace=namespace,
-        label=f"component {kind} '{component_name}.{method_name}'",
-    )
     if struct_view is not None:
         namespace["_CIMBA_STRUCT_VIEW"] = struct_view
     if extra_namespace:
         namespace.update(extra_namespace)
-    namespace.update(dataset_lowering_namespace())
-    namespace.update(timeseries_lowering_namespace())
-    namespace.update(entity_lowering_namespace())
-    if context.component_functions:
-        namespace.update({
-            spec.symbol: spec.helper
-            for spec in context.component_functions.values()
-        })
-    if context.model_functions:
-        namespace.update({
-            spec.symbol: spec.helper
-            for spec in context.model_functions.values()
-            if spec.helper is not None
-        })
-    if random_changed:
-        namespace.update(random_lowering_namespace())
-    namespace.update(_lowering_namespace((component_decl,)))
+    namespace.update(
+        _model_lowering_namespace(
+            {component_decl.name: component_decl}, context.functions
+        )
+    )
     generated = _compile_lowered(
         lowered,
         filename=f"<cimba component '{component_name}.{method_name}'>",
@@ -3698,24 +3416,7 @@ def _shared_instance_setup(
     base_arg_count: int,
     instance_indices: tuple[int, ...] | None = None,
 ) -> tuple[ast.expr, list[ast.stmt], dict[str, Any]]:
-    """Prepare one compiled body to serve every instance of a collection.
-
-    A collection's process is started once per copy with the *global* copy
-    index (0 .. sum(counts) - 1). Three indices are in play, and this
-    derives the latter two from the first:
-
-    * ``__cimba_idx`` -- the global copy index, inserted here as the body's
-      new second parameter;
-    * ``__cimba_inst`` -- which collection item the copy belongs to, used
-      as the runtime instance index wherever the body reads a per-instance
-      field or constant (returned as the index expression);
-    * the user's own copy-index parameter, if the method declares one --
-      the copy's position *within* its item.
-
-    Uniform copy counts reduce to arithmetic; ragged counts use small
-    generated lookup tables, keyed by ``base`` so methods never collide.
-    Returns ``(instance_index_expr, prologue_statements, lookup_tables)``.
-    """
+    """Map global process-copy indexes to collection items/local copies."""
     params = node.args.args
     user_idx = params[2].arg if base_arg_count == 3 else None
     if user_idx is not None:
@@ -3785,7 +3486,7 @@ def _component_process_signature(
 
 def _lower_component_process(
     component_name: str,
-    component_decl: _ComponentDecl,
+    component_decl: _OwnerDecl,
     method_name: str,
     method: Callable[..., Any],
     is_struct_class: Callable[[Any], bool],
@@ -3795,15 +3496,7 @@ def _lower_component_process(
     instance_indices: tuple[int, ...] | None = None,
     context: _CallbackLoweringContext,
 ) -> Callable[..., Any]:
-    """Lower a component process method into a flat process function.
-
-    With ``instance_index``, the function is specialized to one instance
-    (spawnable methods, and the fallback for methods whose per-instance
-    Ref targets cannot share one body). With ``copies_per_instance``, one
-    function covers every instance: it takes the global copy index as a
-    runtime argument, recovers the instance and the user's local copy
-    index from it, and reads per-instance values through the published
-    lookup tables."""
+    """Lower one specialized or collection-shared component process."""
     node = copy.deepcopy(_component_method_source(method, "process"))
     struct_view, base_arg_count = _component_process_signature(
         component_name, method_name, method, is_struct_class)
@@ -3830,7 +3523,7 @@ def _lower_component_process(
 
 def _lower_component_collect(
     component_name: str,
-    component_decl: _ComponentDecl,
+    component_decl: _OwnerDecl,
     method_name: str,
     method: Callable[..., Any],
     *,
@@ -3880,76 +3573,63 @@ def _lower_component_collect(
         context=context)
 
 
-def _lower_component_predicate(
+def _lower_component_signal(
     component_name: str,
-    component_decl: _ComponentDecl,
+    component_decl: _OwnerDecl,
     method_name: str,
     method: Callable[..., Any],
     *,
+    kind: str,
     instance_index: int,
     context: _CallbackLoweringContext,
 ) -> Callable[..., Any]:
-    """Lower one instance of a component ``@sim.predicate`` callback."""
-    node = copy.deepcopy(_component_method_source(method, "predicate"))
-    signature = (f"component predicate '{component_name}.{method_name}' must "
-                 "take (self, env) without defaults")
-    _callback_arg_count(method, (2,), signature)
-    if get_type_hints(method).get("return") is not bool:
+    """Lower one instance of a component predicate or event callback."""
+    node = copy.deepcopy(_component_method_source(method, kind))
+    arity = (2,) if kind == "predicate" else (2, 3)
+    suffix = " or (self, env, data)" if kind == "event" else ""
+    signature = f"component {kind} '{component_name}.{method_name}' must take (self, env){suffix} without defaults"
+    _callback_arg_count(method, arity, signature)
+    if kind == "predicate" and get_type_hints(method).get("return") is not bool:
         raise ValueError(
-            f"component predicate '{component_name}.{method_name}' must "
-            "return bool")
+            f"component predicate '{component_name}.{method_name}' must return bool"
+        )
     generated = _lower_component_method(
-        node, kind="predicate", component_name=component_name,
+        node,
+        kind=kind,
+        component_name=component_name,
         component_decl=component_decl,
         instance_index=ast.Constant(instance_index),
-        possible_indices=(instance_index,), method_name=method_name,
-        method=method, context=context)
-    generated.__annotations__["return"] = bool
+        possible_indices=(instance_index,),
+        method_name=method_name,
+        method=method,
+        context=context,
+    )
+    if kind == "predicate":
+        generated.__annotations__["return"] = bool
     return generated
-
-
-def _lower_component_event(
-    component_name: str,
-    component_decl: _ComponentDecl,
-    method_name: str,
-    method: Callable[..., Any],
-    *,
-    instance_index: int,
-    context: _CallbackLoweringContext,
-) -> Callable[..., Any]:
-    """Lower one instance of a component ``@sim.event`` callback."""
-    node = copy.deepcopy(_component_method_source(method, "event"))
-    signature = (f"component event '{component_name}.{method_name}' must "
-                 "take (self, env) or (self, env, data) without defaults")
-    _callback_arg_count(method, (2, 3), signature)
-    return _lower_component_method(
-        node, kind="event", component_name=component_name,
-        component_decl=component_decl,
-        instance_index=ast.Constant(instance_index),
-        possible_indices=(instance_index,), method_name=method_name,
-        method=method, context=context)
 
 
 def _lower_model_component_refs_in_node(
     node: ast.FunctionDef,
     *,
     model_name: str,
-    component_roots: Mapping[str, _ComponentDecl],
-    component_functions: Mapping[
-        str, _ComponentFunctionSpec] | None = None,
-    model_functions: Mapping[str, _ModelFunctionSpec] | None = None,
+    owner_decl: _OwnerDecl,
+    functions: Mapping[str, _FunctionSpec] | None = None,
 ) -> tuple[ast.FunctionDef, bool, tuple[str, ...]]:
     if not node.args.args:
         return node, False, ()
 
     env_name = node.args.args[0].arg
-    lowerer = _ModelComponentRefLowerer(
-        model_name=model_name,
-        fn_name=node.name,
+    lowerer = _RootedOwnerLowerer(
+        label=f"model '{model_name}' callback '{node.name}'",
+        receiver_name=env_name,
         env_name=env_name,
-        component_roots=component_roots,
-        component_functions=component_functions,
-        model_functions=model_functions,
+        component_decl=owner_decl,
+        owner_decl=owner_decl,
+        instance_index=ast.Constant(0),
+        possible_indices=(0,),
+        track_changes=True,
+        functions=functions,
     )
     lowered = lowerer.visit(node)
     if not isinstance(lowered, ast.FunctionDef):
@@ -3958,178 +3638,16 @@ def _lower_model_component_refs_in_node(
 
 
 def _model_lowering_namespace(
-    component_roots: Mapping[str, _ComponentDecl],
-    component_functions: Mapping[str, _ComponentFunctionSpec] | None,
-    model_functions: Mapping[str, _ModelFunctionSpec] | None,
+    component_roots: Mapping[str, _OwnerDecl],
+    functions: Mapping[str, _FunctionSpec] | None,
 ) -> dict[str, Any]:
     namespace = dataset_lowering_namespace()
     namespace.update(timeseries_lowering_namespace())
     namespace.update(entity_lowering_namespace())
-    if component_functions:
-        namespace.update({
-            spec.symbol: spec.helper
-            for spec in component_functions.values()
-        })
-    if model_functions:
-        namespace.update({
-            spec.symbol: spec.helper
-            for spec in model_functions.values()
-            if spec.helper is not None
-        })
+    if functions:
+        namespace.update({spec.symbol: spec.helper for spec in functions.values()})
     namespace.update(_lowering_namespace(component_roots.values()))
     return namespace
-
-
-def _lower_model_component_refs(
-    fn: Callable[..., Any],
-    *,
-    model_name: str,
-    component_roots: Mapping[str, _ComponentDecl],
-    component_functions: Mapping[
-        str, _ComponentFunctionSpec] | None = None,
-    model_functions: Mapping[str, _ModelFunctionSpec] | None = None,
-) -> Callable[..., Any]:
-    """Rewrite a model callback's component paths against the flat root."""
-    if not component_roots and not model_functions:
-        return fn
-    names = {*component_roots, *(model_functions or {})}
-    if not any(name in fn.__code__.co_names for name in names):
-        return fn
-    try:
-        node = copy.deepcopy(_function_def_from_source(fn))
-    except (OSError, TypeError) as exc:
-        raise ValueError(
-            f"model '{model_name}' callback '{fn.__qualname__}' needs "
-            "inspectable source to use Component namespaces"
-        ) from exc
-    lowered, changed, called_functions = _lower_model_component_refs_in_node(
-        node, model_name=model_name, component_roots=component_roots,
-        component_functions=component_functions,
-        model_functions=model_functions)
-    if not changed:
-        return fn
-
-    lowered.decorator_list = []
-    lowered.returns = None
-    lowered.type_comment = None
-    for arg in lowered.args.args:
-        arg.annotation = None
-        arg.type_comment = None
-
-    namespace = _closure_namespace(fn)
-    namespace.update(_model_lowering_namespace(
-        component_roots, component_functions, model_functions))
-    generated = _compile_lowered(
-        lowered,
-        filename=f"<cimba model callback '{model_name}.{fn.__name__}'>",
-        fn_name=fn.__name__,
-        qualname=fn.__qualname__,
-        namespace=namespace,
-        like=fn,
-    )
-    generated.__cimba_function_calls__ = called_functions
-    return generated
-
-
-def _build_model_functions(
-    model_cls: type,
-    *,
-    model_name: str,
-    component_roots: Mapping[str, _ComponentDecl],
-    component_functions: Mapping[str, _ComponentFunctionSpec],
-    scalar_fields: Iterable[str],
-) -> dict[str, _ModelFunctionSpec]:
-    """Validate and lower read-only helpers declared by the root owner."""
-    callbacks = _callback_set(model_cls).functions
-    specs: dict[str, _ModelFunctionSpec] = {}
-    sources: dict[str, ast.FunctionDef] = {}
-    scalar_names = set(scalar_fields)
-
-    for callback in callbacks:
-        node = copy.deepcopy(_component_method_source(
-            callback.fn, "model function"))
-        label = f"model function '{model_cls.__name__}.{callback.name}'"
-        parameter_names, argument_types, return_type = \
-            _function_signature(
-                node, callback.fn, label, "self",
-                {base.__name__: base for base in model_cls.__mro__})
-        specs[callback.name] = _ModelFunctionSpec(
-            name=callback.name,
-            method=callback.fn,
-            symbol=(f"_CIMBA_MODEL_FUNCTION_{callback.name}_"
-                    f"{id(callback.fn):x}"),
-            parameter_names=parameter_names,
-            argument_types=argument_types,
-            return_type=return_type,
-        )
-        sources[callback.name] = node
-
-    building: list[str] = []
-
-    def build(name: str) -> None:
-        spec = specs[name]
-        if spec.helper is not None:
-            return
-        if name in building:
-            start = building.index(name)
-            raise ValueError(
-                "recursive model function call: "
-                + " -> ".join((*building[start:], name)))
-        building.append(name)
-        try:
-            node = sources[name]
-            env_name = node.args.args[0].arg
-            label = f"model function '{model_cls.__name__}.{name}'"
-            _ComponentFunctionValidator(
-                receiver_name=env_name, method=spec.method,
-                label=label).visit(node)
-            callees = []
-            for call in (item for item in ast.walk(node)
-                         if isinstance(item, ast.Call)):
-                if (isinstance(call.func, ast.Attribute)
-                        and isinstance(call.func.value, ast.Name)
-                        and call.func.value.id == env_name
-                        and call.func.attr in specs):
-                    callees.append(call.func.attr)
-            spec.callees = tuple(dict.fromkeys(callees))
-            for callee in spec.callees:
-                build(callee)
-
-            lowered = _lower_model_component_refs(
-                spec.method, model_name=model_name,
-                component_roots=component_roots,
-                component_functions=component_functions,
-                model_functions=specs)
-            lowered = lower_random_calls_in_function(
-                lowered, label=label)
-            lowered_node = copy.deepcopy(_function_def_from_source(lowered))
-            for item in ast.walk(lowered_node):
-                if (isinstance(item, ast.Call)
-                        and _rooted_at_name(item.func, env_name)):
-                    raise ValueError(
-                        f"{label} cannot call entity or runtime operation "
-                        f"{ast.unparse(item.func)}()")
-                if (isinstance(item, ast.Attribute)
-                        and isinstance(item.value, ast.Name)
-                        and item.value.id == env_name
-                        and item.attr not in scalar_names):
-                    raise ValueError(
-                        f"{label} cannot read non-scalar field "
-                        f"{env_name}.{item.attr}")
-            try:
-                helper = njit(lowered)
-            except Exception as exc:
-                raise TypeError(
-                    f"{label} failed Numba nopython preparation") from exc
-            helper.__cimba_source__ = getattr(
-                lowered, "__cimba_source__", inspect.getsource(lowered))
-            spec.helper = helper
-        finally:
-            building.pop()
-
-    for callback in callbacks:
-        build(callback.name)
-    return specs
 
 
 def _compile_model_callback_lowering(
@@ -4139,12 +3657,7 @@ def _compile_model_callback_lowering(
     lowering_namespace: Mapping[str, Any],
     namespace: dict[str, Any] | None = None,
 ) -> Callable[..., Any]:
-    lowered.decorator_list = []
-    lowered.returns = None
-    lowered.type_comment = None
-    for arg in lowered.args.args:
-        arg.annotation = None
-        arg.type_comment = None
+    _strip_function_annotations(lowered)
     if namespace is None:
         namespace = _closure_namespace(fn)
     namespace.update(lowering_namespace)
@@ -4165,17 +3678,7 @@ def _lower_entity_method_helper(
     entity_fields: Mapping[str, str],
     cache: dict[int, Any],
 ) -> Any:
-    """If ``helper`` is a Numba dispatcher (an ``@njit``-decorated plain
-    helper function, the kind processes commonly factor shared logic
-    into) whose own body uses ``env.<entity>.method(...)`` sugar --
-    directly, or transitively through helpers *it* calls -- rewrite and
-    recompile it, returning the new dispatcher. Otherwise (not a
-    dispatcher, or nothing to rewrite) returns ``helper`` unchanged.
-
-    A plain helper called with the model record as its first argument has
-    the same entity-call shape as a callback, so it gets the same treatment
-    here -- memoized by ``id(py_func)`` in ``cache`` so a helper shared by
-    several processes is only rewritten once."""
+    """Recursively lower entity sugar inside a referenced Numba helper."""
     py_func = getattr(helper, "py_func", None)
     if py_func is None:
         return helper
@@ -4212,12 +3715,7 @@ def _lower_entity_method_helper(
     if not changed and not helpers_changed:
         return helper
 
-    lowered.decorator_list = []
-    lowered.returns = None
-    lowered.type_comment = None
-    for arg in lowered.args.args:
-        arg.annotation = None
-        arg.type_comment = None
+    _strip_function_annotations(lowered)
 
     namespace.update(entity_lowering_namespace())
     plain = _compile_lowered(
@@ -4257,53 +3755,3 @@ def _rewire_entity_method_helpers(
             namespace[name] = rewritten
             changed = True
     return changed
-
-
-def _lower_model_callback_methods_in_node(
-    node: ast.FunctionDef,
-    fn: Callable[..., Any],
-    *,
-    model_name: str,
-    context: _CallbackLoweringContext,
-    entity_fields: Mapping[str, str],
-    namespace: dict[str, Any],
-) -> tuple[ast.FunctionDef, bool]:
-    """Apply root dataset, history, entity, and random rewrites to one AST."""
-    if not node.args.args:
-        return node, False
-    receiver = node.args.args[0].arg
-    label = f"model '{model_name}' callback '{fn.__name__}'"
-    changed = False
-
-    node, lowered = lower_env_dataset_method_calls(
-        node, env_name=receiver, dataset_fields=context.datasets,
-        label=label)
-    if lowered:
-        namespace.update(dataset_lowering_namespace())
-        changed = True
-
-    node, lowered = lower_env_history_method_calls(
-        node, env_name=receiver, history_fields=context.histories,
-        label=label)
-    if lowered:
-        namespace.update(timeseries_lowering_namespace())
-        changed = True
-
-    names = set(fn.__code__.co_names)
-    helpers_changed = _rewire_entity_method_helpers(
-        namespace, names, model_name=model_name,
-        entity_fields=entity_fields, cache={})
-    node, lowered = lower_env_entity_method_calls(
-        node, env_name=receiver, entity_fields=entity_fields,
-        label=label)
-    if lowered or helpers_changed:
-        namespace.update(entity_lowering_namespace())
-        changed = True
-
-    node, lowered = lower_random_calls_in_node(
-        node, namespace=namespace,
-        label=f"model '{model_name}' callback '{fn.__qualname__}'")
-    if lowered:
-        namespace.update(random_lowering_namespace())
-        changed = True
-    return node, changed

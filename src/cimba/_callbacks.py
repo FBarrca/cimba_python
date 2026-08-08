@@ -18,6 +18,7 @@ from ._declarations import (
     _MISSING,
     _Declarations,
     _FieldDecl,
+    Spawnable,
     _check_name,
 )
 
@@ -30,8 +31,44 @@ _EVENT_ATTR = "__cimba_event__"
 _FUNCTION_ATTR = "__cimba_function__"
 
 
-class _CallbackOwner:
-    """Private common base for public callback-owning classes."""
+class _DeclarationOwner:
+    """Shared declaration and callback behavior for Models and Components.
+
+    Both public owner types expose the same callback language.  Keeping the
+    class-level validation and declaration binding here prevents the two
+    implementations from growing subtly different rules.
+    """
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        if not getattr(cls, "_validate_legacy_annotations", False):
+            return
+        for name, annotation in vars(cls).get("__annotations__", {}).items():
+            if annotation is Spawnable:
+                raise ValueError(
+                    f"field '{name}': sim.Spawnable has been replaced by @sim.process(spawnable=True)"
+                )
+
+    @classmethod
+    def _callbacks(cls) -> "_CallbackSet":
+        return _callback_set(cls)
+
+    @classmethod
+    def _field_declarations(cls, **options: Any) -> _Declarations:
+        """Collect this owner's typed field declarations."""
+        from ._declarations import _field_declarations
+
+        return _field_declarations(cls, **options)
+
+    @classmethod
+    def _bind_callbacks(
+        cls,
+        decls: _Declarations,
+        *,
+        owner: str,
+        protected: frozenset[str] = frozenset(),
+    ) -> "_CallbackSet":
+        return _bind_callback_fields(cls, decls, owner=owner, protected=protected)
 
 
 def _positional_parameters(
@@ -165,7 +202,7 @@ def _callback_set(cls: type) -> _CallbackSet:
     effective: dict[str, _CallbackDecl] = {}
     next_order = 0
     for base in reversed(cls.__mro__):
-        if base in (object, _CallbackOwner):
+        if base in (object, _DeclarationOwner):
             continue
         for name, value in vars(base).items():
             marked = [
@@ -179,8 +216,8 @@ def _callback_set(cls: type) -> _CallbackSet:
             if len(marked) != 1:
                 kinds = ", ".join(kind for kind, _spec in marked)
                 raise ValueError(
-                    f"callback '{cls.__name__}.{name}' has conflicting "
-                    f"markers: {kinds}")
+                    f"callback '{cls.__name__}.{name}' has conflicting markers: {kinds}"
+                )
             if not callable(value):
                 raise TypeError(
                     f"callback '{cls.__name__}.{name}' is not callable")
@@ -200,8 +237,8 @@ def _callback_set(cls: type) -> _CallbackSet:
             elif kind == "process" and spec.spawnable and field is None:
                 field = name
             effective[name] = _CallbackDecl(
-                name=name, kind=kind, fn=value, spec=spec, order=order,
-                field=field)
+                name=name, kind=kind, fn=value, spec=spec, order=order, field=field
+            )
 
     declarations = tuple(sorted(effective.values(), key=lambda item: item.order))
     processes = tuple(decl for decl in declarations if decl.kind == "process")
@@ -380,21 +417,12 @@ def predicate(fn: _F) -> _F: ...
 
 
 @overload
-def predicate(fn: None = None, *, field: str | None = None,
-              ) -> Callable[[_F], _F]: ...
+def predicate(fn: None = None, *, field: str | None = None) -> Callable[[_F], _F]: ...
 
 
 def predicate(fn=None, *, field: str | None = None):
     """Mark a Model or Component condition predicate callback."""
-    if field is not None:
-        _check_name(field, "predicate field")
-
-    def decorate(f):
-        _reject_marker_conflict(f, "predicate")
-        setattr(f, _PREDICATE_ATTR, _CallbackFieldSpec(field))
-        return f
-
-    return decorate if fn is None else decorate(fn)
+    return _signal(fn, field, "predicate", _PREDICATE_ATTR)
 
 
 @overload
@@ -402,18 +430,21 @@ def event(fn: _F) -> _F: ...
 
 
 @overload
-def event(fn: None = None, *, field: str | None = None,
-          ) -> Callable[[_F], _F]: ...
+def event(fn: None = None, *, field: str | None = None) -> Callable[[_F], _F]: ...
 
 
 def event(fn=None, *, field: str | None = None):
     """Mark a Model or Component low-level event callback."""
+    return _signal(fn, field, "event", _EVENT_ATTR)
+
+
+def _signal(fn, field: str | None, kind: str, marker: str):
     if field is not None:
-        _check_name(field, "event field")
+        _check_name(field, f"{kind} field")
 
     def decorate(f):
-        _reject_marker_conflict(f, "event")
-        setattr(f, _EVENT_ATTR, _CallbackFieldSpec(field))
+        _reject_marker_conflict(f, kind)
+        setattr(f, marker, _CallbackFieldSpec(field))
         return f
 
     return decorate if fn is None else decorate(fn)

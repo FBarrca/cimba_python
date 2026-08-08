@@ -16,6 +16,7 @@ functions, then compiles everything on first ``experiment()``:
 
 import ast
 import copy
+import functools
 import hashlib
 import importlib.metadata
 import inspect
@@ -31,8 +32,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import (TYPE_CHECKING, Any, Generic, Self, TypedDict, TypeVar,
-                    cast, get_type_hints, overload)
+from typing import TYPE_CHECKING, Any, Generic, Self, TypeVar, cast, get_type_hints
 
 import llvmlite
 import numba
@@ -44,31 +44,28 @@ from numba.extending import overload as _nb_overload
 
 from . import _bindings as _b
 from ._callbacks import (
-    _CallbackOwner,
-    _bind_callback_fields,
+    _DeclarationOwner,
     _callback_arg_count,
-    _callback_set,
     _process_signature,
 )
 from ._cimba import ffi, lib
 from ._components import (
     Component,
-    _build_component_functions,
-    _build_model_functions,
+    _build_functions,
     _class_declarations,
-    _ComponentDecl,
     _CallbackLoweringContext,
+    _OwnerDecl,
     _closure_namespace,
     _compile_lowered,
     _compile_model_callback_lowering,
     _function_def_from_source,
     _lower_component_collect,
-    _lower_component_event,
-    _lower_component_predicate,
+    _lower_component_signal,
     _lower_component_process,
-    _lower_model_callback_methods_in_node,
+    _lower_owner_methods,
     _lower_model_component_refs_in_node,
     _model_lowering_namespace,
+    _owner_declaration,
 )
 from ._declarations import (
     Handle,
@@ -78,7 +75,6 @@ from ._declarations import (
     _FIELD_KINDS,
     _FieldDecl,
     _STANDARD_FIELDS,
-    Spawnable,
     class_type_hints,
 )
 from ._graph import (ProcessDAG, ProcessDAGBlock, ProcessDAGEdge,
@@ -97,47 +93,41 @@ from ._intrinsics import addressof, call_void_callback, ptr_caster
 
 _F = TypeVar("_F", bound=Callable[..., Any])
 
-_RECORDING_EVENT_FIELD = "_cimba_recording_event"
-_TRIAL_INITIALIZE_FIELD = "_cimba_trial_initialize"
-_TRIAL_ENTITIES_FIELD = "_cimba_trial_entities"
-_TRIAL_PROCESSES_FIELD = "_cimba_trial_processes"
-_TRIAL_TEARDOWN_FIELD = "_cimba_trial_teardown"
-_TRIAL_STOP_FIELD = "_cimba_trial_stop"
-_TRIAL_PROCESS_CLEANUP_FIELD = "_cimba_trial_process_cleanup"
-_TRIAL_COLLECT_FIELD = "_cimba_trial_collect"
-_PROCESS_DESCRIPTORS_FIELD = "_cimba_process_descriptors"
-_PROCESS_DESCRIPTOR_COUNT_FIELD = "_cimba_process_descriptor_count"
-_PROCESS_HANDLES_FIELD = "_cimba_process_handles"
-_PROCESS_HANDLE_COUNT_FIELD = "_cimba_process_handle_count"
-_PROCESS_CONTEXTS_FIELD = "_cimba_process_contexts"
-_HAS_SPAWNED_FIELD = "_cimba_has_spawned"
-_COLLECT_DESCRIPTORS_FIELD = "_cimba_collect_descriptors"
-_COLLECT_DESCRIPTOR_COUNT_FIELD = "_cimba_collect_descriptor_count"
-_ENTITY_DESCRIPTORS_FIELD = "_cimba_entity_descriptors"
-_ENTITY_DESCRIPTOR_COUNT_FIELD = "_cimba_entity_descriptor_count"
-_RUNTIME_TEXT_HANDLES_FIELD = "_cimba_runtime_text_handles"
+_LIFECYCLE_FIELDS = (
+    "_cimba_recording_event _cimba_trial_initialize _cimba_trial_entities "
+    "_cimba_trial_processes _cimba_trial_teardown _cimba_trial_stop "
+    "_cimba_trial_process_cleanup _cimba_trial_collect "
+    "_cimba_process_descriptors _cimba_process_descriptor_count "
+    "_cimba_process_handles _cimba_process_handle_count "
+    "_cimba_process_contexts _cimba_has_spawned _cimba_collect_descriptors "
+    "_cimba_collect_descriptor_count _cimba_entity_descriptors "
+    "_cimba_entity_descriptor_count _cimba_runtime_text_handles"
+).split()
+(
+    _RECORDING_EVENT_FIELD,
+    _TRIAL_INITIALIZE_FIELD,
+    _TRIAL_ENTITIES_FIELD,
+    _TRIAL_PROCESSES_FIELD,
+    _TRIAL_TEARDOWN_FIELD,
+    _TRIAL_STOP_FIELD,
+    _TRIAL_PROCESS_CLEANUP_FIELD,
+    _TRIAL_COLLECT_FIELD,
+    _PROCESS_DESCRIPTORS_FIELD,
+    _PROCESS_DESCRIPTOR_COUNT_FIELD,
+    _PROCESS_HANDLES_FIELD,
+    _PROCESS_HANDLE_COUNT_FIELD,
+    _PROCESS_CONTEXTS_FIELD,
+    _HAS_SPAWNED_FIELD,
+    _COLLECT_DESCRIPTORS_FIELD,
+    _COLLECT_DESCRIPTOR_COUNT_FIELD,
+    _ENTITY_DESCRIPTORS_FIELD,
+    _ENTITY_DESCRIPTOR_COUNT_FIELD,
+    _RUNTIME_TEXT_HANDLES_FIELD,
+) = _LIFECYCLE_FIELDS
 
 _LIFECYCLE_ABI_FIELDS = [
     *_STANDARD_FIELDS,
-    (_RECORDING_EVENT_FIELD, "<i8"),
-    (_TRIAL_INITIALIZE_FIELD, "<i8"),
-    (_TRIAL_ENTITIES_FIELD, "<i8"),
-    (_TRIAL_PROCESSES_FIELD, "<i8"),
-    (_TRIAL_TEARDOWN_FIELD, "<i8"),
-    (_TRIAL_STOP_FIELD, "<i8"),
-    (_TRIAL_PROCESS_CLEANUP_FIELD, "<i8"),
-    (_TRIAL_COLLECT_FIELD, "<i8"),
-    (_PROCESS_DESCRIPTORS_FIELD, "<i8"),
-    (_PROCESS_DESCRIPTOR_COUNT_FIELD, "<i8"),
-    (_PROCESS_HANDLES_FIELD, "<i8"),
-    (_PROCESS_HANDLE_COUNT_FIELD, "<i8"),
-    (_PROCESS_CONTEXTS_FIELD, "<i8"),
-    (_HAS_SPAWNED_FIELD, "<i8"),
-    (_COLLECT_DESCRIPTORS_FIELD, "<i8"),
-    (_COLLECT_DESCRIPTOR_COUNT_FIELD, "<i8"),
-    (_ENTITY_DESCRIPTORS_FIELD, "<i8"),
-    (_ENTITY_DESCRIPTOR_COUNT_FIELD, "<i8"),
-    (_RUNTIME_TEXT_HANDLES_FIELD, "<i8"),
+    *((name, "<i8") for name in _LIFECYCLE_FIELDS),
 ]
 _LIFECYCLE_ABI_DTYPE = np.dtype(_LIFECYCLE_ABI_FIELDS)
 _LIFECYCLE_ABI_RECORD = from_dtype(_LIFECYCLE_ABI_DTYPE)
@@ -153,31 +143,49 @@ def _runtime_text_handle(table_address, slot):
 
 
 _PROCESS_DESCRIPTOR_WIDTH = 8
-_PD_CALLBACK = 0
-_PD_NAME = 1
-_PD_ALLOC_SIZE = 2
-_PD_PRIORITY = 3
-_PD_COPIES = 4
-_PD_INDEXED = 5
-_PD_HANDLE_START = 6
-_PD_DEST_OFFSET = 7
+(
+    _PD_CALLBACK,
+    _PD_NAME,
+    _PD_ALLOC_SIZE,
+    _PD_PRIORITY,
+    _PD_COPIES,
+    _PD_INDEXED,
+    _PD_HANDLE_START,
+    _PD_DEST_OFFSET,
+) = range(_PROCESS_DESCRIPTOR_WIDTH)
 
 _ENTITY_DESCRIPTOR_WIDTH = 5
-_ED_KIND = 0
-_ED_NAME = 1
-_ED_CAPACITY_MODE = 2
-_ED_CAPACITY = 3
-_ED_DEST_OFFSET = 4
+(_ED_KIND, _ED_NAME, _ED_CAPACITY_MODE, _ED_CAPACITY, _ED_DEST_OFFSET) = range(
+    _ENTITY_DESCRIPTOR_WIDTH
+)
+(
+    _ENTITY_BUFFER,
+    _ENTITY_RESOURCE,
+    _ENTITY_RESOURCEPOOL,
+    _ENTITY_OBJECTQUEUE,
+    _ENTITY_DATASET,
+    _ENTITY_CONDITION,
+    _ENTITY_PRIORITYQUEUE,
+) = range(1, 8)
+_CAPACITY_CONSTANT, _CAPACITY_FIELD = range(2)
 
-_ENTITY_BUFFER = 1
-_ENTITY_RESOURCE = 2
-_ENTITY_RESOURCEPOOL = 3
-_ENTITY_OBJECTQUEUE = 4
-_ENTITY_DATASET = 5
-_ENTITY_CONDITION = 6
-_ENTITY_PRIORITYQUEUE = 7
-_CAPACITY_CONSTANT = 0
-_CAPACITY_FIELD = 1
+
+@njit(inline="always")
+def _runtime_entity_table(vtrl):
+    env = carray(vtrl, 1)[0]
+    count = env[_ENTITY_DESCRIPTOR_COUNT_FIELD]
+    descriptors = carray(
+        _INT64_FROM_ADDRESS(env[_ENTITY_DESCRIPTORS_FIELD]),
+        max(1, count) * _ENTITY_DESCRIPTOR_WIDTH,
+    )
+    return env, addressof(vtrl), count, descriptors
+
+
+@njit(inline="always")
+def _runtime_entity_handle(self_addr, descriptors, base):
+    return carray(
+        _INT64_FROM_ADDRESS(self_addr + descriptors[base + _ED_DEST_OFFSET]), 1
+    )[0]
 
 
 # Offset of derived-struct fields inside an extended process allocation:
@@ -294,13 +302,7 @@ def _runtime_trial_collect(vtrl):
 
 def _runtime_trial_entities(vtrl):
     """Create model entities from layout-independent runtime descriptors."""
-    env = carray(vtrl, 1)[0]
-    self_addr = addressof(vtrl)
-    count = env[_ENTITY_DESCRIPTOR_COUNT_FIELD]
-    descriptors = carray(
-        _INT64_FROM_ADDRESS(env[_ENTITY_DESCRIPTORS_FIELD]),
-        max(1, count) * _ENTITY_DESCRIPTOR_WIDTH,
-    )
+    env, self_addr, count, descriptors = _runtime_entity_table(vtrl)
     for index in range(count):
         base = index * _ENTITY_DESCRIPTOR_WIDTH
         kind = descriptors[base + _ED_KIND]
@@ -346,20 +348,11 @@ def _runtime_recording_event(subject, obj):
     if obj == 2:
         call_void_callback(env[_TRIAL_STOP_FIELD], subject)
         return
-    self_addr = addressof(subject)
-    count = env[_ENTITY_DESCRIPTOR_COUNT_FIELD]
-    descriptors = carray(
-        _INT64_FROM_ADDRESS(env[_ENTITY_DESCRIPTORS_FIELD]),
-        max(1, count) * _ENTITY_DESCRIPTOR_WIDTH,
-    )
+    env, self_addr, count, descriptors = _runtime_entity_table(subject)
     for index in range(count):
         base = index * _ENTITY_DESCRIPTOR_WIDTH
         kind = descriptors[base + _ED_KIND]
-        handle = carray(
-            _INT64_FROM_ADDRESS(
-                self_addr + descriptors[base + _ED_DEST_OFFSET]),
-            1,
-        )[0]
+        handle = _runtime_entity_handle(self_addr, descriptors, base)
         if obj == 0:
             if kind == _ENTITY_BUFFER:
                 _b.buffer_recording_start(handle)
@@ -409,20 +402,11 @@ def _runtime_trial_teardown(vtrl):
     env = carray(vtrl, 1)[0]
     call_void_callback(env[_TRIAL_COLLECT_FIELD], vtrl)
     call_void_callback(env[_TRIAL_PROCESS_CLEANUP_FIELD], vtrl)
-    self_addr = addressof(vtrl)
-    count = env[_ENTITY_DESCRIPTOR_COUNT_FIELD]
-    descriptors = carray(
-        _INT64_FROM_ADDRESS(env[_ENTITY_DESCRIPTORS_FIELD]),
-        max(1, count) * _ENTITY_DESCRIPTOR_WIDTH,
-    )
+    env, self_addr, count, descriptors = _runtime_entity_table(vtrl)
     for index in range(count):
         base = index * _ENTITY_DESCRIPTOR_WIDTH
         kind = descriptors[base + _ED_KIND]
-        handle = carray(
-            _INT64_FROM_ADDRESS(
-                self_addr + descriptors[base + _ED_DEST_OFFSET]),
-            1,
-        )[0]
+        handle = _runtime_entity_handle(self_addr, descriptors, base)
         if kind == _ENTITY_BUFFER:
             _b.buffer_destroy(handle)
         elif kind == _ENTITY_RESOURCE:
@@ -450,6 +434,24 @@ def _runtime_trial(vtrl):
     call_void_callback(env[_TRIAL_PROCESSES_FIELD], vtrl)
     _b.event_queue_execute()
     call_void_callback(env[_TRIAL_TEARDOWN_FIELD], vtrl)
+
+
+_LIFECYCLE_JOBS = (
+    (types.void(_LIFECYCLE_ABI_PTR, types.intp), _runtime_recording_event),
+    *(
+        (types.void(_LIFECYCLE_ABI_PTR), fn)
+        for fn in (
+            _runtime_trial_initialize,
+            _runtime_trial_entities,
+            _runtime_trial_processes,
+            _runtime_trial_teardown,
+            _runtime_trial,
+            _runtime_trial_stop,
+            _runtime_trial_process_cleanup,
+            _runtime_trial_collect,
+        )
+    ),
+)
 
 
 class _LoadedCFunc:
@@ -485,44 +487,6 @@ def _compile_cfunc_job(index: int):
         callback._library.serialize_using_object_code(),
         callback.native_name,
     )
-
-
-def _compile_cfunc_worker(connection) -> None:
-    """Serve callback indexes over a pipe in a forked compiler process."""
-    try:
-        while True:
-            index = connection.recv()
-            if index is None:
-                return
-            try:
-                connection.send((True, _compile_cfunc_job(index)))
-            except BaseException as exc:
-                connection.send((False, f"{type(exc).__name__}: {exc}"))
-                return
-    finally:
-        connection.close()
-
-
-def _compile_complexity(function: Callable[..., Any]) -> int:
-    """Estimate callback cost, including lazy Numba callees it closes over."""
-    seen: set[int] = set()
-
-    def visit(candidate) -> int:
-        py_func = getattr(candidate, "py_func", candidate)
-        if not inspect.isfunction(py_func) or id(py_func) in seen:
-            return 0
-        seen.add(id(py_func))
-        score = len(py_func.__code__.co_code)
-        if py_func.__closure__ is not None:
-            for cell in py_func.__closure__:
-                score += visit(cell.cell_contents)
-        for name in py_func.__code__.co_names:
-            value = py_func.__globals__.get(name)
-            if hasattr(value, "py_func"):
-                score += visit(value)
-        return score
-
-    return visit(function)
 
 
 def _callback_function_key(function: Callable[..., Any]) -> str:
@@ -588,21 +552,15 @@ def _callback_function_key(function: Callable[..., Any]) -> str:
 _CALLBACK_CACHE_FORMAT = 3
 _MEMORY_CALLBACK_CACHE: dict[str, Any] = {}
 _MEMORY_CALLBACK_CACHE_LOCK = threading.RLock()
-_CALLBACK_PLATFORM_KEY: str | None = None
 
 
 @dataclass
 class _CacheCounters:
     """Mutable counters shared by one compilation operation."""
 
-    memory_hits: int = 0
-    disk_hits: int = 0
+    hits: int = 0
     misses: int = 0
     writes: int = 0
-
-    @property
-    def hits(self) -> int:
-        return self.memory_hits + self.disk_hits
 
 
 def _cache_enabled() -> bool:
@@ -626,39 +584,34 @@ def _callback_cache_dir() -> Path:
     return root / "cimba" / "callbacks"
 
 
+@functools.cache
 def _callback_cache_platform_key() -> str:
     """Version and target boundary for persisted native object code."""
-    global _CALLBACK_PLATFORM_KEY
-    with _MEMORY_CALLBACK_CACHE_LOCK:
-        if _CALLBACK_PLATFORM_KEY is not None:
-            return _CALLBACK_PLATFORM_KEY
-        from llvmlite import binding as llvm
-        from numba.core import config
-        from numba.core.registry import cpu_target
+    from llvmlite import binding as llvm
+    from numba.core import config
+    from numba.core.registry import cpu_target
 
-        try:
-            cimba_version = importlib.metadata.version("cimba")
-        except importlib.metadata.PackageNotFoundError:
-            cimba_version = "source-tree"
-        values = (
-            _CALLBACK_CACHE_FORMAT,
-            cimba_version,
-            numba.__version__,
-            llvmlite.__version__,
-            np.__version__,
-            sys.implementation.cache_tag,
-            sys.byteorder,
-            platform.system(),
-            platform.machine(),
-            llvm.get_host_cpu_name(),
-            llvm.get_host_cpu_features().flatten(),
-            config.CPU_NAME,
-            config.CPU_FEATURES,
-            str(cpu_target.target_context.target_data),
-        )
-        _CALLBACK_PLATFORM_KEY = hashlib.sha256(
-            repr(values).encode()).hexdigest()
-        return _CALLBACK_PLATFORM_KEY
+    try:
+        cimba_version = importlib.metadata.version("cimba")
+    except importlib.metadata.PackageNotFoundError:
+        cimba_version = "source-tree"
+    values = (
+        _CALLBACK_CACHE_FORMAT,
+        cimba_version,
+        numba.__version__,
+        llvmlite.__version__,
+        np.__version__,
+        sys.implementation.cache_tag,
+        sys.byteorder,
+        platform.system(),
+        platform.machine(),
+        llvm.get_host_cpu_name(),
+        llvm.get_host_cpu_features().flatten(),
+        config.CPU_NAME,
+        config.CPU_FEATURES,
+        str(cpu_target.target_context.target_data),
+    )
+    return hashlib.sha256(repr(values).encode()).hexdigest()
 
 
 def _callback_cache_key(signature: Any, function: Callable[..., Any]) -> str:
@@ -680,7 +633,7 @@ def _load_cached_callback(key: str, counters: _CacheCounters) -> Any | None:
     with _MEMORY_CALLBACK_CACHE_LOCK:
         callback = _MEMORY_CALLBACK_CACHE.get(key)
     if callback is not None:
-        counters.memory_hits += 1
+        counters.hits += 1
         return callback
     try:
         path = _callback_cache_path(key)
@@ -701,7 +654,7 @@ def _load_cached_callback(key: str, counters: _CacheCounters) -> Any | None:
         return None
     with _MEMORY_CALLBACK_CACHE_LOCK:
         _MEMORY_CALLBACK_CACHE[key] = callback
-    counters.disk_hits += 1
+    counters.hits += 1
     return callback
 
 
@@ -752,10 +705,8 @@ def _store_cached_callback(
 
 def _compile_uncached_cfuncs(
     jobs: Sequence[tuple[Any, Callable[..., Any]]],
-    *,
-    warm_parent: bool = True,
 ) -> list[Any]:
-    """Compile independent callbacks concurrently when ``fork`` is available."""
+    """Compile callbacks in a fork pool, with a portable serial fallback."""
     if len(jobs) < 2:
         return [_compile_parallel_cfunc(signature, function)
                 for signature, function in jobs]
@@ -772,108 +723,33 @@ def _compile_uncached_cfuncs(
     except (ImportError, ValueError):
         return [_compile_parallel_cfunc(signature, function)
                 for signature, function in jobs]
-
     # Populate Numba's registries and native runtime before forking.  These
     # tables are copy-on-write state, so every compiler worker can inherit the
     # setup instead of repeating it on its first callback.
+
     from numba.core.registry import cpu_target
     from numba.core.runtime import nrt
     cpu_target.target_context.refresh()
     nrt.rtsys.initialize(cpu_target.target_context)
     cpu_target.target_context.codegen()
 
-    callbacks: list[Any] = [None] * len(jobs)
-    use_warm_parent = warm_parent and len(jobs) > 4
-    warm_index = -1
-    warm_signature = None
-    warm_function = None
-    if use_warm_parent:
-        # A cfunc's first compiler initialization dominates small callbacks.
-        # Give the parent the cheapest job while workers take substantive work.
-        warm_index = min(
-            range(len(jobs)),
-            key=lambda index: _compile_complexity(jobs[index][1]),
-        )
-        warm_signature, warm_function = jobs[warm_index]
-        remaining = [
-            index for index in range(len(jobs)) if index != warm_index]
-    else:
-        remaining = list(range(len(jobs)))
-    # Start expensive-looking jobs first so the pipe scheduler can fill gaps
-    # with short callbacks as workers finish.
-    remaining.sort(
-        key=lambda index: _compile_complexity(jobs[index][1]),
-        reverse=True,
-    )
-
     global _PARALLEL_CFUNC_JOBS
-    _PARALLEL_CFUNC_JOBS = tuple(jobs[index] for index in remaining)
-    # Cap concurrent LLVM instances to control memory and CPU contention. The
-    # parent counts as the sixth compiler when it participates.
-    worker_limit = 5 if use_warm_parent else 6
-    worker_count = min(worker_limit, len(remaining))
-    connections = []
-    processes = []
-    completed = False
+    _PARALLEL_CFUNC_JOBS = tuple(jobs)
     try:
-        for _ in range(worker_count):
-            parent_connection, child_connection = context.Pipe()
-            process = context.Process(
-                target=_compile_cfunc_worker,
-                args=(child_connection,),
-            )
-            process.start()
-            child_connection.close()
-            connections.append(parent_connection)
-            processes.append(process)
-
-        next_job = worker_count
-        for connection, index in zip(connections, range(worker_count)):
-            connection.send(index)
-
-        if use_warm_parent:
-            assert warm_signature is not None and warm_function is not None
-            callbacks[warm_index] = _compile_parallel_cfunc(
-                warm_signature, warm_function)
-
-        serialized = []
-        active = set(connections)
-        from multiprocessing.connection import wait
-        while active:
-            for connection in wait(active):
-                ok, payload = connection.recv()
-                if not ok:
-                    raise RuntimeError(
-                        f"parallel callback compilation failed: {payload}")
-                serialized.append(payload)
-                if next_job < len(remaining):
-                    connection.send(next_job)
-                    next_job += 1
-                else:
-                    connection.send(None)
-                    active.remove(connection)
-        completed = True
+        with context.Pool(processes=min(6, len(jobs))) as pool:
+            serialized = pool.map(_compile_cfunc_job, range(len(jobs)))
     finally:
-        for connection in connections:
-            connection.close()
-        if not completed:
-            for process in processes:
-                if process.is_alive():
-                    process.terminate()
-        for process in processes:
-            process.join()
         _PARALLEL_CFUNC_JOBS = ()
+    callbacks: list[Any] = [None] * len(jobs)
     for local_index, state, native_name in serialized:
         library = _load_compiled_library(state)
-        callbacks[remaining[local_index]] = _LoadedCFunc(
-            library, native_name, state)
+        callbacks[local_index] = _LoadedCFunc(library, native_name, state)
     return callbacks
 
 
 def _compile_cfuncs(
     jobs: Sequence[tuple[Any, Callable[..., Any]]],
     *,
-    warm_parent: bool = True,
     cache_counters: _CacheCounters | None = None,
 ) -> list[Any]:
     """Load content-addressed callbacks and compile only cache misses."""
@@ -897,8 +773,7 @@ def _compile_cfuncs(
         else:
             callbacks[index] = callback
     if missing_jobs:
-        compiled = _compile_uncached_cfuncs(
-            missing_jobs, warm_parent=warm_parent)
+        compiled = _compile_uncached_cfuncs(missing_jobs)
         for key, callback in zip(missing_keys, compiled):
             for index in missing_indices[key]:
                 callbacks[index] = callback
@@ -1025,11 +900,14 @@ class _ProcDecl:
 
 
 @dataclass(frozen=True)
-class _PredicateDecl:
+class _BoundCallbackDecl:
+    """A predicate or event callback bound to a record field."""
+
     name: str
     fn: Callable[..., Any]
     field: str
     index: int | None = None
+    takes_data: bool = False
 
     @property
     def key(self) -> str | tuple[str, int]:
@@ -1037,26 +915,17 @@ class _PredicateDecl:
 
     @property
     def label(self) -> str:
-        return (self.field if self.index is None
-                else f"{self.field}[{self.index}]")
+        return self.field if self.index is None else f"{self.field}[{self.index}]"
 
 
 @dataclass(frozen=True)
-class _EventDecl:
+class _CFuncJob:
+    category: str
     name: str
-    fn: Callable[..., Any]
-    field: str
-    takes_data: bool
-    index: int | None = None
-
-    @property
-    def key(self) -> str | tuple[str, int]:
-        return self.field if self.index is None else (self.field, self.index)
-
-    @property
-    def label(self) -> str:
-        return (self.field if self.index is None
-                else f"{self.field}[{self.index}]")
+    key: Any
+    signature: Any
+    function: Callable[..., Any]
+    process: _ProcDecl | None = None
 
 
 @dataclass(frozen=True)
@@ -1120,29 +989,7 @@ class _CompiledCallbackPlan:
     extras: tuple[Any, ...]
 
 
-class _Compiled(TypedDict):
-    """Artifacts of Model._compile(), kept alive for the model's lifetime.
-    The callables are Numba cfunc/dispatcher objects (untyped upstream)."""
-
-    trial: Any
-    events: tuple[Any, ...]
-    procs: dict[str, Any]
-    preds: dict[str, Any]
-    user_events: dict[str, Any]
-    collect_callbacks: dict[int, Any]
-    collect_descriptors: np.ndarray
-    process_descriptors: np.ndarray
-    process_handle_count: int
-    entity_descriptors: np.ndarray
-    entity_descriptor_count: int
-    runtime_text_handles: np.ndarray
-    #: per-spawn-descriptor arrays sim.spawn() reads:
-    #: [cfunc address, name cstring, allocation size]
-    spawns: dict[str, np.ndarray]
-    #: (spawn descriptor field, optional shaped-field index, process name)
-    #: assignments applied to the experiment table.
-    spawn_assignments: tuple[tuple[str, int | None, str], ...]
-    dtype: np.dtype
+type _Compiled = dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -1329,27 +1176,37 @@ def _as_trace_array_grid(value: Any, n_trials: int, slots: int,
                          name: str) -> list[list[np.ndarray]]:
     arr = np.ascontiguousarray(value, dtype=np.float64)
     if arr.ndim == 1:
-        return [[arr for _ in range(slots)] for _ in range(n_trials)]
-    if arr.ndim == 2:
-        if arr.shape[0] == slots:
-            rows = [np.ascontiguousarray(arr[i])
-                    for i in range(slots)]
-            return [[rows[j] for j in range(slots)]
-                    for _ in range(n_trials)]
-        if arr.shape[0] == n_trials:
-            rows = [np.ascontiguousarray(arr[i])
-                    for i in range(n_trials)]
-            return [[rows[i] for _ in range(slots)]
-                    for i in range(n_trials)]
+        grid = np.broadcast_to(arr, (n_trials, slots, arr.size))
+    elif arr.ndim == 2 and arr.shape[0] == slots:
+        grid = np.broadcast_to(arr, (n_trials, *arr.shape))
+    elif arr.ndim == 2 and arr.shape[0] == n_trials:
+        grid = np.broadcast_to(arr[:, None, :], (n_trials, slots, arr.shape[1]))
+    elif arr.ndim == 3 and arr.shape[:2] == (n_trials, slots):
+        grid = arr
+    else:
         raise ValueError(_trace_grid_shape_error(name, n_trials, slots))
-    if arr.ndim == 3:
-        if arr.shape[0] != n_trials or arr.shape[1] != slots:
-            raise ValueError(_trace_grid_shape_error(name, n_trials, slots))
-        return [
-            [np.ascontiguousarray(arr[i, j]) for j in range(slots)]
-            for i in range(n_trials)
-        ]
-    raise ValueError(_trace_grid_shape_error(name, n_trials, slots))
+    return [[np.ascontiguousarray(row) for row in trial] for trial in grid]
+
+
+def _trace_slot_rows(
+    value: Any, slots: int, name: str, context: str
+) -> list[np.ndarray]:
+    try:
+        values = list(value)
+    except TypeError as exc:
+        raise ValueError(
+            f"trace '{name}': expected {slots} component rows for {context}"
+        ) from exc
+    if len(values) != slots:
+        raise ValueError(
+            f"trace '{name}': expected {slots} component rows for {context}"
+        )
+    return [
+        _as_single_trace_row(
+            item, _trace_slot_name(name, slot), f"{context}, component {slot}"
+        )
+        for slot, item in enumerate(values)
+    ]
 
 
 def _as_trace_sequence_grid(value: Any, seeds: np.ndarray, n_trials: int,
@@ -1372,25 +1229,13 @@ def _as_trace_sequence_grid(value: Any, seeds: np.ndarray, n_trials: int,
         ]
 
     if len(values) == n_trials:
-        rows: list[list[np.ndarray]] = []
-        for trial, trial_value in enumerate(values):
-            try:
-                slot_values = list(trial_value)
-            except TypeError as exc:
-                raise ValueError(_trace_grid_shape_error(
-                    name, n_trials, slots)) from exc
-            if len(slot_values) != slots:
-                raise ValueError(_trace_grid_shape_error(
-                    name, n_trials, slots))
-            rows.append([
-                _as_single_trace_row(
-                    slot_values[slot],
-                    _trace_slot_name(name, slot),
-                    f"trial {trial}, component {slot}",
-                )
-                for slot in range(slots)
-            ])
-        return rows
+        try:
+            return [
+                _trace_slot_rows(row, slots, name, f"trial {trial}")
+                for trial, row in enumerate(values)
+            ]
+        except ValueError as exc:
+            raise ValueError(_trace_grid_shape_error(name, n_trials, slots)) from exc
 
     raise ValueError(_trace_grid_shape_error(name, n_trials, slots))
 
@@ -1408,23 +1253,11 @@ def _generate_trace_grid(fn: Callable[..., ArrayLike], seeds: np.ndarray,
             rows.append(_as_trace_array_grid(out, 1, slots, name)[0])
         except ValueError:
             try:
-                slot_values = list(out)
-            except TypeError as exc:
+                rows.append(_trace_slot_rows(out, slots, name, f"trial {trial}"))
+            except ValueError as exc:
                 raise ValueError(
-                    f"trace '{name}': generator must return a 1-D array or "
-                    f"{slots} component rows for trial {trial}") from exc
-            if len(slot_values) != slots:
-                raise ValueError(
-                    f"trace '{name}': generator must return a 1-D array or "
-                    f"{slots} component rows for trial {trial}")
-            rows.append([
-                _as_single_trace_row(
-                    slot_values[slot],
-                    _trace_slot_name(name, slot),
-                    f"trial {trial}, component {slot}",
-                )
-                for slot in range(slots)
-            ])
+                    f"trace '{name}': generator must return a 1-D array or {slots} component rows for trial {trial}"
+                ) from exc
     return rows
 
 
@@ -1456,70 +1289,44 @@ def _runtime_text_expression(
     if isinstance(value, int) and not isinstance(value, bool):
         if _b.cstring_value(value) is not None:
             slot = register(value)
-            return (
-                ast.Call(
-                    func=ast.Name(
-                        id="_CIMBA_RUNTIME_TEXT_HANDLE", ctx=ast.Load()),
-                    args=[
-                        ast.Subscript(
-                            value=ast.Name(
-                                id=env_name, ctx=ast.Load()),
-                            slice=ast.Constant(
-                                value=_RUNTIME_TEXT_HANDLES_FIELD),
-                            ctx=ast.Load(),
-                        ),
-                        ast.Constant(value=slot),
-                    ],
-                    keywords=[],
-                ),
-                True,
-            )
+            expression = ast.parse(
+                f"_CIMBA_RUNTIME_TEXT_HANDLE({env_name}[{_RUNTIME_TEXT_HANDLES_FIELD!r}], {slot})",
+                mode="eval",
+            ).body
+            assert isinstance(expression, ast.expr)
+            return expression, True
         return ast.Constant(value=value), False
     if isinstance(value, (str, bytes, float, bool, type(None))):
         return ast.Constant(value=value), False
-    if isinstance(value, tuple):
-        items = [
-            _runtime_text_expression(item, register, env_name)
-            for item in value
-        ]
+    if isinstance(value, (tuple, list)):
+        items = [_runtime_text_expression(item, register, env_name) for item in value]
         if any(item is None for item in items):
             return None
         converted = [item for item in items if item is not None]
+        node_type = ast.Tuple if isinstance(value, tuple) else ast.List
         return (
-            ast.Tuple(elts=[item[0] for item in converted], ctx=ast.Load()),
-            any(item[1] for item in converted),
-        )
-    if isinstance(value, list):
-        items = [
-            _runtime_text_expression(item, register, env_name)
-            for item in value
-        ]
-        if any(item is None for item in items):
-            return None
-        converted = [item for item in items if item is not None]
-        return (
-            ast.List(elts=[item[0] for item in converted], ctx=ast.Load()),
+            node_type(elts=[item[0] for item in converted], ctx=ast.Load()),
             any(item[1] for item in converted),
         )
     if isinstance(value, Mapping):
-        keys = [
-            _runtime_text_expression(key, register, env_name)
-            for key in value
+        pairs = [
+            (
+                _runtime_text_expression(key, register, env_name),
+                _runtime_text_expression(item, register, env_name),
+            )
+            for key, item in value.items()
         ]
-        values = [
-            _runtime_text_expression(item, register, env_name)
-            for item in value.values()
-        ]
-        if any(item is None for item in (*keys, *values)):
+        if any(key is None or item is None for key, item in pairs):
             return None
-        converted_keys = [item for item in keys if item is not None]
-        converted_values = [item for item in values if item is not None]
+        converted = [
+            (key, item) for key, item in pairs if key is not None and item is not None
+        ]
         return (
             ast.Dict(
-                keys=[item[0] for item in converted_keys],
-                values=[item[0] for item in converted_values],
+                keys=[key[0] for key, _item in converted],
+                values=[item[0] for _key, item in converted],
             ),
-            any(item[1] for item in (*converted_keys, *converted_values)),
+            any(key[1] or item[1] for key, item in converted),
         )
     return None
 
@@ -1714,7 +1521,7 @@ def _build_result_namespace(
     )
 
 
-class Model(_CallbackOwner, Generic[_ExperimentResultT]):
+class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
     """A simulation model. Subclass it and declare the root environment fields as
     annotations (Param, Output, Queue, Resource, Pool, Store, Dataset,
     Condition, State, Predicate) -- model callbacks use their first argument,
@@ -1730,7 +1537,7 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
     cooldown_s: float
     seed: int
 
-    _source: str
+    _validate_legacy_annotations = True
     __cimba_precompile__ = "eager"
     _cimba_callback_plan: CompilationPlan | None = None
     _cimba_callback_compiled: _CompiledCallbackPlan | None = None
@@ -1739,11 +1546,6 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        for name, annotation in vars(cls).get("__annotations__", {}).items():
-            if annotation is Spawnable:
-                raise ValueError(
-                    f"field '{name}': sim.Spawnable has been replaced by "
-                    "@sim.process(spawnable=True)")
         mode = getattr(cls, "__cimba_precompile__", "eager")
         if mode not in {"eager", "lazy", "explicit"}:
             raise ValueError(
@@ -1780,10 +1582,13 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
             for n, cap in _as_capacity_dict(capacities).items():
                 decls.add(_FieldDecl(n, _FIELD_KINDS[kind_name],
                                      capacity=cap))
-        _bind_callback_fields(
-            type(self), decls, owner="model",
+        type(self)._bind_callbacks(
+            decls,
+            owner="model",
             protected=frozenset(
-                name for name in vars(Model) if not name.startswith("_")))
+                name for name in vars(Model) if not name.startswith("_")
+            ),
+        )
         self._decls = decls
 
         # Backwards-compatible views of the declarations, by kind
@@ -1794,36 +1599,39 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
             if field.default is not _MISSING
         }
         self.outputs = decls.names("output")
-        self.queues = {f.name: f.capacity for f in decls.by_kind("queue")}
+        self.queues = decls.values("queue", attribute="capacity")
         self.resources = decls.names("resource")
-        self.pools = {f.name: f.capacity for f in decls.by_kind("pool")}
-        self.stores = {f.name: f.capacity for f in decls.by_kind("store")}
+        self.pools = decls.values("pool", attribute="capacity")
+        self.stores = decls.values("store", attribute="capacity")
         self.datasets = decls.names("dataset")
         self.conditions = decls.names("condition")
         self.state = decls.names("state")
         self.float_state: list[str] = decls.names("fstate")
         self.traces: list[str] = decls.names("trace")
-        self.pqueues: dict[str, int] = {
-            f.name: f.count for f in decls.by_kind("pqueues")}
+        self.pqueues: dict[str, int] = decls.values("pqueues", attribute="count")
         #: declared entity field name -> native binding prefix, for fields
         #: whose ``.history`` compiles to a native timeseries lookup.
-        self.history_fields: dict[str, str] = {
-            f.name: f.kind.binding
-            for f in decls.by_kind("queue", "resource", "pool", "store",
-                                   "pqueues")}
+        self.history_fields: dict[str, str] = decls.values(
+            "queue", "resource", "pool", "store", "pqueues", attribute="kind.binding"
+        )
         self._history_captures: dict[str, HistoryCaptureSpec] = {}
         self._dataset_captures: dict[str, HistoryCaptureSpec] = {}
-        self.entity_fields: dict[str, str] = {
-            f.name: f.kind.name
-            for f in decls.by_kind("queue", "resource", "pool", "store",
-                                   "pqueues", "condition", "event")}
+        self.entity_fields: dict[str, str] = decls.values(
+            "queue",
+            "resource",
+            "pool",
+            "store",
+            "pqueues",
+            "condition",
+            "event",
+            attribute="kind.name",
+        )
         self._predicate_fields: list[str] = decls.names("predicate")
         self._event_fields: list[str] = decls.names("event")
         self._process_fields: list[str] = decls.names("processes")
         self._spawnable_fields: list[str] = decls.names("spawnable")
-        self._component_decls: list[_ComponentDecl] = decls.components
-        self._component_collection_decls: list[_ComponentDecl] = \
-            decls.component_collections
+        self._component_decls: list[_OwnerDecl] = decls.components
+        self._component_collection_decls: list[_OwnerDecl] = decls.component_collections
         self._field_shapes: dict[str, tuple[int, ...]] = {
             f.name: f.shape for f in decls.fields.values()
             if f.shape is not None}
@@ -1875,8 +1683,8 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
                                  "a declared param")
         self._seen = seen
         self._processes: list[_ProcDecl] = []
-        self._predicates: list[_PredicateDecl] = []
-        self._events: list[_EventDecl] = []
+        self._predicates: list[_BoundCallbackDecl] = []
+        self._events: list[_BoundCallbackDecl] = []
         self._collect: Callable[..., Any] | None = None
         # (lowered collect, instance count); count > 1 collects take the
         # instance index as their second argument
@@ -1885,20 +1693,22 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
         self._callback_cache_stats = CompilationCacheStats()
         self._runtime_text_handles: list[int] = []
         self._runtime_text_slots: dict[str, int] = {}
-        self._component_functions = _build_component_functions(
-            self._component_roots.values())
-        scalar_function_fields = {name for name, _format in _STANDARD_FIELDS}
-        scalar_function_fields.update(
-            field.name for field in decls.by_kind(
-                "param", "output", "state", "fstate"))
-        self._model_functions = _build_model_functions(
-            type(self), model_name=self.name,
-            component_roots=self._component_roots,
-            component_functions=self._component_functions,
-            scalar_fields=scalar_function_fields)
+        self._owner_decl = _owner_declaration(type(self), decls)
+        self._functions = _build_functions((self._owner_decl,))
+        # Retained as a private compatibility view for tooling/tests that
+        # inspect component helpers; lowering itself has one function table.
+        self._component_functions = {
+            name: spec
+            for name, spec in self._functions.items()
+            if not spec.decl.owner_root
+        }
         self._lowering_context = _CallbackLoweringContext(
-            self.datasets, self.history_fields, self.entity_fields,
-            self._component_functions, self._model_functions)
+            self.datasets,
+            self.history_fields,
+            self.entity_fields,
+            self._owner_decl,
+            self._functions,
+        )
         self._bind_components()
         self._register_component_processes()
         self._register_model_callbacks()
@@ -1907,23 +1717,22 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
             self._ensure_class_precompiled()
 
     def _bind_components(self) -> None:
-        for decl in self._component_decls:
-            component = copy.copy(decl.instances[0])
-            self._components[decl.name] = component
-            self._component_bindings[decl.name] = (component,)
-            setattr(self, decl.name, component)
-            self._bind_component_metadata(component, decl.name)
-            self._bind_component_children(decl, (component,))
-        for decl in self._component_collection_decls:
-            components = tuple(copy.copy(template)
-                               for template in decl.instances)
-            self._component_collections[decl.name] = components
+        for decl in self._component_roots.values():
+            components = tuple(copy.copy(item) for item in decl.instances)
             self._component_bindings[decl.name] = components
-            setattr(self, decl.name, list(components))
+            if decl.collection:
+                self._component_collections[decl.name] = components
+                setattr(self, decl.name, list(components))
+            else:
+                self._components[decl.name] = components[0]
+                setattr(self, decl.name, components[0])
             for index, component in enumerate(components):
                 self._bind_component_metadata(
-                    component, f"{decl.name}[{index}]",
-                    collection=decl.name, index=index)
+                    component,
+                    decl.process_names[index],
+                    collection=decl.name if decl.collection else None,
+                    index=index if decl.collection else None,
+                )
             self._bind_component_children(decl, components)
 
     @classmethod
@@ -1962,21 +1771,6 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
         callback_dtype = self.dtype
         rec = from_dtype(callback_dtype)
         trial_ptr = types.CPointer(rec)
-        lifecycle_jobs = (
-            (types.void(_LIFECYCLE_ABI_PTR, types.intp),
-             _runtime_recording_event),
-            (types.void(_LIFECYCLE_ABI_PTR),
-             _runtime_trial_initialize),
-            (types.void(_LIFECYCLE_ABI_PTR), _runtime_trial_entities),
-            (types.void(_LIFECYCLE_ABI_PTR), _runtime_trial_processes),
-            (types.void(_LIFECYCLE_ABI_PTR), _runtime_trial_teardown),
-            (types.void(_LIFECYCLE_ABI_PTR), _runtime_trial),
-            (types.void(_LIFECYCLE_ABI_PTR), _runtime_trial_stop),
-            (types.void(_LIFECYCLE_ABI_PTR),
-             _runtime_trial_process_cleanup),
-            (types.void(_LIFECYCLE_ABI_PTR), _runtime_trial_collect),
-        )
-        processes = self._processes[:count]
         collect_jobs = tuple(
             (
                 types.void(trial_ptr),
@@ -1985,44 +1779,53 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
             for index, (fn, instances) in enumerate(
                 self._collects)
         )
-        functions = (
-            *((f"model:{name}", spec.helper)
-              for name, spec in self._model_functions.items()),
-            *((spec.graph_name, spec.helper)
-              for spec in self._component_functions.values()),
-        )
         return CompilationPlan(
             model_name=self.name,
             callback_dtype=callback_dtype,
-            process_names=tuple(process.name for process in processes),
-            process_keys=tuple(
-                _callback_function_key(process.fn) for process in processes),
-            predicate_names=tuple(callback.name
-                                  for callback in self._predicates),
-            predicate_keys=tuple(
-                f"{callback.label}:{_callback_function_key(callback.fn)}"
-                for callback in self._predicates),
-            event_names=tuple(callback.name for callback in self._events),
-            event_keys=tuple(
-                f"{callback.label}:{callback.takes_data}:"
-                f"{_callback_function_key(callback.fn)}"
-                for callback in self._events),
-            function_names=tuple(name for name, _helper in functions),
-            function_keys=tuple(
-                _callback_function_key(helper)
-                for _name, helper in functions),
-            collect_keys=tuple(
-                f"{_callback_function_key(fn)}:{instances}"
-                for fn, instances in self._collects
-            ),
+            **self._callback_plan_fields(count),
             lifecycle_key=self._aot_lifecycle_key(),
-            callback_count=(count + len(lifecycle_jobs)
-                            + len(self._predicates) + len(self._events)
-                            + len(collect_jobs)),
+            callback_count=(
+                count
+                + len(_LIFECYCLE_JOBS)
+                + len(self._predicates)
+                + len(self._events)
+                + len(collect_jobs)
+            ),
             _record_type=rec,
-            _lifecycle_jobs=(*lifecycle_jobs, *collect_jobs),
+            _lifecycle_jobs=(*_LIFECYCLE_JOBS, *collect_jobs),
             _owner=self,
         )
+
+    def _callback_plan_fields(
+        self, process_count: int | None = None
+    ) -> dict[str, tuple[str, ...]]:
+        processes = self._processes[:process_count]
+        functions = tuple(
+            (spec.graph_name, spec.helper) for spec in self._functions.values()
+        )
+        return {
+            "process_names": tuple(item.name for item in processes),
+            "process_keys": tuple(
+                _callback_function_key(item.fn) for item in processes
+            ),
+            "predicate_names": tuple(item.name for item in self._predicates),
+            "predicate_keys": tuple(
+                f"{item.label}:{_callback_function_key(item.fn)}"
+                for item in self._predicates
+            ),
+            "event_names": tuple(item.name for item in self._events),
+            "event_keys": tuple(
+                f"{item.label}:{item.takes_data}:{_callback_function_key(item.fn)}"
+                for item in self._events
+            ),
+            "function_names": tuple(name for name, _fn in functions),
+            "function_keys": tuple(
+                _callback_function_key(fn) for _name, fn in functions
+            ),
+            "collect_keys": tuple(
+                f"{_callback_function_key(fn)}:{count}" for fn, count in self._collects
+            ),
+        }
 
     def _ensure_class_precompiled(self, *, retry: bool = False) -> None:
         cls = type(self)
@@ -2038,22 +1841,18 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
                 cls._cimba_callback_plan = plan
                 if plan is None:
                     cls._cimba_callback_status = CompilationStatus(
-                        "unavailable",
-                        seconds=time.perf_counter() - started,
+                        "unavailable", seconds=time.perf_counter() - started
                     )
                     return
                 owner = plan._owner
-                procs, preds, events, extras = \
-                    owner._compile_callbacks(
-                        plan._record_type,
-                        plan._lifecycle_jobs,
-                        warm_parent=True,
-                        cache_counters=counters,
-                        processes=owner._processes[
-                            :owner._class_process_count],
-                        predicates=owner._predicates,
-                        events=owner._events,
-                    )
+                procs, preds, events, extras = owner._compile_callbacks(
+                    plan._record_type,
+                    plan._lifecycle_jobs,
+                    cache_counters=counters,
+                    processes=owner._processes[: owner._class_process_count],
+                    predicates=owner._predicates,
+                    events=owner._events,
+                )
                 compiled = _CompiledCallbackPlan(
                     plan,
                     tuple(procs.items()),
@@ -2093,39 +1892,10 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
         if compiled is None:
             return {}, {}, {}, {}
         plan = compiled.plan
-        count = self._class_process_count
-        if tuple(process.name for process in self._processes[:count]) \
-                != plan.process_names:
-            return {}, {}, {}, {}
-        if tuple(
-            _callback_function_key(process.fn)
-            for process in self._processes[:count]
-        ) != plan.process_keys:
-            return {}, {}, {}, {}
-        if tuple(
-            f"{callback.label}:{_callback_function_key(callback.fn)}"
-            for callback in self._predicates
-        ) != plan.predicate_keys:
-            return {}, {}, {}, {}
-        if tuple(
-            f"{callback.label}:{callback.takes_data}:"
-            f"{_callback_function_key(callback.fn)}"
-            for callback in self._events
-        ) != plan.event_keys:
-            return {}, {}, {}, {}
-        functions = (
-            *(spec.helper for spec in self._model_functions.values()),
-            *(spec.helper for spec in self._component_functions.values()),
-        )
-        if tuple(_callback_function_key(helper) for helper in functions) \
-                != plan.function_keys:
-            return {}, {}, {}, {}
-        if tuple(
-            f"{_callback_function_key(fn)}:{instances}"
-            for fn, instances in self._collects
-        ) != plan.collect_keys:
-            return {}, {}, {}, {}
-        if self.dtype != plan.callback_dtype:
+        current = self._callback_plan_fields(self._class_process_count)
+        if self.dtype != plan.callback_dtype or any(
+            getattr(plan, name) != value for name, value in current.items()
+        ):
             return {}, {}, {}, {}
         extras = (dict(enumerate(compiled.extras))
                   if self._aot_lifecycle_key() == plan.lifecycle_key else {})
@@ -2151,9 +1921,7 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
             pass
 
     def _bind_component_children(
-        self,
-        decl: _ComponentDecl,
-        parents: tuple[Component, ...],
+        self, decl: _OwnerDecl, parents: tuple[Component, ...]
     ) -> None:
         for child in decl.children:
             bound: list[Component] = []
@@ -2199,11 +1967,11 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
         ]
 
     def _register_model_callbacks(self) -> None:
-        callbacks = _callback_set(type(self))
-        for decl in callbacks.predicates:
-            self._register_predicate(decl.fn, target_field=decl.field)
-        for decl in callbacks.events:
-            self._register_event(decl.fn, target_field=decl.field)
+        callbacks = type(self)._callbacks()
+        for kind in ("predicate", "event"):
+            register = getattr(self, f"_register_{kind}")
+            for decl in getattr(callbacks, f"{kind}s"):
+                register(decl.fn, target_field=decl.field)
 
         for decl in callbacks.processes:
             spec = decl.spec
@@ -2217,7 +1985,7 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
 
     @staticmethod
     def _lower_shared_or_per_instance(
-        decl: _ComponentDecl,
+        decl: _OwnerDecl,
         lower_shared: Callable[[], Any],
         lower_instance: Callable[[int], Any],
         indices: Sequence[int] | None = None,
@@ -2230,9 +1998,7 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
                 pass
         return [(lower_instance(index), index) for index in selected]
 
-    def _register_component_decl_processes(
-        self, decl: _ComponentDecl,
-    ) -> None:
+    def _register_component_decl_processes(self, decl: _OwnerDecl) -> None:
         """Lower and register one decl's process and collect methods.
         Spawnable process methods are always per-instance -- the spawn descriptor
         is what identifies the instance at runtime."""
@@ -2244,68 +2010,65 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
         for index in range(decl.count):
             cls = decl.class_at(index)
             prefix = decl.process_names[index]
-            for callback in _callback_set(cls).predicates:
-                method_name, method, spec = callback.name, callback.fn, callback.spec
-                local_field = callback.field
-                flat_field = decl.direct_field_map[local_field]
+            for callback in (*cls._callbacks().predicates, *cls._callbacks().events):
+                flat_field = decl.direct_field_map[callback.field]
                 field_index = (
-                    decl.field_slots[local_field][index]
+                    decl.field_slots[callback.field][index]
                     if self._field_shapes.get(flat_field) is not None
                     else None
                 )
-                lowered = _lower_component_predicate(
-                    prefix, decl, method_name, method, instance_index=index,
-                    context=lowering)
-                self._register_predicate(
-                    lowered, target_field=flat_field,
-                    target_index=field_index)
-            for callback in _callback_set(cls).events:
-                method_name, method, spec = callback.name, callback.fn, callback.spec
-                local_field = callback.field
-                flat_field = decl.direct_field_map[local_field]
-                field_index = (
-                    decl.field_slots[local_field][index]
-                    if self._field_shapes.get(flat_field) is not None
-                    else None
+                lowered = _lower_component_signal(
+                    prefix,
+                    decl,
+                    callback.name,
+                    callback.fn,
+                    kind=callback.kind,
+                    instance_index=index,
+                    context=lowering,
                 )
-                lowered = _lower_component_event(
-                    prefix, decl, method_name, method, instance_index=index,
-                    context=lowering)
-                self._register_event(
-                    lowered, target_field=flat_field,
-                    target_index=field_index)
+                getattr(self, f"_register_{callback.kind}")(
+                    lowered, target_field=flat_field, target_index=field_index
+                )
 
         groups = decl.specialization_groups()
         for variant, indices in enumerate(groups):
             cls = decl.class_at(indices[0])
             group_name = (
-                decl.name if len(groups) == 1
-                else f"{decl.name}__variant_{variant}")
-            for callback in _callback_set(cls).processes:
-                method_name, method, spec = (
-                    callback.name, callback.fn, callback.spec)
+                decl.name if len(groups) == 1 else f"{decl.name}__variant_{variant}"
+            )
+            for callback in cls._callbacks().processes:
+                method_name, method, spec = (callback.name, callback.fn, callback.spec)
                 counts = tuple(
                     spec.resolve_copies(
-                        components[index],
-                        f"{decl.process_names[index]}.{method_name}")
-                    for index in indices)
+                        components[index], f"{decl.process_names[index]}.{method_name}"
+                    )
+                    for index in indices
+                )
                 process_local_field = spec.field
                 has_process_field = (
                     process_local_field is not None
                     and process_local_field in decl.field_owners
-                    and indices[0] in decl.field_owners[process_local_field])
+                    and indices[0] in decl.field_owners[process_local_field]
+                )
 
                 def lower_instance(index: int) -> Any:
                     return _lower_component_process(
-                        decl.process_names[index], decl, method_name, method,
-                        _is_struct_class, instance_index=index,
-                        context=lowering)
+                        decl.process_names[index],
+                        decl,
+                        method_name,
+                        method,
+                        _is_struct_class,
+                        instance_index=index,
+                        context=lowering,
+                    )
 
                 if spec.spawnable or (has_process_field and len(groups) > 1):
                     for position, index in enumerate(indices):
                         spawn_field = (
                             decl.direct_field_map[method_name]
-                            if spec.spawnable else None)
+                            if spec.spawnable
+                            else None
+                        )
                         spawn_index = None
                         if spawn_field is not None:
                             owners = decl.field_owners[method_name]
@@ -2313,42 +2076,59 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
                                 spawn_index = decl.field_slots[method_name][index]
                         process_field = (
                             decl.direct_field_map[process_local_field]
-                            if has_process_field else None)
+                            if has_process_field
+                            else None
+                        )
                         process_offset = (
                             decl.process_offsets[process_local_field][index]
-                            if process_field is not None else 0)
+                            if process_field is not None
+                            else 0
+                        )
                         self._register_process(
                             lower_instance(index), copies=counts[position],
                             priority=spec.priority, struct=spec.struct,
                             _spawn_field=spawn_field,
                             _spawn_index=spawn_index,
                             _process_field=process_field,
-                            _process_offset=process_offset)
+                            _process_offset=process_offset,
+                        )
                     continue
 
                 process_field = (
                     decl.direct_field_map[process_local_field]
-                    if process_local_field is not None else None)
+                    if process_local_field is not None
+                    else None
+                )
 
                 def lower_group() -> Any:
                     if len(indices) == 1:
                         return _lower_component_process(
-                            group_name, decl, method_name, method,
-                            _is_struct_class, instance_index=indices[0],
-                            context=lowering)
+                            group_name,
+                            decl,
+                            method_name,
+                            method,
+                            _is_struct_class,
+                            instance_index=indices[0],
+                            context=lowering,
+                        )
                     return _lower_component_process(
                         group_name, decl, method_name, method,
                         _is_struct_class,
                         copies_per_instance=counts,
                         instance_indices=indices,
-                        context=lowering)
+                        context=lowering,
+                    )
 
                 lowered = self._lower_shared_or_per_instance(
                     decl,
                     lower_group,
-                    (lower_instance if len(indices) > 1 or len(groups) == 1
-                     else lambda _index: lower_group()),
-                    indices)
+                    (
+                        lower_instance
+                        if len(indices) > 1 or len(groups) == 1
+                        else lambda _index: lower_group()
+                    ),
+                    indices,
+                )
                 for fn, index in lowered:
                     if index is None:
                         copies, offset = sum(counts), 0
@@ -2357,32 +2137,43 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
                         copies = counts[position]
                         offset = (
                             decl.process_offsets[process_local_field][index]
-                            if process_field is not None else 0)
+                            if process_field is not None
+                            else 0
+                        )
                     self._register_process(
                         fn, copies=copies, priority=spec.priority,
                         struct=spec.struct,
                         _process_field=process_field,
-                        _process_offset=offset)
+                        _process_offset=offset,
+                    )
 
-            for callback in _callback_set(cls).collectors:
+            for callback in cls._callbacks().collectors:
                 method_name, method = callback.name, callback.fn
                 lowered = self._lower_shared_or_per_instance(
                     decl,
                     lambda: _lower_component_collect(
-                        group_name, decl, method_name, method,
-                        per_class=True, instance_indices=indices,
-                        context=lowering),
+                        group_name,
+                        decl,
+                        method_name,
+                        method,
+                        per_class=True,
+                        instance_indices=indices,
+                        context=lowering,
+                    ),
                     lambda index: _lower_component_collect(
                         decl.process_names[index], decl, method_name, method,
                         instance_index=index,
-                        context=lowering),
-                    indices)
+                        context=lowering,
+                    ),
+                    indices,
+                )
                 for fn, index in lowered:
                     self._component_collects.append(
-                        (fn, len(indices) if index is None else 1))
+                        (fn, len(indices) if index is None else 1)
+                    )
 
     @property
-    def _component_roots(self) -> dict[str, _ComponentDecl]:
+    def _component_roots(self) -> dict[str, _OwnerDecl]:
         return {decl.name: decl
                 for decl in (*self._component_decls,
                              *self._component_collection_decls)}
@@ -2497,16 +2288,16 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
             return fn
 
         namespace = _closure_namespace(fn)
-        node, changed, called_functions = \
-            _lower_model_component_refs_in_node(
-                node, model_name=self.name,
-                component_roots=self._component_roots,
-                component_functions=context.component_functions,
-                model_functions=context.model_functions)
+        node, changed, called_functions = _lower_model_component_refs_in_node(
+            node,
+            model_name=self.name,
+            owner_decl=context.owner_decl,
+            functions=context.functions,
+        )
         if changed:
-            namespace.update(_model_lowering_namespace(
-                self._component_roots, context.component_functions,
-                context.model_functions))
+            namespace.update(
+                _model_lowering_namespace(self._component_roots, context.functions)
+            )
 
         if collect:
             node, lowered = lower_history_capture_calls(
@@ -2526,9 +2317,16 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
         entity_fields = dict(context.entities)
         if event_field is not None:
             entity_fields[event_field] = "event"
-        node, lowered = _lower_model_callback_methods_in_node(
-            node, fn, model_name=self.name, context=context,
-            entity_fields=entity_fields, namespace=namespace)
+        node, lowered = _lower_owner_methods(
+            node,
+            fn,
+            env_name=node.args.args[0].arg,
+            label=f"model '{self.name}' callback '{fn.__name__}'",
+            owner_name=self.name,
+            context=context,
+            namespace=namespace,
+            entity_fields=entity_fields,
+        )
         changed |= lowered
         node, lowered = self._lower_runtime_text_handles_in_node(
             node, namespace)
@@ -2818,7 +2616,7 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
             if key not in members:
                 members.append(key)
 
-        for spec in self._component_functions.values():
+        for spec in self._functions.values():
             function_node = ProcessDAGNode(spec.graph_name, "function")
             function_nodes[function_node.key] = function_node
             add_function_member(spec.decl.name, function_node.key)
@@ -2840,36 +2638,7 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
                 if edge not in function_edges:
                     function_edges.append(edge)
             for callee in spec.callees:
-                edge = ProcessDAGEdge(
-                    function_node.key, f"function:{callee}", "call")
-                if edge not in function_edges:
-                    function_edges.append(edge)
-
-        for spec in self._model_functions.values():
-            function_node = ProcessDAGNode(spec.graph_name, "function")
-            function_nodes[function_node.key] = function_node
-            helper = getattr(spec.helper, "py_func", spec.helper)
-            helper_node = _function_def_from_source(helper)
-            env_name = helper_node.args.args[0].arg
-            for item in ast.walk(helper_node):
-                if (not isinstance(item, ast.Attribute)
-                        or not isinstance(item.value, ast.Name)
-                        or item.value.id != env_name
-                        or item.attr not in self._decls.fields):
-                    continue
-                field_kind = self._decls.kind_of(item.attr)
-                if field_kind not in ("param", "output", "state", "fstate"):
-                    continue
-                field_node = ProcessDAGNode(item.attr, field_kind)
-                function_nodes[field_node.key] = field_node
-                edge = ProcessDAGEdge(
-                    field_node.key, function_node.key, "read")
-                if edge not in function_edges:
-                    function_edges.append(edge)
-            calls = getattr(helper, "__cimba_function_calls__", ())
-            for callee in calls:
-                edge = ProcessDAGEdge(
-                    function_node.key, f"function:{callee}", "call")
+                edge = ProcessDAGEdge(function_node.key, f"function:{callee}", "call")
                 if edge not in function_edges:
                     function_edges.append(edge)
 
@@ -2907,7 +2676,7 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
         target_field: str | None,
         target_index: int | None,
         declared_fields: Sequence[str],
-        callbacks: Sequence[_PredicateDecl | _EventDecl],
+        callbacks: Sequence[_BoundCallbackDecl],
     ) -> str:
         if target_field is None:
             if target_index is not None:
@@ -2937,49 +2706,52 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
         self._register_name(name, kind)
         return target_field
 
+    def _register_signal(
+        self, fn: _F, kind: str, target_field: str | None, target_index: int | None
+    ) -> _F:
+        name = fn.__name__
+        takes_data = False
+        if kind == "predicate":
+            _callback_arg_count(fn, (1,), "predicate functions take (self)")
+            localns = {base.__name__: base for base in type(self).__mro__}
+            if get_type_hints(fn, localns=localns).get("return") is not bool:
+                raise ValueError("predicate functions must return bool")
+        else:
+            takes_data = (
+                _callback_arg_count(
+                    fn, (1, 2), "event functions take (self) or (self, data)"
+                )
+                == 2
+            )
+        field = self._bind_callback_slot(
+            name,
+            kind,
+            target_field,
+            target_index,
+            getattr(self, f"_{kind}_fields"),
+            getattr(self, f"_{kind}s"),
+        )
+        if kind == "event":
+            self.entity_fields[field] = kind
+        fn = self._lower_model_callback(
+            fn, event_field=field if kind == "event" else None
+        )
+        getattr(self, f"_{kind}s").append(
+            _BoundCallbackDecl(name, fn, field, target_index, takes_data)
+        )
+        return fn
+
     def _register_predicate(
         self, fn: _F, *, target_field: str | None = None,
         target_index: int | None = None,
     ) -> _F:
-        """Register a condition predicate `def fn(self) -> bool`. Its
-        compiled address is published in the explicitly bound Predicate field,
-        for use with env.<cond>.wait_for(env.<name>).
-        (Without a declared field, it is published as the hidden
-        field `_pred_<name>`.)"""
-        name = fn.__name__
-        _callback_arg_count(
-            fn, (1,), "predicate functions take (self)")
-        localns = {base.__name__: base for base in type(self).__mro__}
-        if get_type_hints(fn, localns=localns).get("return") is not bool:
-            raise ValueError("predicate functions must return bool")
-        field = self._bind_callback_slot(
-            name, "predicate", target_field, target_index,
-            self._predicate_fields, self._predicates)
-        fn = self._lower_model_callback(fn)
-        self._predicates.append(_PredicateDecl(name, fn, field, target_index))
-        return fn
+        return self._register_signal(fn, "predicate", target_field, target_index)
 
     def _register_event(
         self, fn: _F, *, target_field: str | None = None,
         target_index: int | None = None,
     ) -> _F:
-        """Register a low-level event callback `def fn(self)` or
-        `def fn(self, data)` (the latter receives the int64 data word given
-        at scheduling time). Its compiled address is published in the
-        explicitly bound Event field, for use with
-        env.<name>.schedule(delay, ...). (Without a declared field, it is
-        published as the hidden field `_ev_<name>`.)"""
-        name = fn.__name__
-        nargs = _callback_arg_count(
-            fn, (1, 2), "event functions take (self) or (self, data)")
-        field = self._bind_callback_slot(
-            name, "event", target_field, target_index,
-            self._event_fields, self._events)
-        self.entity_fields[field] = "event"
-        fn = self._lower_model_callback(fn, event_field=field)
-        self._events.append(
-            _EventDecl(name, fn, field, nargs == 2, target_index))
-        return fn
+        return self._register_signal(fn, "event", target_field, target_index)
 
     def _register_collect(self, fn: _F) -> _F:
         """Register the statistics-collection function `def fn(self)`, run once at the
@@ -3013,12 +2785,6 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
         if self._compiled is not None:
             raise RuntimeError("model is already compiled")
         self._seen.add(name)
-
-    # --- Trial record layout ----------------------------------------------
-    @property
-    def _entities(self) -> list[str]:
-        return self._decls.names("queue", "resource", "pool", "store",
-                                 "dataset", "condition")
 
     def _runtime_process_descriptors(
         self,
@@ -3265,11 +3031,10 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
         precompiled_predicates: Mapping[str, Any] | None = None,
         precompiled_events: Mapping[str, Any] | None = None,
         precompiled_extra: Mapping[int, Any] | None = None,
-        warm_parent: bool | None = None,
         cache_counters: _CacheCounters | None = None,
         processes: Sequence[_ProcDecl] | None = None,
-        predicates: Sequence[_PredicateDecl] | None = None,
-        events: Sequence[_EventDecl] | None = None,
+        predicates: Sequence[_BoundCallbackDecl] | None = None,
+        events: Sequence[_BoundCallbackDecl] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], list[Any]]:
         """Compile lowered class callbacks to Cimba's native callback ABIs."""
         trial_ptr = types.CPointer(rec)
@@ -3286,11 +3051,10 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
             return pred
 
         def make_event(inner, takes_data):
-            if takes_data:
-                def ev(subject, data):
+            def ev(subject, data):
+                if takes_data:
                     inner(carray(subject, 1)[0], data)
-            else:
-                def ev(subject, data):
+                else:
                     inner(carray(subject, 1)[0])
             return ev
 
@@ -3298,18 +3062,16 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
             """Build the indexed-process adapter; workers compile its body."""
             inner = njit(p.fn)
             struct = p.struct if p.injected else None
-            if struct is None:
-                def proc(me, ctxp):
-                    pair = carray(ctxp, 2)
-                    env = carray(rec_from_addr(pair[0]), 1)[0]
+
+            def proc(me, ctxp):
+                pair = carray(ctxp, 2)
+                env = carray(rec_from_addr(pair[0]), 1)[0]
+                if struct is None:
                     inner(env, pair[1])
-                    return 0
-            else:
-                def proc(me, ctxp):
-                    pair = carray(ctxp, 2)
-                    env = carray(rec_from_addr(pair[0]), 1)[0]
+                else:
                     inner(env, pair[1], struct(me))
-                    return 0
+                return 0
+
             # The public indexed-process ABI carries an int64 context pointer,
             # not the model record type. The adapter nevertheless embeds a
             # record-specific pointer cast, so its cache identity must include
@@ -3322,72 +3084,30 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
             return proc
 
         def make_proc_direct(p):
-            """Build a non-indexed process body with the native callback ABI.
-
-            The previous path compiled the lowered process with ``njit`` and
-            then compiled a second callback whose only job was to unpack the
-            record pointer and call that dispatcher.  Non-indexed processes
-            can use the callback's record pointer directly, avoiding that
-            duplicate Numba compilation while retaining the same ABI.
-            """
+            """Build a direct non-indexed process callback."""
             fn_node = _function_def_from_source(p.fn)
             env_name = fn_node.args.args[0].arg
             body = copy.deepcopy(fn_node.body)
-            prefix = [
-                ast.Assign(
-                    targets=[ast.Name(id=env_name, ctx=ast.Store())],
-                    value=ast.Subscript(
-                        value=ast.Call(
-                            func=ast.Name(id="carray", ctx=ast.Load()),
-                            args=[ast.Name(id="ctxp", ctx=ast.Load()),
-                                  ast.Constant(value=1)],
-                            keywords=[],
-                        ),
-                        slice=ast.Constant(value=0),
-                        ctx=ast.Load(),
-                    ),
-                ),
-            ]
+            prefix = ast.parse(f"{env_name} = carray(ctxp, 1)[0]").body
             namespace = _closure_namespace(p.fn)
             namespace["carray"] = carray
             if p.injected:
                 view_name = fn_node.args.args[-1].arg
-                prefix.append(
-                    ast.Assign(
-                        targets=[ast.Name(id=view_name, ctx=ast.Store())],
-                        value=ast.Call(
-                            func=ast.Name(
-                                id="_CIMBA_STRUCT_VIEW", ctx=ast.Load()),
-                            args=[ast.Name(id="me", ctx=ast.Load())],
-                            keywords=[],
-                        ),
-                    )
-                )
+                prefix.extend(ast.parse(f"{view_name} = _CIMBA_STRUCT_VIEW(me)").body)
                 namespace["_CIMBA_STRUCT_VIEW"] = p.struct
-            wrapper = ast.FunctionDef(
-                name=f"_cimba_direct_{p.name}",
-                args=ast.arguments(
-                    posonlyargs=[],
-                    args=[ast.arg(arg="me"), ast.arg(arg="ctxp")],
-                    vararg=None,
-                    kwonlyargs=[],
-                    kw_defaults=[],
-                    kwarg=None,
-                    defaults=[],
-                ),
-                body=prefix + body + [
-                    ast.Return(value=ast.Constant(value=0))
-                ],
-                decorator_list=[],
+            wrapper = ast.parse(
+                f"def _cimba_direct_{p.name}(me, ctxp):\n    pass"
+            ).body[0]
+            assert isinstance(wrapper, ast.FunctionDef)
+            wrapper.body = prefix + body + ast.parse("return 0").body
+            return _compile_lowered(
+                wrapper,
+                filename=f"<cimba direct process '{p.name}'>",
+                fn_name=wrapper.name,
+                qualname=wrapper.name,
+                namespace=namespace,
+                like=p.fn,
             )
-            ast.fix_missing_locations(wrapper)
-            module = ast.Module(body=[wrapper], type_ignores=[])
-            ast.fix_missing_locations(module)
-            exec(
-                compile(module, f"<cimba direct process '{p.name}'>", "exec"),
-                namespace,
-            )
-            return namespace[wrapper.name]
 
         def raise_process_compile_error(p, exc):
             calls = getattr(p.fn, "__cimba_function_calls__", ())
@@ -3399,104 +3119,92 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
             raise exc
 
         proc_cfuncs = dict(precompiled_procs or {})
-        process_jobs = []
+        pred_cfuncs = dict(precompiled_predicates or {})
+        event_cfuncs = dict(precompiled_events or {})
+        extra_callbacks = [None] * len(extra_jobs)
+        for index, callback in (precompiled_extra or {}).items():
+            extra_callbacks[index] = callback
+
+        jobs: list[_CFuncJob] = []
         compile_processes = self._processes if processes is None else processes
         for p in compile_processes:
             if p.name in proc_cfuncs:
                 continue
             try:
-                if p.indexed:
-                    process_jobs.append((p, proc_sig_ix, make_proc_indexed(p)))
-                else:
-                    process_jobs.append((p, proc_sig, make_proc_direct(p)))
+                signature, function = (
+                    (proc_sig_ix, make_proc_indexed(p))
+                    if p.indexed
+                    else (proc_sig, make_proc_direct(p))
+                )
+                jobs.append(
+                    _CFuncJob("process", p.name, p.name, signature, function, p)
+                )
             except Exception as exc:
                 raise_process_compile_error(p, exc)
-        pending_extra = [
-            (index, signature, function)
-            for index, (signature, function) in enumerate(extra_jobs)
-            if index not in (precompiled_extra or {})
-        ]
-        compile_predicates = self._predicates if predicates is None \
-            else predicates
-        compile_events = self._events if events is None else events
-        predicate_jobs = [
-            (callback.name, callback.key, pred_sig,
-             make_pred(njit(callback.fn)))
-            for callback in compile_predicates
-            if callback.key not in (precompiled_predicates or {})
-        ]
-        event_jobs = [
-            (callback.name, callback.key, ev_sig,
-             make_event(njit(callback.fn), callback.takes_data))
-            for callback in compile_events
-            if callback.key not in (precompiled_events or {})
-        ]
-        all_jobs = [
-            *((signature, function)
-              for _p, signature, function in process_jobs),
-            *((signature, function)
-              for _name, _field, signature, function in predicate_jobs),
-            *((signature, function)
-              for _name, _field, signature, function in event_jobs),
-            *((signature, function)
-              for _index, signature, function in pending_extra),
-        ]
+        signal_groups = (
+            (
+                "predicate",
+                self._predicates if predicates is None else predicates,
+                pred_cfuncs,
+                pred_sig,
+                lambda item: make_pred(njit(item.fn)),
+            ),
+            (
+                "event",
+                self._events if events is None else events,
+                event_cfuncs,
+                ev_sig,
+                lambda item: make_event(njit(item.fn), item.takes_data),
+            ),
+        )
+        for category, declarations, compiled, signature, adapt in signal_groups:
+            for callback in declarations:
+                if callback.key not in compiled:
+                    jobs.append(
+                        _CFuncJob(
+                            category,
+                            callback.name,
+                            callback.key,
+                            signature,
+                            adapt(callback),
+                        )
+                    )
+        for index, (signature, function) in enumerate(extra_jobs):
+            if extra_callbacks[index] is None:
+                jobs.append(_CFuncJob("extra", str(index), index, signature, function))
 
         try:
             callbacks = _compile_cfuncs(
-                all_jobs,
-                warm_parent=(len(all_jobs) > 4
-                             if warm_parent is None else warm_parent),
+                [(job.signature, job.function) for job in jobs],
                 cache_counters=cache_counters,
             )
         except Exception:
             # Recompile in the parent so invalid user code retains its full
             # process-specific diagnostic instead of a worker traceback.
             callbacks = []
-            for p, signature, function in process_jobs:
+            for job in jobs:
                 try:
                     callbacks.append(
-                        _native_cfunc(signature)(function))
+                        _compile_parallel_cfunc(job.signature, job.function)
+                    )
                 except Exception as exc:
-                    raise_process_compile_error(p, exc)
-            for name, _field, signature, function in (
-                    *predicate_jobs, *event_jobs):
-                try:
-                    callbacks.append(
-                        _compile_parallel_cfunc(signature, function))
-                except Exception as exc:
-                    raise TypeError(
-                        f"callback '{name}' failed to compile") from exc
-            for _index, signature, function in pending_extra:
-                callbacks.append(
-                    _compile_parallel_cfunc(signature, function))
-        for (p, _signature, _function), callback in zip(
-                process_jobs, callbacks):
-            proc_cfuncs[p.name] = callback
-
-        # Predicates and events keyed by the env field that publishes
-        # their compiled address
-        offset = len(process_jobs)
-        pred_cfuncs = dict(precompiled_predicates or {})
-        pred_cfuncs.update({
-            field: callback
-            for (_name, field, _signature, _function), callback in zip(
-                predicate_jobs, callbacks[offset:])
-        })
-        offset += len(predicate_jobs)
-        event_cfuncs = dict(precompiled_events or {})
-        event_cfuncs.update({
-            field: callback
-            for (_name, field, _signature, _function), callback in zip(
-                event_jobs, callbacks[offset:])
-        })
-        offset += len(event_jobs)
-        extra_callbacks = [None] * len(extra_jobs)
-        for index, callback in (precompiled_extra or {}).items():
-            extra_callbacks[index] = callback
-        for (index, _signature, _function), callback in zip(
-                pending_extra, callbacks[offset:]):
-            extra_callbacks[index] = callback
+                    if job.process is not None:
+                        raise_process_compile_error(job.process, exc)
+                    if job.category != "extra":
+                        raise TypeError(
+                            f"callback '{job.name}' failed to compile"
+                        ) from exc
+                    raise
+        targets = {
+            "process": proc_cfuncs,
+            "predicate": pred_cfuncs,
+            "event": event_cfuncs,
+        }
+        for job, callback in zip(jobs, callbacks):
+            if job.category == "extra":
+                extra_callbacks[job.key] = callback
+            else:
+                targets[job.category][job.key] = callback
         return proc_cfuncs, pred_cfuncs, event_cfuncs, extra_callbacks
 
     @staticmethod
@@ -3511,21 +3219,7 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
         env_name = fn_node.args.args[0].arg
         namespace = _closure_namespace(fn)
         namespace["carray"] = carray
-        body: list[ast.stmt] = [
-            ast.Assign(
-                targets=[ast.Name(id=env_name, ctx=ast.Store())],
-                value=ast.Subscript(
-                    value=ast.Call(
-                        func=ast.Name(id="carray", ctx=ast.Load()),
-                        args=[ast.Name(id="ctxp", ctx=ast.Load()),
-                              ast.Constant(value=1)],
-                        keywords=[],
-                    ),
-                    slice=ast.Constant(value=0),
-                    ctx=ast.Load(),
-                ),
-            ),
-        ]
+        body = ast.parse(f"{env_name} = carray(ctxp, 1)[0]").body
         if count == 1:
             body.extend(copy.deepcopy(fn_node.body))
         else:
@@ -3535,43 +3229,25 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
                 )
             index_name = fn_node.args.args[1].arg
             loop_index = f"_cimba_collect_index_{index}"
-            body.append(ast.For(
-                target=ast.Name(id=loop_index, ctx=ast.Store()),
-                iter=ast.Call(
-                    func=ast.Name(id="range", ctx=ast.Load()),
-                    args=[ast.Constant(value=count)],
-                    keywords=[],
-                ),
-                body=[
-                    ast.Assign(
-                        targets=[ast.Name(id=index_name, ctx=ast.Store())],
-                        value=ast.Name(id=loop_index, ctx=ast.Load()),
-                    ),
-                    *copy.deepcopy(fn_node.body),
-                ],
-                orelse=[],
-            ))
-        wrapper = ast.FunctionDef(
-            name=f"_cimba_direct_collect_{index}",
-            args=ast.arguments(
-                posonlyargs=[],
-                args=[ast.arg(arg="ctxp")],
-                vararg=None,
-                kwonlyargs=[],
-                kw_defaults=[],
-                kwarg=None,
-                defaults=[],
-            ),
-            body=body,
-            decorator_list=[],
+            loop = ast.parse(
+                f"for {loop_index} in range({count}):\n    {index_name} = {loop_index}"
+            ).body[0]
+            assert isinstance(loop, ast.For)
+            loop.body.extend(copy.deepcopy(fn_node.body))
+            body.append(loop)
+        wrapper = ast.parse(f"def _cimba_direct_collect_{index}(ctxp):\n    pass").body[
+            0
+        ]
+        assert isinstance(wrapper, ast.FunctionDef)
+        wrapper.body = body
+        return _compile_lowered(
+            wrapper,
+            filename=f"<cimba direct collect {index}>",
+            fn_name=wrapper.name,
+            qualname=wrapper.name,
+            namespace=namespace,
+            like=fn,
         )
-        module = ast.Module(body=[wrapper], type_ignores=[])
-        ast.fix_missing_locations(module)
-        exec(
-            compile(module, f"<cimba direct collect {index}>", "exec"),
-            namespace,
-        )
-        return namespace[wrapper.name]
 
     def _aot_lifecycle_key(self) -> tuple[str, ...]:
         """Version key for the layout-independent lifecycle callback ABI."""
@@ -3584,28 +3260,24 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
             self._ensure_class_precompiled()
         if not self._processes:
             raise ValueError("model has no processes")
-        bound_predicates = {callback.key for callback in self._predicates}
-        unbound = []
-        for field in self._predicate_fields:
-            shape = self._field_shapes.get(field)
-            expected = ({field} if shape is None else
-                        {(field, index) for index in range(shape[0])})
-            if not expected.issubset(bound_predicates):
-                unbound.append(field)
-        if unbound:
-            raise ValueError(f"Predicate field(s) {unbound} declared but "
-                             "no @predicate of that name registered")
-        bound_events = {callback.key for callback in self._events}
-        unbound = []
-        for field in self._event_fields:
-            shape = self._field_shapes.get(field)
-            expected = ({field} if shape is None else
-                        {(field, index) for index in range(shape[0])})
-            if not expected.issubset(bound_events):
-                unbound.append(field)
-        if unbound:
-            raise ValueError(f"Event field(s) {unbound} declared but "
-                             "no @event of that name registered")
+        for kind, fields, callbacks in (
+            ("Predicate", self._predicate_fields, self._predicates),
+            ("Event", self._event_fields, self._events),
+        ):
+            bound = {callback.key for callback in callbacks}
+            unbound = [
+                field
+                for field in fields
+                if not (
+                    {field}
+                    if (shape := self._field_shapes.get(field)) is None
+                    else {(field, index) for index in range(shape[0])}
+                ).issubset(bound)
+            ]
+            if unbound:
+                raise ValueError(
+                    f"{kind} field(s) {unbound} declared but no @{kind.lower()} of that name registered"
+                )
         process_field_slots: dict[str, dict[int, int]] = {}
         for process in self._processes:
             if process.spawnable or process.process_field is None:
@@ -3675,40 +3347,25 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
         ]
         native_process_names = _native_names(
             process.name for process in self._processes)
-        self._source = "# fixed cimba lifecycle ABI v2"
 
         aot_procs, aot_preds, aot_events, precompiled_extra = \
             self._aot_class_callbacks()
         cache_counters = _CacheCounters()
-        proc_cfuncs, pred_cfuncs, event_cfuncs, lifecycle = \
-            self._compile_callbacks(
-                rec,
-                [
-                    (types.void(_LIFECYCLE_ABI_PTR, types.intp),
-                     _runtime_recording_event),
-                    (types.void(_LIFECYCLE_ABI_PTR),
-                     _runtime_trial_initialize),
-                    (types.void(_LIFECYCLE_ABI_PTR),
-                     _runtime_trial_entities),
-                    (types.void(_LIFECYCLE_ABI_PTR),
-                     _runtime_trial_processes),
-                    (types.void(_LIFECYCLE_ABI_PTR),
-                     _runtime_trial_teardown),
-                    (types.void(_LIFECYCLE_ABI_PTR), _runtime_trial),
-                    (types.void(_LIFECYCLE_ABI_PTR), _runtime_trial_stop),
-                    (types.void(_LIFECYCLE_ABI_PTR),
-                     _runtime_trial_process_cleanup),
-                    (types.void(_LIFECYCLE_ABI_PTR),
-                     _runtime_trial_collect),
-                    *((types.void(trial_ptr), function)
-                      for _index, function in direct_collects),
-                ],
-                aot_procs,
-                aot_preds,
-                aot_events,
-                precompiled_extra,
-                cache_counters=cache_counters,
-            )
+        proc_cfuncs, pred_cfuncs, event_cfuncs, lifecycle = self._compile_callbacks(
+            rec,
+            [
+                *_LIFECYCLE_JOBS,
+                *(
+                    (types.void(trial_ptr), function)
+                    for _index, function in direct_collects
+                ),
+            ],
+            aot_procs,
+            aot_preds,
+            aot_events,
+            precompiled_extra,
+            cache_counters=cache_counters,
+        )
         self._callback_cache_stats = CompilationCacheStats(
             hits=cache_counters.hits,
             misses=cache_counters.misses,
@@ -3856,15 +3513,8 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
         trials["warmup_s"] = warmup
         trials["duration_s"] = duration
         trials["cooldown_s"] = cooldown
-        trials[_RECORDING_EVENT_FIELD] = compiled["events"][0].address
-        trials[_TRIAL_INITIALIZE_FIELD] = compiled["events"][1].address
-        trials[_TRIAL_ENTITIES_FIELD] = compiled["events"][2].address
-        trials[_TRIAL_PROCESSES_FIELD] = compiled["events"][3].address
-        trials[_TRIAL_TEARDOWN_FIELD] = compiled["events"][4].address
-        trials[_TRIAL_STOP_FIELD] = compiled["events"][5].address
-        trials[_TRIAL_PROCESS_CLEANUP_FIELD] = \
-            compiled["events"][6].address
-        trials[_TRIAL_COLLECT_FIELD] = compiled["events"][7].address
+        for field, callback in zip(_LIFECYCLE_FIELDS[:8], compiled["events"]):
+            trials[field] = callback.address
         process_handle_count = compiled["process_handle_count"]
         process_width = max(1, process_handle_count)
         runtime_handles = np.zeros(
@@ -3942,24 +3592,14 @@ class Model(_CallbackOwner, Generic[_ExperimentResultT]):
             value = param_values[tname]
             shape = self._field_shapes.get(tname)
             if shape is not None and len(shape) != 1:
-                raise ValueError(f"trace field '{tname}' has unsupported "
-                                 f"shape {shape}")
+                raise ValueError(f"trace field '{tname}' has unsupported shape {shape}")
             slots = 1 if shape is None else shape[0]
-            rows = _as_trace_grid(value, trials["seed"], n_trials, slots,
-                                  tname)
-            trace_rows.extend(row for trial_rows in rows
-                              for row in trial_rows)
-            field = trials[tname]
-            if shape is None:
-                for i, trial_rows in enumerate(rows):
-                    row = trial_rows[0]
-                    field[i, 0] = row.ctypes.data
-                    field[i, 1] = row.size
-            else:
-                for i, trial_rows in enumerate(rows):
-                    for slot, row in enumerate(trial_rows):
-                        field[i, slot, 0] = row.ctypes.data
-                        field[i, slot, 1] = row.size
+            rows = _as_trace_grid(value, trials["seed"], n_trials, slots, tname)
+            flat_rows = [row for trial_rows in rows for row in trial_rows]
+            trace_rows.extend(flat_rows)
+            trials[tname] = np.asarray(
+                [(row.ctypes.data, row.size) for row in flat_rows], dtype=np.int64
+            ).reshape(trials[tname].shape)
 
         swept = tuple(p for p, axis in zip(self.params, axes)
                       if axis.shape[0] > 1)
