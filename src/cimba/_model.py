@@ -284,9 +284,15 @@ def _runtime_trial_process_cleanup(vtrl):
     handles = carray(
         _INT64_FROM_ADDRESS(env[_PROCESS_HANDLES_FIELD]), max(1, handle_count))
     for index in range(handle_count):
+        # The scheduled stop event normally handled this already, but user
+        # code can clear the event queue and end a trial early.  Cimba requires
+        # a process to be stopped before it is terminated.
+        if _b.process_status(handles[index]) == 1:
+            _b.process_stop(handles[index], 0)
         _b.process_terminate(handles[index])
         _b.process_destroy(handles[index])
     if env[_HAS_SPAWNED_FIELD] != 0:
+        _b.spawned_stop_all()
         _b.spawned_reclaim()
 
 
@@ -407,6 +413,9 @@ def _runtime_trial_teardown(vtrl):
         base = index * _ENTITY_DESCRIPTOR_WIDTH
         kind = descriptors[base + _ED_KIND]
         handle = _runtime_entity_handle(self_addr, descriptors, base)
+        # Every entity here came from its cmb_*_create function.  These
+        # heap-object destroy functions perform their matching termination;
+        # calling terminate separately would tear the same object down twice.
         if kind == _ENTITY_BUFFER:
             _b.buffer_destroy(handle)
         elif kind == _ENTITY_RESOURCE:
@@ -420,7 +429,6 @@ def _runtime_trial_teardown(vtrl):
         elif kind == _ENTITY_CONDITION:
             _b.condition_destroy(handle)
         else:
-            _b.priorityqueue_terminate(handle)
             _b.priorityqueue_destroy(handle)
     _b.event_queue_terminate()
     _b.random_terminate()

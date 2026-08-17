@@ -351,6 +351,8 @@ else:
     _process_create_sized = _b.process_create_sized
     _process_initialize = _b.process_initialize
     _process_start = _b.process_start
+    _process_status = _b.process_status
+    _process_stop = _b.process_stop
     _process_terminate = _b.process_terminate
     _process_destroy = _b.process_destroy
     _spawned_register = _b.spawned_register
@@ -368,6 +370,8 @@ else:
     @njit
     def despawn(process):
         if _spawned_unregister(process) != 0:
+            if _process_status(process) == 1:
+                _process_stop(process, 0)
             _process_terminate(process)
             _process_destroy(process)
     status = _b.process_status
