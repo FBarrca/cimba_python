@@ -392,6 +392,9 @@ def _runtime_trial_initialize(vtrl):
     _b.logger_apply_flags()
     _b.event_queue_initialize(env["start_time"])
     _b.random_initialize(env["seed"])
+    if env["duration_s"] == np.inf:
+        # Quiescence mode has no automatic recording window or stop event.
+        return
     timestamp = env["start_time"] + env["warmup_s"]
     _b.event_schedule(
         env[_RECORDING_EVENT_FIELD], self_addr, 0, timestamp, 0)
@@ -3487,7 +3490,7 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
     def experiment(self,
                    *,
                    replications: int = 1,
-                   duration: float = 1.0e6,
+                   duration: float | None = 1.0e6,
                    warmup: float = 1.0e3,
                    cooldown: float = 0.0,
                    start_time: float = 0.0,
@@ -3498,6 +3501,12 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
         values (scalars are held fixed), replicated with distinct seeds.
         Omitted Params use their declaration defaults; Params without a
         default remain required.
+
+        ``duration=None, warmup=0, cooldown=0`` runs until the event queue is
+        empty. This mode has no automatic entity-history recording or dataset
+        reset window; explicit model sampling and @collect callbacks still run.
+        Suspended processes are cleaned up when the queue empties. A model
+        which keeps scheduling events needs a finite duration instead.
 
         Trace fields take their replay data here as well: a 1-D array
         shared by every trial, a 2-D array whose row i replays in trial i
@@ -3511,6 +3520,10 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
         ``seed`` reproduces the generated traces too. A callable's
         ``trace_rng_name`` attribute overrides the field name in that
         derivation (see ``trace_rng``)."""
+        if duration is None and (warmup != 0.0 or cooldown != 0.0):
+            raise ValueError("duration=None requires warmup=0 and cooldown=0")
+        if duration is not None and not np.isfinite(duration):
+            raise ValueError("duration must be finite, or None to run until idle")
         compiled = self._compile()
 
         param_values = self._resolve_param_values(param_values)
@@ -3528,7 +3541,7 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
         trials = np.zeros(n_trials, dtype=compiled["dtype"])
         trials["start_time"] = start_time
         trials["warmup_s"] = warmup
-        trials["duration_s"] = duration
+        trials["duration_s"] = np.inf if duration is None else duration
         trials["cooldown_s"] = cooldown
         for field, callback in zip(_LIFECYCLE_FIELDS[:8], compiled["events"]):
             trials[field] = callback.address
