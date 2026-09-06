@@ -119,19 +119,24 @@ py.install_sources(
     subdir: 'cimba/bootstrap',
 )
 
-cimba_native_ext = py.extension_module(
-    '_cimba_native',
-    'src/cimba/_cimba_native.pyx',
-    # nbshim.c re-exports the static-inline cimba functions that sim.py binds
-    # as Numba external symbols (cpy_*).
+# Keep runtime compilation flags on the native bridge only. In particular,
+# C23/C2x flags can make Cython-generated C select features that older Apple
+# Clang versions do not implement, even when they accept the language flag.
+cimba_nbshim = static_library(
+    'cimba_nbshim',
     'src/cimba/native/nbshim.c',
     include_directories: [inc_api, inc_int, 'src/cimba/native'],
     dependencies: native_dependencies,
-    link_whole: cimba_lib,
-    # Compile header-inline bridge functions with the runtime's checked flags
-    # too, including release logging policy and platform-specific LTO/TLS.
-    # Otherwise those functions sit outside the runtime's LTO optimization.
     c_args: cimba_proj.get_variable('supported_flags'),
+    pic: true,
+)
+
+cimba_native_ext = py.extension_module(
+    '_cimba_native',
+    'src/cimba/_cimba_native.pyx',
+    include_directories: [inc_api, inc_int, 'src/cimba/native'],
+    dependencies: native_dependencies,
+    link_whole: [cimba_lib, cimba_nbshim],
     vs_module_defs: windows_module_defs,
     install: true,
     subdir: 'cimba',
