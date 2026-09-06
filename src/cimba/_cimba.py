@@ -10,7 +10,7 @@ for _name in dir(_native):
 ffi = FFI()
 ffi.cdef("""
     const char *cimba_version(void);
-    void cimba_run_experiment(void *your_experiment_array,
+    uint64_t cimba_run(void *your_experiment_array,
                               uint64_t num_trials,
                               size_t trial_struct_size,
                               void (*your_trial_func)(void *));

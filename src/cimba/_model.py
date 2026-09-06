@@ -10,7 +10,7 @@ functions, then compiles everything on first ``experiment()``:
   schedule the recording window, start processes, run the event queue, collect
   statistics, and tear everything down without per-layout source generation;
 * an ``Experiment`` is a structured numpy array with one record per trial
-  (the ``self`` view seen by model callbacks) handed to ``cimba_run_experiment``,
+  (the ``self`` view seen by model callbacks) handed to ``cimba_run``,
   which runs trials in parallel across all cores.
 """
 
@@ -413,22 +413,27 @@ def _runtime_trial_teardown(vtrl):
         base = index * _ENTITY_DESCRIPTOR_WIDTH
         kind = descriptors[base + _ED_KIND]
         handle = _runtime_entity_handle(self_addr, descriptors, base)
-        # Every entity here came from its cmb_*_create function.  These
-        # heap-object destroy functions perform their matching termination;
-        # calling terminate separately would tear the same object down twice.
+        # RC2 requires initialize/terminate and create/destroy pairs.
         if kind == _ENTITY_BUFFER:
+            _b.buffer_terminate(handle)
             _b.buffer_destroy(handle)
         elif kind == _ENTITY_RESOURCE:
+            _b.resource_terminate(handle)
             _b.resource_destroy(handle)
         elif kind == _ENTITY_RESOURCEPOOL:
+            _b.resourcepool_terminate(handle)
             _b.resourcepool_destroy(handle)
         elif kind == _ENTITY_OBJECTQUEUE:
+            _b.objectqueue_terminate(handle)
             _b.objectqueue_destroy(handle)
         elif kind == _ENTITY_DATASET:
+            _b.dataset_terminate(handle)
             _b.dataset_destroy(handle)
         elif kind == _ENTITY_CONDITION:
+            _b.condition_terminate(handle)
             _b.condition_destroy(handle)
         else:
+            _b.priorityqueue_terminate(handle)
             _b.priorityqueue_destroy(handle)
     _b.event_queue_terminate()
     _b.random_terminate()
@@ -477,6 +482,7 @@ class _LoadedCFunc:
 def _load_compiled_library(state):
     """Load one worker's linked object-code library into the parent."""
     from numba.core.registry import cpu_target
+    from ._cimba import native_version
     from numba.core.runtime import nrt
 
     nrt.rtsys.initialize(cpu_target.target_context)
@@ -598,6 +604,7 @@ def _callback_cache_platform_key() -> str:
     from llvmlite import binding as llvm
     from numba.core import config
     from numba.core.registry import cpu_target
+    from ._cimba import native_version
 
     try:
         cimba_version = importlib.metadata.version("cimba")
@@ -606,6 +613,7 @@ def _callback_cache_platform_key() -> str:
     values = (
         _CALLBACK_CACHE_FORMAT,
         cimba_version,
+        native_version(),
         numba.__version__,
         llvmlite.__version__,
         np.__version__,
@@ -736,6 +744,7 @@ def _compile_uncached_cfuncs(
     # setup instead of repeating it on its first callback.
 
     from numba.core.registry import cpu_target
+    from ._cimba import native_version
     from numba.core.runtime import nrt
     cpu_target.target_context.refresh()
     nrt.rtsys.initialize(cpu_target.target_context)
@@ -3703,7 +3712,7 @@ class Experiment(Generic[_ExperimentResultT]):
             trials[HISTORY_CAPTURE_STORE_FIELD] = int(
                 ffi.cast("intptr_t", capture_store))
         try:
-            lib.cimba_run_experiment(buf, trials.size, trials.itemsize, fptr)
+            lib.cimba_run(buf, trials.size, trials.itemsize, fptr)
             if self._capture_slot_count:
                 self._history_capture_data = copy_capture_store(
                     capture_store,

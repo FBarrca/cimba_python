@@ -91,10 +91,8 @@ def test_compiled_lifecycle_uses_ownership_appropriate_cleanup(monkeypatch):
         assert f"cmb_{family}_create" in entity_init_ir
         assert f"cmb_{family}_initialize" in entity_init_ir
         assert f"cmb_{family}_destroy" in teardown_ir
-        # These are heap-created base entities. Their destroy functions own
-        # termination, unlike cmb_process_destroy, so a direct terminate call
-        # here would be a double teardown.
-        assert f"cmb_{family}_terminate" not in teardown_ir
+        # RC2 requires explicit termination before destroying every entity.
+        assert f"cmb_{family}_terminate" in teardown_ir
 
     assert "cmb_event_queue_initialize" in trial_init_ir
     assert "cmb_random_initialize" in trial_init_ir

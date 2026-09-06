@@ -124,6 +124,11 @@ jobs:
           fi
           exit "$sync_exit"
 
+      - name: Test native coroutine switching and recovery
+        run: |
+          uv run meson setup build/native-macos subprojects/cimba --buildtype=debug -Ddefault_library=static -Denable_docs=false -Denable_cuda_tutorials=false
+          uv run meson test -C build/native-macos embedding coroutine --print-errorlogs
+
       - name: Run tests
         run: uv run pytest
 
