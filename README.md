@@ -9,15 +9,15 @@ a multithreaded discrete event simulation engine written in C and assembly.
 
 It is designed for Python simulation models that need more speed than pure
 Python event scheduling can usually provide. In the included M/M/1 benchmark,
-Cimba Python runs about **27-33x faster than SimPy** after its one-time Numba
+Cimba Python runs about **24.5–31.3x faster than SimPy** after its one-time Numba
 compile, while keeping model code in Python.
 
 On an AMD Ryzen 7 9700X under WSL Ubuntu 24.04, averaged over 10 runs:
 
 | Benchmark | SimPy | Cimba Python | Cimba C |
 | --- | ---: | ---: | ---: |
-| Single core, single trial | 2.612 s | 0.096 s | 0.083 s |
-| Multicore, 100 trials | 36.807 s | 1.131 s | 0.970 s |
+| Single core, single trial | 2.856 s | 0.117 s | 0.078 s |
+| Multicore, 100 trials | 38.723 s | 1.238 s | 0.800 s |
 
 The benchmark data and charts are in
 [`benchmark/AMD_Ryzen_7_9700X_WSL.ods`](benchmark/AMD_Ryzen_7_9700X_WSL.ods).
