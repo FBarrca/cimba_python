@@ -6,6 +6,7 @@ Released 2026-09-06.
   coroutine switching and recovery support.
 - Fix native object initialization, termination, and cleanup after abandoned
   trials, including temporary statistics objects and spawned-process registries.
+- Fix Windows recovery after a trial abandons an active coroutine.
 - Add `duration=None, warmup=0.0` for finite workloads that run until the event
   queue empties. Collectors and explicit sampling still run; this opt-in mode
   has no automatic recording window. Existing timed simulation defaults remain.
