@@ -128,6 +128,10 @@ cimba_native_ext = py.extension_module(
     include_directories: [inc_api, inc_int, 'src/cimba/native'],
     dependencies: native_dependencies,
     link_whole: cimba_lib,
+    # Compile header-inline bridge functions with the runtime's checked flags
+    # too, including release logging policy and platform-specific LTO/TLS.
+    # Otherwise those functions sit outside the runtime's LTO optimization.
+    c_args: cimba_proj.get_variable('supported_flags'),
     vs_module_defs: windows_module_defs,
     install: true,
     subdir: 'cimba',
