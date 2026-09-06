@@ -1,3 +1,15 @@
+# Cimba Python 0.6.1
+
+Released 2026-09-06.
+
+- Update the bundled Cimba fork to 3.0.0-RC2 while retaining Apple Silicon
+  coroutine switching and recovery support.
+- Fix native object initialization, termination, and cleanup after abandoned
+  trials, including temporary statistics objects and spawned-process registries.
+- Add `duration=None, warmup=0.0` for finite workloads that run until the event
+  queue empties. Collectors and explicit sampling still run; this opt-in mode
+  has no automatic recording window. Existing timed simulation defaults remain.
+
 # Cimba Python 0.6.0
 
 Released 2026-08-23.
