@@ -2,6 +2,8 @@ EXPORTS
     PyInit__cimba_native
     cimba_version
     cimba_run
+    cimba_threads_use
+    cimba_trial_abandon
     cmb_random_hwseed
     cpy_process_sizeof
     cpy_history_capture_store_create

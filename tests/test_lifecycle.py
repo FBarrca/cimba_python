@@ -1,3 +1,7 @@
+import subprocess
+import sys
+import textwrap
+
 import numpy as np
 
 import cimba.sim as sim
@@ -133,3 +137,66 @@ def test_early_event_queue_exit_stops_static_and_spawned_processes():
     for _ in range(3):
         assert experiment.run() == 0
         np.testing.assert_array_equal(experiment["completed"], 1.0)
+
+
+def test_abandoned_trials_clear_spawned_registry_before_worker_reuse():
+    # Keep native assertions/invalid-pointer failures isolated from pytest.
+    # The trial callback is entirely native: longjmp must never cross Python.
+    script = textwrap.dedent('''
+        import ctypes
+        import numpy as np
+        from numba import carray, cfunc, types
+        from cimba import _bindings as b, _cimba_native
+
+        native = ctypes.CDLL(_cimba_native.__file__)
+        native.cimba_threads_use.argtypes = [ctypes.c_uint32]
+        native.cimba_threads_use.restype = ctypes.c_uint32
+        native.cimba_threads_use(1)
+        native.cimba_run.argtypes = [ctypes.c_void_p, ctypes.c_uint64,
+                                    ctypes.c_size_t, ctypes.c_void_p]
+        native.cimba_run.restype = ctypes.c_uint64
+        native.cpy_process_sizeof.restype = ctypes.c_uint64
+        size = native.cpy_process_sizeof() + 64
+        abandon = types.ExternalFunction("cimba_trial_abandon", types.void())
+        name = b.cstring("lifecycle recovery")
+
+        @cfunc(types.intp(types.intp, types.intp))
+        def body(process, context):
+            # Abandon from an active coroutine, after earlier processes have
+            # suspended. This exercises recovery across a stack switch.
+            if context == 1:
+                abandon()
+            b.process_yield()
+            return 0
+
+        body_address = body.address
+
+        @cfunc(types.void(types.CPointer(types.int64)))
+        def trial(ptr):
+            fields = carray(ptr, 2)
+            b.event_queue_initialize(0.0)
+            # Force registry growth and exercise extended process allocations.
+            for i in range(20):
+                process = b.process_create_sized(size)
+                should_abandon = int(i == 19 and fields[0] % 2 == 0)
+                b.process_initialize(process, name, body_address, should_abandon, 0)
+                b.spawned_register(process)
+                b.process_start(process)
+            b.event_queue_execute()
+            b.spawned_stop_all()
+            b.spawned_reclaim()
+            b.event_queue_terminate()
+            fields[1] = 1
+
+        for _ in range(3):
+            trials = np.zeros((32, 2), dtype=np.int64)
+            trials[:, 0] = np.arange(32)
+            failures = native.cimba_run(trials.ctypes.data, 32,
+                                       trials.strides[0], trial.address)
+            assert failures == 16, failures
+            np.testing.assert_array_equal(trials[:, 1], np.arange(32) % 2)
+    ''')
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

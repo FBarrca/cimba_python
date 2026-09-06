@@ -863,6 +863,7 @@ double cpy_dataset_quantile(const void *dsp, double q)
         q = 1.0;
     }
     struct cmb_dataset dup = { 0 };
+    cmb_dataset_initialize(&dup);
     cmb_dataset_copy(&dup, src);
     cmb_dataset_sort(&dup);
     const double h = q * (double)(dup.count - 1u);
@@ -990,11 +991,34 @@ static CMB_THREAD_LOCAL struct {
     struct cmb_process **items;
     uint64_t len;
     uint64_t cap;
-} cpy_spawned = { NULL, 0u, 0u };
+    struct cmi_memregistry_item cleanup;
+} cpy_spawned = { 0 };
+
+/* Cimba reclaims the processes themselves after an abandoned trial. Only
+ * release our pointer array here: its entries may already have been freed.
+ * Register this TLS object so recovery also resets it before worker reuse. */
+static void cpy_spawned_clear(void *unused)
+{
+    (void)unused;
+    if (!cmi_memregistry_is_demolishing) {
+        cmi_memregistry_remove(&cpy_spawned.cleanup);
+    }
+    free(cpy_spawned.items);
+    cpy_spawned.items = NULL;
+    cpy_spawned.len = 0u;
+    cpy_spawned.cap = 0u;
+}
 
 void cpy_spawned_register(void *pp)
 {
     cmb_assert_release(pp != NULL);
+
+    if (cpy_spawned.cap == 0u) {
+        cmi_dlist_initialize(&cpy_spawned.cleanup.node);
+        cpy_spawned.cleanup.teardown = cpy_spawned_clear;
+        cpy_spawned.cleanup.object = &cpy_spawned;
+        cmi_memregistry_add(&cpy_spawned.cleanup);
+    }
 
     if (cpy_spawned.len == cpy_spawned.cap) {
         const uint64_t cap = (cpy_spawned.cap == 0u) ? 16u
@@ -1034,10 +1058,9 @@ void cpy_spawned_reclaim(void)
         cmb_process_terminate(cpy_spawned.items[i]);
         cmb_process_destroy(cpy_spawned.items[i]);
     }
-    free(cpy_spawned.items);
-    cpy_spawned.items = NULL;
-    cpy_spawned.len = 0u;
-    cpy_spawned.cap = 0u;
+    if (cpy_spawned.cap != 0u) {
+        cpy_spawned_clear(NULL);
+    }
 }
 
 void *cpy_process_current(void)

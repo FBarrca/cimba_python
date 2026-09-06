@@ -39,6 +39,12 @@ our fork of Cimba **3.0.0-RC2**, so you do not need to install Cimba separately.
 macOS wheels are available for Apple Silicon. Numba does not currently publish
 the required llvmlite wheels for Intel Macs.
 
+The bindings manage the strict native object lifecycle required since Cimba
+3.0.0 RC1: initialize before use, terminate after use, and destroy allocated
+objects. This includes temporary statistics objects and spawned processes.
+Abandoned trials also release the bindings' spawned-process registry before
+the worker runs another trial. Python models do not need manual lifecycle calls.
+
 ## What is it?
 
 Cimba Python gives Python models access to Cimba's native simulation engine
