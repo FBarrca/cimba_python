@@ -7,7 +7,7 @@
 # pthread execution model for in-process/native-object use cases.
 #
 # Cimba's C runtime is fully thread-local (event queue, coroutine scheduler,
-# clock, RNG, mempools), so each worker pthread spawned by cimba_run_experiment
+# clock, RNG, mempools), so each worker pthread spawned by cimba_run
 # runs a completely independent simulation. The only thing serializing
 # Python-defined trials is the interpreter lock, so we bridge Python callables
 # into the native pthread pool through a `noexcept nogil` trampoline that
@@ -22,10 +22,10 @@ import multiprocessing
 from array import array
 
 # Module-level experiment context. Written once (under the GIL) by
-# run_experiment before releasing the GIL into cimba_run_experiment, read by the
+# run_experiment before releasing the GIL into cimba_run, read by the
 # worker threads while the run is in flight, then cleared. _experiment_lock
 # serializes overlapping run_experiment calls from different Python threads
-# (cimba_run_experiment itself also guards its globals with a mutex).
+# (cimba_run itself also guards its globals with a mutex).
 cdef object _experiment_lock = threading.Lock()
 cdef object _exp_trial_fn = None
 cdef object _exp_seeds = None
@@ -164,7 +164,7 @@ cdef list _run_thread_experiment(object trial_fn, list seed_list):
         _exp_exceptions = [None] * num_trials
         try:
             with nogil:
-                cimba_run_experiment(
+                cimba_run(
                     <void *>&view[0],
                     num_trials,
                     sizeof(uint64_t),

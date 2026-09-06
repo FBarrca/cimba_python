@@ -57,13 +57,13 @@ Cimba Python timed after its one-time Numba compile:
      - Cimba Python
      - Cimba C
    * - Single core, single trial
-     - 2.612 s
-     - 0.096 s
-     - 0.083 s
+     - 2.856 s
+     - 0.117 s
+     - 0.078 s
    * - Multicore, 100 trials
-     - 36.807 s
-     - 1.131 s
-     - 0.970 s
+     - 38.723 s
+     - 1.238 s
+     - 0.800 s
 
 The benchmark data and charts are in
 ``benchmark/AMD_Ryzen_7_9700X_WSL.ods``. Benchmarks depend on the model,

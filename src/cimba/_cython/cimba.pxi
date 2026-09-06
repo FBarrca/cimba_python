@@ -158,7 +158,7 @@ cdef extern from "cimba.h":
     ctypedef void *(*cmb_process_func)(cmb_process *cp, void *context)
     ctypedef void cmb_event_func(void *subject, void *object) noexcept
     ctypedef void cimba_trial_func(void *trial_struct) noexcept nogil
-    ctypedef void *cimba_thread_init_func(void *usrarg, uint64_t tid) noexcept nogil
+    ctypedef void *cimba_thread_init_func(uint64_t tid, void *usrarg) noexcept nogil
     ctypedef void cimba_thread_exit_func(void *thrctx) noexcept nogil
     ctypedef bool (*cmb_condition_demand_func)(
         const cmb_condition *cnd,
@@ -167,13 +167,13 @@ cdef extern from "cimba.h":
     )
 
     const char *cimba_version()
-    void cimba_run_experiment(
+    uint64_t cimba_run(
         void *your_experiment_array,
         uint64_t num_trials,
         size_t trial_struct_size,
         cimba_trial_func *your_trial_func,
     ) noexcept nogil
-    void cimba_set_thread_hooks(
+    void cimba_thread_hooks_set(
         cimba_thread_init_func *initfunc,
         void *usrarg,
         cimba_thread_exit_func *exitfunc,
@@ -218,7 +218,7 @@ cdef extern from "cimba.h":
     unsigned cmb_random_negative_binomial(unsigned m, double p)
     unsigned cmb_random_pascal(unsigned m, double p)
     unsigned cmb_random_poisson(double r)
-    unsigned cmb_random_loaded_dice(unsigned n, const double *probabilities)
+    uint64_t cmb_random_discrete_nonuniform(uint64_t n, const double *probabilities)
     cmb_random_alias *cmb_random_alias_create(unsigned n, const double *probabilities)
     unsigned cmb_random_alias_sample(const cmb_random_alias *alias)
     void cmb_random_alias_destroy(cmb_random_alias *alias)
@@ -295,7 +295,7 @@ cdef extern from "cimba.h":
     void cmb_buffer_destroy(cmb_buffer *bp)
     int64_t cmb_buffer_get(cmb_buffer *bp, uint64_t *amntp)
     int64_t cmb_buffer_put(cmb_buffer *bp, uint64_t *amntp)
-    const char *cmb_buffer_get_name(cmb_buffer *bp)
+    const char *cmb_buffer_name(cmb_buffer *bp)
     uint64_t cmb_buffer_level(cmb_buffer *bp)
     uint64_t cmb_buffer_space(cmb_buffer *bp)
     void cmb_buffer_recording_start(cmb_buffer *bp)
@@ -732,7 +732,7 @@ def run_native_experiment(object experiment_buffer, object trial_struct_size, ob
     view = byte_mv
     with cython.boundscheck(False):
         with nogil:
-            cimba_run_experiment(<void *>&view[0], num_trials, <size_t>struct_size, trial_func)
+            cimba_run(<void *>&view[0], num_trials, <size_t>struct_size, trial_func)
 
 
 def set_native_thread_hooks(object init_capsule=None, object user_arg_capsule=None, object exit_capsule=None) -> None:
@@ -759,7 +759,7 @@ def set_native_thread_hooks(object init_capsule=None, object user_arg_capsule=No
             "exit_capsule",
         )
     with nogil:
-        cimba_set_thread_hooks(initfunc, usrarg, exitfunc)
+        cimba_thread_hooks_set(initfunc, usrarg, exitfunc)
 
 
 cdef uint64_t _test_user_context = 0
@@ -776,7 +776,7 @@ cdef void _test_event_increment(void *subject, void *object) noexcept nogil:
     _test_event_hits += 1
 
 
-cdef void *_test_thread_init(void *usrarg, uint64_t tid) noexcept nogil:
+cdef void *_test_thread_init(uint64_t tid, void *usrarg) noexcept nogil:
     return usrarg
 
 

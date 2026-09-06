@@ -110,6 +110,7 @@ process_timers_clear = _extern("cmb_process_timers_clear", _void(_intp))
 # --- Buffers: counted amounts -------------------------------------------------
 buffer_create = _extern("cmb_buffer_create", _intp())
 buffer_initialize = _extern("cmb_buffer_initialize", _void(_intp, _intp, _u64))
+buffer_terminate = _extern("cmb_buffer_terminate", _void(_intp))
 buffer_destroy = _extern("cmb_buffer_destroy", _void(_intp))
 buffer_recording_start = _extern("cmb_buffer_recording_start", _void(_intp))
 buffer_recording_stop = _extern("cmb_buffer_recording_stop", _void(_intp))
@@ -125,6 +126,7 @@ buffer_space = _extern("cpy_buffer_space", _u64(_intp))
 # --- Resources: single holder, priority-aware ----------------------------------
 resource_create = _extern("cmb_resource_create", _intp())
 resource_initialize = _extern("cmb_resource_initialize", _void(_intp, _intp))
+resource_terminate = _extern("cmb_resource_terminate", _void(_intp))
 resource_destroy = _extern("cmb_resource_destroy", _void(_intp))
 resource_acquire = _extern("cmb_resource_acquire", _i64(_intp))
 resource_release = _extern("cmb_resource_release", _void(_intp))
@@ -143,6 +145,7 @@ resource_report_file = _extern("cpy_resource_report_file",
 resourcepool_create = _extern("cmb_resourcepool_create", _intp())
 resourcepool_initialize = _extern(
     "cmb_resourcepool_initialize", _void(_intp, _intp, _u64))
+resourcepool_terminate = _extern("cmb_resourcepool_terminate", _void(_intp))
 resourcepool_destroy = _extern("cmb_resourcepool_destroy", _void(_intp))
 resourcepool_acquire = _extern("cmb_resourcepool_acquire", _i64(_intp, _u64))
 resourcepool_preempt = _extern("cmb_resourcepool_preempt", _i64(_intp, _u64))
@@ -152,7 +155,7 @@ resourcepool_recording_start = _extern(
 resourcepool_recording_stop = _extern(
     "cmb_resourcepool_stop_recording", _void(_intp))
 resourcepool_available = _extern("cpy_resourcepool_available", _u64(_intp))
-resourcepool_held = _extern("cmb_resourcepool_held_by_process",
+resourcepool_held = _extern("cmb_resourcepool_held",
                             _u64(_intp, _intp))
 resourcepool_in_use = _extern("cpy_resourcepool_in_use", _u64(_intp))
 resourcepool_mean_in_use = _extern("cpy_resourcepool_mean_in_use", _f64(_intp))
@@ -164,6 +167,7 @@ resourcepool_report_file = _extern("cpy_resourcepool_report_file",
 objectqueue_create = _extern("cmb_objectqueue_create", _intp())
 objectqueue_initialize = _extern(
     "cmb_objectqueue_initialize", _void(_intp, _intp, _u64))
+objectqueue_terminate = _extern("cmb_objectqueue_terminate", _void(_intp))
 objectqueue_destroy = _extern("cmb_objectqueue_destroy", _void(_intp))
 objectqueue_put = _extern("cpy_objectqueue_put", _i64(_intp, _intp))
 objectqueue_get = _extern("cpy_objectqueue_get", _i64(_intp, _intp))
@@ -208,6 +212,7 @@ priorityqueue_report_file = _extern("cpy_priorityqueue_report_file",
 # --- Datasets: tally statistics --------------------------------------------------
 dataset_create = _extern("cmb_dataset_create", _intp())
 dataset_initialize = _extern("cmb_dataset_initialize", _void(_intp))
+dataset_terminate = _extern("cmb_dataset_terminate", _void(_intp))
 dataset_destroy = _extern("cmb_dataset_destroy", _void(_intp))
 dataset_add = _extern("cmb_dataset_add", _u64(_intp, _f64))
 dataset_reset = _extern("cmb_dataset_reset", _void(_intp))
@@ -254,6 +259,7 @@ dataset_capture_store_capture = _extern(
 # --- Conditions -------------------------------------------------------------------
 condition_create = _extern("cmb_condition_create", _intp())
 condition_initialize = _extern("cmb_condition_initialize", _void(_intp, _intp))
+condition_terminate = _extern("cmb_condition_terminate", _void(_intp))
 condition_destroy = _extern("cmb_condition_destroy", _void(_intp))
 condition_wait = _extern("cmb_condition_wait", _i64(_intp, _intp, _intp))
 condition_signal = _extern("cmb_condition_signal", _u64(_intp))

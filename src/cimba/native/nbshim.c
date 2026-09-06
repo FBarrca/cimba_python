@@ -236,7 +236,9 @@ static double mean_of_history(struct cmb_timeseries *tsp)
     struct cmb_wtdsummary ws;
     cmb_wtdsummary_initialize(&ws);
     cmb_timeseries_summarize(tsp, &ws);
-    return cmb_wtdsummary_mean(&ws);
+    const double result = cmb_wtdsummary_mean(&ws);
+    cmb_wtdsummary_terminate(&ws);
+    return result;
 }
 
 double cpy_buffer_mean_level(void *bp)
@@ -314,14 +316,18 @@ double cpy_timeseries_mean(const void *tsp)
 {
     struct cmb_wtdsummary ws;
     summarize_history(tsp, &ws);
-    return cmb_wtdsummary_mean(&ws);
+    const double result = cmb_wtdsummary_mean(&ws);
+    cmb_wtdsummary_terminate(&ws);
+    return result;
 }
 
 double cpy_timeseries_stddev(const void *tsp)
 {
     struct cmb_wtdsummary ws;
     summarize_history(tsp, &ws);
-    return cmb_wtdsummary_stddev(&ws);
+    const double result = cmb_wtdsummary_stddev(&ws);
+    cmb_wtdsummary_terminate(&ws);
+    return result;
 }
 
 double cpy_timeseries_median(const void *tsp)
@@ -760,7 +766,7 @@ uint64_t cpy_resource_in_use(const void *rp)
 
 uint64_t cpy_resource_held_by_process(const void *rp, const void *pp)
 {
-    return cmb_resource_held_by_process(rp, pp);
+    return cmb_resource_held_by_process((void *)rp, pp);
 }
 
 uint64_t cpy_resourcepool_available(const void *rpp)
@@ -802,10 +808,15 @@ uint64_t cpy_resource_available(const void *rp)
 /* Tally statistics over a dataset */
 double cpy_dataset_mean(const void *dsp)
 {
+    if (cmb_dataset_count(dsp) == 0u) {
+        return 0.0;
+    }
     struct cmb_datasummary ds;
     cmb_datasummary_initialize(&ds);
     cmb_dataset_summarize(dsp, &ds);
-    return cmb_datasummary_mean(&ds);
+    const double result = cmb_datasummary_mean(&ds);
+    cmb_datasummary_terminate(&ds);
+    return result;
 }
 
 uint64_t cpy_dataset_count(const void *dsp)
@@ -831,7 +842,9 @@ double cpy_dataset_stddev(const void *dsp)
     struct cmb_datasummary ds;
     cmb_datasummary_initialize(&ds);
     cmb_dataset_summarize(dsp, &ds);
-    return cmb_datasummary_stddev(&ds);
+    const double result = cmb_datasummary_stddev(&ds);
+    cmb_datasummary_terminate(&ds);
+    return result;
 }
 
 /* Quantile of the tallied observations by linear interpolation over a
@@ -850,13 +863,14 @@ double cpy_dataset_quantile(const void *dsp, double q)
         q = 1.0;
     }
     struct cmb_dataset dup = { 0 };
+    cmb_dataset_initialize(&dup);
     cmb_dataset_copy(&dup, src);
     cmb_dataset_sort(&dup);
     const double h = q * (double)(dup.count - 1u);
     const uint64_t lo = (uint64_t)h;
     const uint64_t hi = (lo + 1u < dup.count) ? lo + 1u : lo;
     const double r = dup.xa[lo] + (h - (double)lo) * (dup.xa[hi] - dup.xa[lo]);
-    cmb_dataset_reset(&dup);
+    cmb_dataset_terminate(&dup);
     return r;
 }
 
@@ -936,7 +950,14 @@ uint64_t cpy_process_timer_cancel(void *pp, const uint64_t hndl)
 /* Process status as an integer: 0 created, 1 running, 2 finished */
 int64_t cpy_process_status(const void *pp)
 {
-    return (int64_t)cmb_process_status(pp);
+    /* Preserve sim.status(): initialized=0, running=1, finished=2.
+     * RC2 inserted an explicit uninitialized state into its native enum. */
+    switch (cmb_process_status(pp)) {
+        case CMB_PROCESS_INITIALIZED: return 0;
+        case CMB_PROCESS_RUNNING: return 1;
+        case CMB_PROCESS_FINISHED: return 2;
+        default: return -1;
+    }
 }
 
 uint64_t cpy_process_sizeof(void)
@@ -950,8 +971,12 @@ intptr_t cpy_process_create_sized(const uint64_t nbytes)
 {
     cmb_assert_release(nbytes >= sizeof(struct cmb_process));
 
-    void *pp = calloc(1u, nbytes);
-    cmb_assert_release(pp != NULL);
+    struct cmb_process *pp = calloc(1u, nbytes);
+    cmb_assert_always(pp != NULL);
+    cmi_dlist_initialize(&pp->destroy.node);
+    pp->destroy.teardown = (cmi_teardown_func *)cmb_process_destroy;
+    pp->destroy.object = pp;
+    cmi_memregistry_add(&pp->destroy);
 
     return (intptr_t)pp;
 }
@@ -966,11 +991,34 @@ static CMB_THREAD_LOCAL struct {
     struct cmb_process **items;
     uint64_t len;
     uint64_t cap;
-} cpy_spawned = { NULL, 0u, 0u };
+    struct cmi_memregistry_item cleanup;
+} cpy_spawned = { 0 };
+
+/* Cimba reclaims the processes themselves after an abandoned trial. Only
+ * release our pointer array here: its entries may already have been freed.
+ * Register this TLS object so recovery also resets it before worker reuse. */
+static void cpy_spawned_clear(void *unused)
+{
+    (void)unused;
+    if (!cmi_memregistry_is_demolishing) {
+        cmi_memregistry_remove(&cpy_spawned.cleanup);
+    }
+    free(cpy_spawned.items);
+    cpy_spawned.items = NULL;
+    cpy_spawned.len = 0u;
+    cpy_spawned.cap = 0u;
+}
 
 void cpy_spawned_register(void *pp)
 {
     cmb_assert_release(pp != NULL);
+
+    if (cpy_spawned.cap == 0u) {
+        cmi_dlist_initialize(&cpy_spawned.cleanup.node);
+        cpy_spawned.cleanup.teardown = cpy_spawned_clear;
+        cpy_spawned.cleanup.object = &cpy_spawned;
+        cmi_memregistry_add(&cpy_spawned.cleanup);
+    }
 
     if (cpy_spawned.len == cpy_spawned.cap) {
         const uint64_t cap = (cpy_spawned.cap == 0u) ? 16u
@@ -1010,10 +1058,9 @@ void cpy_spawned_reclaim(void)
         cmb_process_terminate(cpy_spawned.items[i]);
         cmb_process_destroy(cpy_spawned.items[i]);
     }
-    free(cpy_spawned.items);
-    cpy_spawned.items = NULL;
-    cpy_spawned.len = 0u;
-    cpy_spawned.cap = 0u;
+    if (cpy_spawned.cap != 0u) {
+        cpy_spawned_clear(NULL);
+    }
 }
 
 void *cpy_process_current(void)

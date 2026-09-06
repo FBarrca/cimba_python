@@ -1,7 +1,9 @@
 EXPORTS
     PyInit__cimba_native
     cimba_version
-    cimba_run_experiment
+    cimba_run
+    cimba_threads_use
+    cimba_trial_abandon
     cmb_random_hwseed
     cpy_process_sizeof
     cpy_history_capture_store_create
@@ -85,6 +87,7 @@ EXPORTS
     cmb_process_timers_clear
     cmb_buffer_create
     cmb_buffer_initialize
+    cmb_buffer_terminate
     cmb_buffer_destroy
     cmb_buffer_recording_start
     cmb_buffer_recording_stop
@@ -97,6 +100,7 @@ EXPORTS
     cpy_buffer_space
     cmb_resource_create
     cmb_resource_initialize
+    cmb_resource_terminate
     cmb_resource_destroy
     cmb_resource_acquire
     cmb_resource_release
@@ -111,6 +115,7 @@ EXPORTS
     cpy_resource_report_file
     cmb_resourcepool_create
     cmb_resourcepool_initialize
+    cmb_resourcepool_terminate
     cmb_resourcepool_destroy
     cmb_resourcepool_acquire
     cmb_resourcepool_preempt
@@ -118,13 +123,14 @@ EXPORTS
     cmb_resourcepool_start_recording
     cmb_resourcepool_stop_recording
     cpy_resourcepool_available
-    cmb_resourcepool_held_by_process
+    cmb_resourcepool_held
     cpy_resourcepool_in_use
     cpy_resourcepool_mean_in_use
     cpy_resourcepool_history
     cpy_resourcepool_report_file
     cmb_objectqueue_create
     cmb_objectqueue_initialize
+    cmb_objectqueue_terminate
     cmb_objectqueue_destroy
     cpy_objectqueue_put
     cpy_objectqueue_get
@@ -155,6 +161,7 @@ EXPORTS
     cpy_priorityqueue_report_file
     cmb_dataset_create
     cmb_dataset_initialize
+    cmb_dataset_terminate
     cmb_dataset_destroy
     cmb_dataset_add
     cmb_dataset_reset
@@ -185,6 +192,7 @@ EXPORTS
     cpy_dataset_capture_store_capture
     cmb_condition_create
     cmb_condition_initialize
+    cmb_condition_terminate
     cmb_condition_destroy
     cmb_condition_wait
     cmb_condition_signal

@@ -344,6 +344,6 @@ def loaded_dice(object probabilities) -> int:
     cdef unsigned n
     cdef double *array = _random_probability_array(probabilities, "probabilities", &n)
     try:
-        return <object>cmb_random_loaded_dice(n, array)
+        return <object>cmb_random_discrete_nonuniform(n, array)
     finally:
         PyMem_Free(array)

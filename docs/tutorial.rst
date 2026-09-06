@@ -200,6 +200,18 @@ For most models, this is the cleanest stopping rule:
     )
     exp.run()
 
+For finite workloads whose event queue eventually empties, use
+``duration=None, warmup=0.0`` (with the default ``cooldown=0.0``). The trial runs
+until there are no scheduled events, then runs collectors and cleans up any
+suspended processes. This mode has no automatic entity-history recording or
+dataset warmup reset; explicit sampling in your model still works. A model
+that keeps scheduling events will not stop on its own in this mode.
+
+.. code-block:: python
+
+    exp = finite_model.experiment(duration=None, warmup=0.0, seed=43)
+    exp.run()
+
 Sometimes the domain has its own stop condition: serve 100 customers, empty all
 work after closing time, finish a campaign, or stop when a rare event happens.
 Use an event callback for that:
