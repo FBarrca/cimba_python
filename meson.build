@@ -7,20 +7,12 @@ project(
     'cython',
     version: '0.5.10',
     meson_version: '>=1.1.0',
-    # Fast wheels by default. Use -Dcimba_debug_logs=true to build the bundled
-    # Cimba library with native INFO logging for tutorials/debugging.
+    # Fast wheels by default. Use -Dbuildtype=debugoptimized for native INFO logs.
     default_options: ['buildtype=release'],
 )
 
 py = import('python').find_installation(pure: false)
 cc = meson.get_compiler('c')
-
-if get_option('cimba_debug_logs') and get_option('buildtype') == 'release'
-    error(
-        'cimba_debug_logs requires -Dbuildtype=debugoptimized because '
-        + 'upstream Cimba release builds compile INFO logs out with -DNLOGINFO'
-    )
-endif
 
 cimba_default_options = [
     'default_library=static',
@@ -60,6 +52,7 @@ py.install_sources(
     'src/cimba/_declarations.py',
     'src/cimba/_graph.py',
     'src/cimba/_intrinsics.py',
+    'src/cimba/_methods.py',
     'src/cimba/_model.py',
     'src/cimba/cimba.py',
     'src/cimba/cmb_logger.py',

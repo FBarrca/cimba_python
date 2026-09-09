@@ -23,10 +23,16 @@ On Ubuntu or WSL, install the usual native build packages first:
 
 .. code-block:: bash
 
-    sudo apt install build-essential nasm libhdf5-dev
+    sudo apt install build-essential nasm
 
 Use ``uv run`` for commands that should execute inside the project
 environment.
+
+For native INFO logging, build with Meson's standard build type option:
+
+.. code-block:: bash
+
+    uv sync --reinstall-package cimba --config-settings=setup-args=-Dbuildtype=debugoptimized
 
 Windows
 -------
@@ -70,7 +76,7 @@ Verify that Python can import the package:
 
 If all goes well, this prints a version such as::
 
-    3.0.0-beta
+    3.0.0-RC2
 
 Run the test suite with:
 

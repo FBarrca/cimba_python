@@ -35,73 +35,12 @@ kind) covering the scheduled-instance verbs, resolved by
 from __future__ import annotations
 
 import ast
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping
 from typing import Any
 
+from .._methods import _MethodSpec, _visit_expr
+
 from . import helpers as _entity_helpers
-
-
-@dataclass(frozen=True)
-class _EntityMethodSpec:
-    helper_name: str
-    helper_attr: str
-    params: tuple[str, ...] = ()
-    defaults: Mapping[str, object] = field(default_factory=dict)
-    #: append the caller's own ``env`` expression as a final helper argument
-    #: (sim.Condition.wait_for's implicit third argument)
-    needs_env: bool = False
-
-    def normalize_args(
-        self,
-        kind: str,
-        method: str,
-        args: Sequence[ast.expr],
-        keywords: Sequence[ast.keyword],
-        *,
-        label: str,
-    ) -> list[ast.expr]:
-        if len(args) > len(self.params):
-            raise ValueError(
-                f"{label} passes too many arguments to {kind} {method}()")
-        call_args = list(args)
-
-        by_name = {name: index for index, name in enumerate(self.params)}
-        supplied = set(self.params[:len(call_args)])
-        keyed: dict[int, ast.expr] = {}
-        #: fill every remaining param (not just ones a keyword references),
-        #: so trailing defaults apply even when the call passes no keywords
-        #: at all (e.g. ``env.tick.schedule(1.0)`` relying on default
-        #: data/priority).
-        max_index = len(self.params) - 1
-        for kw in keywords:
-            if kw.arg is None:
-                raise ValueError(
-                    f"{label} cannot use **kwargs with {kind} {method}()")
-            index = by_name.get(kw.arg)
-            if index is None:
-                raise ValueError(
-                    f"{label} passes unknown {kind} {method}() argument "
-                    f"'{kw.arg}'")
-            if kw.arg in supplied or index in keyed:
-                raise ValueError(
-                    f"{label} passes {kind} {method}() argument '{kw.arg}' "
-                    "more than once")
-            supplied.add(kw.arg)
-            keyed[index] = kw.value
-            max_index = max(max_index, index)
-
-        for index in range(len(call_args), max_index + 1):
-            if index in keyed:
-                call_args.append(keyed[index])
-            else:
-                param = self.params[index]
-                if param not in self.defaults:
-                    raise ValueError(
-                        f"{label} is missing required {kind} {method}() "
-                        f"argument '{param}'")
-                call_args.append(ast.Constant(self.defaults[param]))
-        return call_args
 
 
 def _spec(
@@ -112,9 +51,9 @@ def _spec(
     helper_attr: str | None = None,
     defaults: Mapping[str, object] | None = None,
     needs_env: bool = False,
-) -> _EntityMethodSpec:
+) -> _MethodSpec:
     attr = helper_attr or f"{kind}_{method}"
-    return _EntityMethodSpec(
+    return _MethodSpec(
         helper_name=f"_cimba_entity_{attr}",
         helper_attr=attr,
         params=params,
@@ -127,7 +66,7 @@ _REPORT_FILE = ("path", "append")
 _REPORT_FILE_DEFAULTS = {"append": 1}
 
 
-def _reporting_methods(kind: str) -> dict[str, _EntityMethodSpec]:
+def _reporting_methods(kind: str) -> dict[str, _MethodSpec]:
     return {
         "report": _spec(kind, "report"),
         "report_file": _spec(kind, "report_file", _REPORT_FILE,
@@ -136,7 +75,7 @@ def _reporting_methods(kind: str) -> dict[str, _EntityMethodSpec]:
 
 
 #: declared field kind -> {method name: spec}
-_KIND_SPECS: dict[str, dict[str, _EntityMethodSpec]] = {
+_KIND_SPECS: dict[str, dict[str, _MethodSpec]] = {
     "queue": {
         "put": _spec("queue", "put", ("amount",)),
         "get": _spec("queue", "get", ("amount",)),
@@ -223,18 +162,6 @@ def entity_lowering_namespace() -> dict[str, Any]:
         for methods in _KIND_SPECS.values()
         for spec in methods.values()
     }
-
-
-def _visit_expr(
-    visit: Callable[[ast.AST], ast.AST],
-    node: ast.expr,
-    *,
-    what: str,
-) -> ast.expr:
-    lowered = visit(node)
-    if not isinstance(lowered, ast.expr):
-        raise TypeError(f"{what} did not lower to an expression")
-    return lowered
 
 
 def lower_entity_method_call(

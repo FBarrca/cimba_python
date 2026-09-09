@@ -63,11 +63,6 @@ uint64_t cpy_random_bernoulli(const double p)
     return cmb_random_bernoulli(p);
 }
 
-uint64_t cpy_random_flip(void)
-{
-    return (uint64_t)cmb_random_flip();
-}
-
 double cpy_random_triangular(const double min, const double mode,
                              const double max)
 {
@@ -105,26 +100,6 @@ int64_t cpy_random_dice(const int64_t a, const int64_t b)
     return cmb_random_dice((long)a, (long)b);
 }
 
-double cpy_random_std_normal(void)
-{
-    return cmb_random_std_normal();
-}
-
-double cpy_random_std_exponential(void)
-{
-    return cmb_random_std_exponential();
-}
-
-double cpy_random_std_gamma(const double shape)
-{
-    return cmb_random_std_gamma(shape);
-}
-
-double cpy_random_std_beta(const double a, const double b)
-{
-    return cmb_random_std_beta(a, b);
-}
-
 double cpy_random_logistic(const double m, const double s)
 {
     return cmb_random_logistic(m, s);
@@ -150,11 +125,6 @@ double cpy_random_F_dist(const double a, const double b)
     return cmb_random_F_dist(a, b);
 }
 
-double cpy_random_std_t_dist(const double v)
-{
-    return cmb_random_std_t_dist(v);
-}
-
 double cpy_random_t_dist(const double m, const double s, const double v)
 {
     return cmb_random_t_dist(m, s, v);
@@ -173,11 +143,6 @@ uint64_t cpy_random_binomial(const uint64_t n, const double p)
 uint64_t cpy_random_negative_binomial(const uint64_t m, const double p)
 {
     return cmb_random_negative_binomial((unsigned)m, p);
-}
-
-uint64_t cpy_random_pascal(const uint64_t m, const double p)
-{
-    return cmb_random_pascal((unsigned)m, p);
 }
 
 /* Low-level event queue: bool returns widened to uint64_t for Numba */
@@ -199,16 +164,6 @@ uint64_t cpy_event_reprioritize(const uint64_t hndl, const int64_t priority)
 uint64_t cpy_event_is_scheduled(const uint64_t hndl)
 {
     return (uint64_t)cmb_event_is_scheduled(hndl);
-}
-
-uint64_t cpy_wtdsummary_sizeof(void)
-{
-    return sizeof(struct cmb_wtdsummary);
-}
-
-double cpy_wtdsummary_mean(const void *wsp)
-{
-    return cmb_wtdsummary_mean(wsp);
 }
 
 /*
@@ -1072,12 +1027,6 @@ void *cpy_process_current(void)
 int64_t cpy_process_yield(void)
 {
     return cmb_process_yield();
-}
-
-uint32_t cpy_cpu_cores(void)
-{
-    extern uint32_t cmi_cpu_cores(void);
-    return cmi_cpu_cores();
 }
 
 static uint32_t logger_flags_on_mask = 0u;

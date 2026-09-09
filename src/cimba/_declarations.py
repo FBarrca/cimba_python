@@ -61,21 +61,14 @@ class _FieldKind:
     name: str
     #: numpy field format in the trial record
     fmt: str
-    #: native entity prefix: "buffer" -> buffer_create()/_initialize()/
-    #: _destroy() in the generated trial source (None: not an entity)
+    #: native entity prefix used by history getters (None: not an entity)
     binding: str | None = None
-    #: recording_start/stop over the measurement window
-    recordable: bool = False
-    #: <binding>_initialize takes an interned entity-name cstring
-    named: bool = True
     #: may be wired to another component instance's same-kind field
     wirable: bool = False
     #: the declaration default is a Queue/Pool/Store capacity
     capacitated: bool = False
     #: appears as an entity node in the inferred process DAG
     dag_entity: bool = False
-    #: may be declared on Component classes
-    on_component: bool = True
 
 
 _KIND_LIST = [
@@ -83,22 +76,21 @@ _KIND_LIST = [
     _FieldKind("output", "<f8"),
     _FieldKind("state", "<i8", dag_entity=True),
     _FieldKind("fstate", "<f8", dag_entity=True),
-    _FieldKind("queue", "<i8", binding="buffer", recordable=True,
+    _FieldKind("queue", "<i8", binding="buffer",
                wirable=True, capacitated=True, dag_entity=True),
-    _FieldKind("resource", "<i8", binding="resource", recordable=True,
+    _FieldKind("resource", "<i8", binding="resource",
                wirable=True, dag_entity=True),
-    _FieldKind("pool", "<i8", binding="resourcepool", recordable=True,
+    _FieldKind("pool", "<i8", binding="resourcepool",
                wirable=True, capacitated=True, dag_entity=True),
-    _FieldKind("store", "<i8", binding="objectqueue", recordable=True,
+    _FieldKind("store", "<i8", binding="objectqueue",
                wirable=True, capacitated=True, dag_entity=True),
-    _FieldKind("dataset", "<i8", binding="dataset", named=False),
+    _FieldKind("dataset", "<i8", binding="dataset"),
     _FieldKind("condition", "<i8", binding="condition", wirable=True,
                dag_entity=True),
     _FieldKind("predicate", "<i8"),
     _FieldKind("event", "<i8", dag_entity=True),
     _FieldKind("processes", "<i8"),
-    # PQueues elements are created/recorded/destroyed per element, so the
-    # trial codegen handles them apart from the scalar entity kinds.
+    # PQueues declares its own element count rather than a scalar handle.
     _FieldKind("pqueues", "<i8", binding="priorityqueue", dag_entity=True),
     _FieldKind("spawnable", "<i8"),
     _FieldKind("trace", "<i8"),

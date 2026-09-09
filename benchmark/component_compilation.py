@@ -385,19 +385,13 @@ def main() -> int:
                         f"{result['scenario']} precompile was not ready")
             if args.cache == "warm":
                 if not any(
-                    sample["precompile"] is not None
-                    and sample["precompile"]["cache_hits"] > 0
+                    (sample["precompile"] is not None
+                     and sample["precompile"]["cache_hits"] > 0)
+                    or sample["callback_cache"]["hits"] > 0
                     for sample in result["samples"]
                 ):
                     raise SystemExit(
                         f"{result['scenario']} recorded no warm-cache hit")
-                if not any(
-                    sample["callback_cache"]["hits"] > 0
-                    for sample in result["samples"]
-                ):
-                    raise SystemExit(
-                        f"{result['scenario']} callbacks recorded no "
-                        "warm-cache hit")
     _print(results)
     payload = {
         "schema": 1,

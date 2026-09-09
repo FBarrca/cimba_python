@@ -485,7 +485,6 @@ class _LoadedCFunc:
 def _load_compiled_library(state):
     """Load one worker's linked object-code library into the parent."""
     from numba.core.registry import cpu_target
-    from ._cimba import native_version
     from numba.core.runtime import nrt
 
     nrt.rtsys.initialize(cpu_target.target_context)
@@ -681,8 +680,6 @@ def _store_cached_callback(
     key: str,
     callback: Any,
     counters: _CacheCounters,
-    *,
-    serialized_state: Any | None = None,
 ) -> None:
     if not _cache_enabled():
         return
@@ -692,9 +689,7 @@ def _store_cached_callback(
     try:
         path = _callback_cache_path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
-        state = serialized_state
-        if state is None:
-            state = getattr(callback, "serialized_state", None)
+        state = getattr(callback, "serialized_state", None)
         if state is None:
             library = getattr(callback, "_library", None)
             if library is None:
@@ -747,7 +742,6 @@ def _compile_uncached_cfuncs(
     # setup instead of repeating it on its first callback.
 
     from numba.core.registry import cpu_target
-    from ._cimba import native_version
     from numba.core.runtime import nrt
     cpu_target.target_context.refresh()
     nrt.rtsys.initialize(cpu_target.target_context)
@@ -1673,8 +1667,6 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
                         count,
                         self._indexed_history_fields.get(flat_name, 0),
                     )
-        self._components: dict[str, Component] = {}
-        self._component_collections: dict[str, tuple[Component, ...]] = {}
         self._component_bindings: dict[str, tuple[Component, ...]] = {}
         self._component_spawnable_fields = {
             decl.direct_field_map[name]
@@ -1715,13 +1707,6 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
         self._runtime_text_slots: dict[str, int] = {}
         self._owner_decl = _owner_declaration(type(self), decls)
         self._functions = _build_functions((self._owner_decl,))
-        # Retained as a private compatibility view for tooling/tests that
-        # inspect component helpers; lowering itself has one function table.
-        self._component_functions = {
-            name: spec
-            for name, spec in self._functions.items()
-            if not spec.decl.owner_root
-        }
         self._lowering_context = _CallbackLoweringContext(
             self.datasets,
             self.history_fields,
@@ -1732,7 +1717,6 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
         self._bind_components()
         self._register_component_processes()
         self._register_model_callbacks()
-        self._class_process_count = len(self._processes)
         if type(self).__cimba_precompile__ == "eager":
             self._ensure_class_precompiled()
 
@@ -1741,10 +1725,8 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
             components = tuple(copy.copy(item) for item in decl.instances)
             self._component_bindings[decl.name] = components
             if decl.collection:
-                self._component_collections[decl.name] = components
                 setattr(self, decl.name, list(components))
             else:
-                self._components[decl.name] = components[0]
                 setattr(self, decl.name, components[0])
             for index, component in enumerate(components):
                 self._bind_component_metadata(
@@ -1784,7 +1766,7 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
         return cls.compilation_status()
 
     def _build_callback_compilation_plan(self) -> CompilationPlan | None:
-        count = self._class_process_count
+        count = len(self._processes)
         if (count == 0 and not self._predicates and not self._events
                 and not self._collects):
             return None
@@ -1802,7 +1784,7 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
         return CompilationPlan(
             model_name=self.name,
             callback_dtype=callback_dtype,
-            **self._callback_plan_fields(count),
+            **self._callback_plan_fields(),
             lifecycle_key=self._aot_lifecycle_key(),
             callback_count=(
                 count
@@ -1816,17 +1798,14 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
             _owner=self,
         )
 
-    def _callback_plan_fields(
-        self, process_count: int | None = None
-    ) -> dict[str, tuple[str, ...]]:
-        processes = self._processes[:process_count]
+    def _callback_plan_fields(self) -> dict[str, tuple[str, ...]]:
         functions = tuple(
             (spec.graph_name, spec.helper) for spec in self._functions.values()
         )
         return {
-            "process_names": tuple(item.name for item in processes),
+            "process_names": tuple(item.name for item in self._processes),
             "process_keys": tuple(
-                _callback_function_key(item.fn) for item in processes
+                _callback_function_key(item.fn) for item in self._processes
             ),
             "predicate_names": tuple(item.name for item in self._predicates),
             "predicate_keys": tuple(
@@ -1869,9 +1848,6 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
                     plan._record_type,
                     plan._lifecycle_jobs,
                     cache_counters=counters,
-                    processes=owner._processes[: owner._class_process_count],
-                    predicates=owner._predicates,
-                    events=owner._events,
                 )
                 compiled = _CompiledCallbackPlan(
                     plan,
@@ -1898,7 +1874,7 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
                 cls._cimba_callback_status = CompilationStatus(
                     "failed",
                     seconds=time.perf_counter() - started,
-                    process_count=self._class_process_count,
+                    process_count=len(self._processes),
                     cache_hits=counters.hits,
                     cache_misses=counters.misses,
                     cache_writes=counters.writes,
@@ -1912,7 +1888,7 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
         if compiled is None:
             return {}, {}, {}, {}
         plan = compiled.plan
-        current = self._callback_plan_fields(self._class_process_count)
+        current = self._callback_plan_fields()
         if self.dtype != plan.callback_dtype or any(
             getattr(plan, name) != value for name, value in current.items()
         ):
@@ -1989,9 +1965,8 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
     def _register_model_callbacks(self) -> None:
         callbacks = type(self)._callbacks()
         for kind in ("predicate", "event"):
-            register = getattr(self, f"_register_{kind}")
             for decl in getattr(callbacks, f"{kind}s"):
-                register(decl.fn, target_field=decl.field)
+                self._register_signal(decl.fn, kind, decl.field, None)
 
         for decl in callbacks.processes:
             spec = decl.spec
@@ -2046,8 +2021,8 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
                     instance_index=index,
                     context=lowering,
                 )
-                getattr(self, f"_register_{callback.kind}")(
-                    lowered, target_field=flat_field, target_index=field_index
+                self._register_signal(
+                    lowered, callback.kind, flat_field, field_index
                 )
 
         groups = decl.specialization_groups()
@@ -2761,18 +2736,6 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
         )
         return fn
 
-    def _register_predicate(
-        self, fn: _F, *, target_field: str | None = None,
-        target_index: int | None = None,
-    ) -> _F:
-        return self._register_signal(fn, "predicate", target_field, target_index)
-
-    def _register_event(
-        self, fn: _F, *, target_field: str | None = None,
-        target_index: int | None = None,
-    ) -> _F:
-        return self._register_signal(fn, "event", target_field, target_index)
-
     def _register_collect(self, fn: _F) -> _F:
         """Register the statistics-collection function `def fn(self)`, run once at the
         end of each trial, after any component-owned @sim.collect methods
@@ -3052,9 +3015,6 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
         precompiled_events: Mapping[str, Any] | None = None,
         precompiled_extra: Mapping[int, Any] | None = None,
         cache_counters: _CacheCounters | None = None,
-        processes: Sequence[_ProcDecl] | None = None,
-        predicates: Sequence[_BoundCallbackDecl] | None = None,
-        events: Sequence[_BoundCallbackDecl] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], list[Any]]:
         """Compile lowered class callbacks to Cimba's native callback ABIs."""
         trial_ptr = types.CPointer(rec)
@@ -3146,8 +3106,7 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
             extra_callbacks[index] = callback
 
         jobs: list[_CFuncJob] = []
-        compile_processes = self._processes if processes is None else processes
-        for p in compile_processes:
+        for p in self._processes:
             if p.name in proc_cfuncs:
                 continue
             try:
@@ -3164,14 +3123,14 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
         signal_groups = (
             (
                 "predicate",
-                self._predicates if predicates is None else predicates,
+                self._predicates,
                 pred_cfuncs,
                 pred_sig,
                 lambda item: make_pred(njit(item.fn)),
             ),
             (
                 "event",
-                self._events if events is None else events,
+                self._events,
                 event_cfuncs,
                 ev_sig,
                 lambda item: make_event(njit(item.fn), item.takes_data),

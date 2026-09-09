@@ -479,11 +479,6 @@ class _OwnerDecl:
 def _component_declarations(cls: type[Component]) -> _Declarations:
     decls = cls._field_declarations(allow_symbolic_pqueues=True, allow_refs=True)
     cls._bind_callbacks(decls, owner="component")
-    for field_decl in decls.fields.values():
-        if not field_decl.kind.on_component:
-            raise ValueError(
-                f"component '{cls.__name__}' declares {field_decl.kind.name} "
-                "fields, which are not supported yet")
     return decls
 
 

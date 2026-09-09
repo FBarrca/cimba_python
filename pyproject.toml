@@ -59,8 +59,7 @@ testpaths = ["tests"]
 addopts = "--capture=sys"
 
 [tool.meson-python.args]
-# Compile only our extension (alias in meson.build), skipping upstream's
-# tutorials/benchmarks/tests -- one of them links system HDF5.
+# Stable extension target shared by wheel builds and editable rebuilds.
 compile = ["cimba_ext"]
 # libcimba is statically linked in; keep subproject install artifacts
 # (libcimba.a + upstream headers) out of the wheel.

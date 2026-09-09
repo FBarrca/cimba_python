@@ -171,10 +171,6 @@ def current_seed() -> int:
     return <object>cmb_random_curseed()
 
 
-def random() -> float:
-    return cmb_random()
-
-
 def random_u64() -> int:
     return <object>cmb_random_sfc64()
 
@@ -292,10 +288,6 @@ def dice(object min, object max) -> int:
     return cmb_random_dice(_i64_value(min, "min"), _i64_value(max, "max"))
 
 
-def flip() -> bool:
-    return True if cmb_random_flip() else False
-
-
 def bernoulli(double p) -> bool:
     return True if cmb_random_bernoulli(p) else False
 
@@ -320,17 +312,6 @@ def negative_binomial(object m, object p) -> int:
     if probability == 1.0:
         return 0
     return <object>cmb_random_negative_binomial(
-        successes,
-        probability,
-    )
-
-
-def pascal(object m, object p) -> int:
-    cdef unsigned successes = _random_unsigned_value(m, "m")
-    cdef double probability = _random_probability_value(p, "p", False)
-    if probability == 1.0:
-        return 0
-    return <object>cmb_random_pascal(
         successes,
         probability,
     )

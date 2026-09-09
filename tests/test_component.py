@@ -105,7 +105,7 @@ def test_heterogeneous_component_collection_dispatches_dynamic_function_calls():
     assert model.dtype["policies__lot_size"].shape == (2,)
     assert model.dtype["policies__ordering_cost"].shape == ()
     calculate_specs = [
-        spec for spec in model._component_functions.values()
+        spec for spec in model._functions.values()
         if spec.decl.name == "policies" and spec.name == "calculate"
     ]
     assert len(calculate_specs) == 2
@@ -611,7 +611,7 @@ def test_component_function_reads_params_and_returns_value():
     assert "_CIMBA_FUNCTION_policy__decide_" in source
     assert "self.policy__threshold" in source
     assert "self.policy__target" in source
-    (spec,) = model._component_functions.values()
+    (spec,) = model._functions.values()
     assert spec.helper.nopython_signatures
     assert "__cimba_dep_0" in spec.helper.__cimba_source__
     graph = model.process_dag()
@@ -871,7 +871,7 @@ def test_component_function_classes_and_cache_are_independent():
 
     model = System()
     add_specs = [
-        spec for spec in model._component_functions.values()
+        spec for spec in model._functions.values()
         if spec.decl.cls is Add
     ]
     assert len(add_specs) == 2
@@ -928,7 +928,7 @@ def test_item_functions_compile_across_collections_of_unequal_length():
         three: Owner = Owner(3)
 
     model = Supply()
-    symbols = [spec.symbol for spec in model._component_functions.values()]
+    symbols = [spec.symbol for spec in model._functions.values()]
     assert len(symbols) == len(set(symbols))
 
     exp = model.experiment(one__items__factor=[5.0],

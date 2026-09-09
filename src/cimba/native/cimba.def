@@ -38,7 +38,6 @@ EXPORTS
     cpy_random_PERT
     cpy_random_PERT_mod
     cpy_random_bernoulli
-    cpy_random_flip
     cpy_random_triangular
     cpy_random_weibull
     cpy_random_lognormal
@@ -46,21 +45,15 @@ EXPORTS
     cpy_random_beta
     cpy_random_poisson
     cpy_random_dice
-    cpy_random_std_normal
-    cpy_random_std_exponential
-    cpy_random_std_gamma
-    cpy_random_std_beta
     cpy_random_logistic
     cpy_random_cauchy
     cpy_random_pareto
     cpy_random_chisquared
     cpy_random_F_dist
-    cpy_random_std_t_dist
     cpy_random_t_dist
     cpy_random_geometric
     cpy_random_binomial
     cpy_random_negative_binomial
-    cpy_random_pascal
     cmb_process_create
     cpy_process_create_sized
     cpy_spawned_register

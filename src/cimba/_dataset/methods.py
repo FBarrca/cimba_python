@@ -3,67 +3,12 @@
 from __future__ import annotations
 
 import ast
-from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
+from .._methods import _MethodSpec, _visit_expr
+
 from . import helpers as _dataset_helpers
-
-
-@dataclass(frozen=True)
-class _DatasetMethodSpec:
-    helper_name: str
-    helper_attr: str
-    params: tuple[str, ...] = ()
-    defaults: Mapping[str, object] = field(default_factory=dict)
-
-    def normalize_args(
-        self,
-        method: str,
-        args: Sequence[ast.expr],
-        keywords: Sequence[ast.keyword],
-        *,
-        label: str,
-    ) -> list[ast.expr]:
-        if len(args) > len(self.params):
-            raise ValueError(
-                f"{label} passes too many arguments to dataset {method}()")
-        call_args = list(args)
-        if not keywords:
-            return call_args
-
-        by_name = {name: index for index, name in enumerate(self.params)}
-        supplied = set(self.params[:len(call_args)])
-        keyed: dict[int, ast.expr] = {}
-        max_index = len(call_args) - 1
-        for kw in keywords:
-            if kw.arg is None:
-                raise ValueError(
-                    f"{label} cannot use **kwargs with dataset {method}()")
-            index = by_name.get(kw.arg)
-            if index is None:
-                raise ValueError(
-                    f"{label} passes unknown dataset {method}() argument "
-                    f"'{kw.arg}'")
-            if kw.arg in supplied or index in keyed:
-                raise ValueError(
-                    f"{label} passes dataset {method}() argument "
-                    f"'{kw.arg}' more than once")
-            supplied.add(kw.arg)
-            keyed[index] = kw.value
-            max_index = max(max_index, index)
-
-        for index in range(len(call_args), max_index + 1):
-            if index in keyed:
-                call_args.append(keyed[index])
-            else:
-                param = self.params[index]
-                if param not in self.defaults:
-                    raise ValueError(
-                        f"{label} is missing required dataset {method}() "
-                        f"argument '{param}'")
-                call_args.append(ast.Constant(self.defaults[param]))
-        return call_args
 
 
 def _spec(
@@ -72,9 +17,9 @@ def _spec(
     *,
     helper_attr: str | None = None,
     defaults: Mapping[str, object] | None = None,
-) -> _DatasetMethodSpec:
+) -> _MethodSpec:
     attr = helper_attr or method
-    return _DatasetMethodSpec(
+    return _MethodSpec(
         helper_name=f"_cimba_dataset_{attr}",
         helper_attr=attr,
         params=params,
@@ -131,18 +76,6 @@ def dataset_lowering_namespace() -> dict[str, Any]:
     }
 
 
-def _visit_expr(
-    visit: Callable[[ast.AST], ast.AST],
-    node: ast.expr,
-    *,
-    what: str,
-) -> ast.expr:
-    lowered = visit(node)
-    if not isinstance(lowered, ast.expr):
-        raise TypeError(f"{what} did not lower to an expression")
-    return lowered
-
-
 def lower_dataset_method_call(
     node: ast.Call,
     target: ast.expr,
@@ -174,7 +107,7 @@ def lower_dataset_method_call(
         ast.Call(
             func=ast.Name(id=spec.helper_name, ctx=ast.Load()),
             args=[target, *spec.normalize_args(
-                method, args, keywords, label=label)],
+                "dataset", method, args, keywords, label=label)],
             keywords=[],
         ),
         node,

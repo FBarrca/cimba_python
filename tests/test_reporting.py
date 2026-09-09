@@ -125,6 +125,31 @@ def test_sim_dataset_methods_compile_in_model_callbacks(tmp_path):
     assert "#" in report.read_text()
 
 
+def test_reporting_file_methods_apply_trailing_defaults(tmp_path):
+    report = tmp_path / "report_defaults.txt"
+    report.write_text("existing report\n")
+    report_handle = sim.log_text(str(report))
+
+    class Defaults(ReportingModel):
+        @sim.collect
+        def collect(self):
+            ok = self.d.print_file(report_handle)
+            ok += self.d.fivenum_file(path=report_handle)
+            ok += self.d.histogram_file(report_handle, bins=4)
+            ok += self.q.history().print_file(report_handle)
+            ok += self.q.history().fivenum_file(path=report_handle)
+            ok += self.q.history().histogram_file(report_handle, bins=4)
+            self.ok = float(ok)
+
+    exp = Defaults().experiment(
+        replications=1, duration=3.0, warmup=0.0, seed=29)
+    assert exp.run() == 0
+    assert exp["ok"][0] == 6.0
+    text = report.read_text()
+    assert text.startswith("existing report\n")
+    assert "#" in text
+
+
 def test_dataset_capture_returns_per_trial_arrays():
     class Samples(sim.Model):
         avg: sim.Output
