@@ -273,3 +273,42 @@ def test_callable_trace_must_return_1d(replay_model):
 def test_trace_view_requires_compiled_code():
     with pytest.raises(TypeError, match="compiled model code"):
         sim.Trace(np.zeros(2, dtype=np.int64))
+
+
+def test_shared_trace_rejects_writes_through_aliases_and_helpers():
+    from numba import njit
+
+    @njit
+    def overwrite(values):
+        values[0] = 9.0
+
+    class Writer(sim.Model):
+        data: sim.Trace
+
+        @sim.process
+        def run(self):
+            alias = sim.Trace(self.data)
+            overwrite(alias)
+
+    with pytest.raises(Exception, match="readonly|read-only"):
+        Writer().experiment(data=np.array([1.0]), duration=None, warmup=0)
+
+
+def test_trace_copy_is_mutable_without_changing_replay_input():
+    class Copier(sim.Model):
+        data: sim.Trace
+        total: sim.Output
+
+        @sim.process
+        def run(self):
+            values = sim.Trace(self.data).copy()
+            values[0] += 10.0
+            self.total = values.sum()
+
+    values = np.array([1.0, 2.0])
+    experiment = Copier().experiment(data=values, replications=4,
+                                    duration=None, warmup=0)
+    for _ in range(2):
+        assert experiment.run() == 0
+        np.testing.assert_array_equal(experiment["total"], 13.0)
+        np.testing.assert_array_equal(values, [1.0, 2.0])

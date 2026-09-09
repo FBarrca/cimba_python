@@ -14,6 +14,7 @@ ffi.cdef("""
                               uint64_t num_trials,
                               size_t trial_struct_size,
                               void (*your_trial_func)(void *));
+    uint32_t cimba_threads_use(uint32_t n_threads);
     uint64_t cmb_random_hwseed(void);
     uint64_t cpy_process_sizeof(void);
     void *cpy_history_capture_store_create(uint64_t num_trials,

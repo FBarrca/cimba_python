@@ -81,7 +81,7 @@ resamplers. Callables run serially before the parallel trial run; for
 expensive generators, ``model.trial_seeds()`` exposes the same per-trial
 seeds so rows can be generated in parallel outside cimba and passed in
 precomputed. Inside a process body, ``values = sim.Trace(env.<field>)``
-returns the trial's trace as a plain float64 array supporting len(),
+returns the trial's trace as a read-only float64 array supporting len(),
 indexing, slicing, and iteration. When a generator exhausts its trace
 it simply finishes; the trial still runs to its configured window, so
 traces should cover warmup + duration + cooldown.
@@ -103,8 +103,7 @@ the root trial environment and can access component fields with
 fields remain flattened with names such as ``retailer__orders``. Components
 can also expose explicitly typed, read-only synchronous methods with
 ``@sim.function``; calls such as ``env.policy.decide(level)`` compile to
-nopython helpers whose component field reads are passed as flattened scalar
-arguments. Models can declare root helpers with the same marker using
+nopython helpers that read component fields from the current trial record. Models can declare root helpers with the same marker using
 ``def helper(self, ...)``; model callbacks call them through
 ``self.helper(...)`` and component callbacks through ``env.helper(...)``.
 Components may also own ``@sim.predicate`` and
@@ -153,14 +152,11 @@ from ._declarations import (Condition, Const, Dataset, Env, Event, FloatState,
                             State, Store, Trace, capacity, count)
 from ._graph import (ProcessDAG, ProcessDAGBlock, ProcessDAGEdge,
                      ProcessDAGNode)
-from ._model import (CompilationCacheStats, CompilationPlan,
-                     CompilationStatus,
-                     ComponentFieldSchema, Experiment, ExperimentResults,
+from ._model import (ComponentFieldSchema, Experiment, ExperimentResults,
                      Model, Struct, trace_rng)
 
 __all__ = [
-    "Model", "Component", "ComponentFieldSchema", "CompilationPlan",
-    "CompilationStatus", "CompilationCacheStats", "Experiment",
+    "Model", "Component", "ComponentFieldSchema", "Experiment",
     "ExperimentResults", "Env",
     "Handle",
     "Param", "Output", "State", "FloatState", "Queue", "Resource", "Pool",

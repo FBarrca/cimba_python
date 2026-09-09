@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, get_type_hints
 from numba import carray, types
 from numba.extending import overload as _nb_overload
 
-from ._intrinsics import ptr_caster
+from ._intrinsics import ptr_caster, readonly_array
 
 #: Opaque native entity handle (process, queue, resource, ...) as stored
 #: in env fields.
@@ -323,7 +323,7 @@ if TYPE_CHECKING:
 
     class Trace:
         """Per-trial replay array, fed to experiment(); inside model code
-        ``Trace(env.<field>)`` returns the trial's trace as a float64
+        ``Trace(env.<field>)`` returns the trial's trace as a read-only float64
         NumPy view."""
 
         def __new__(cls, field: "Trace") -> "NDArray[np.float64]": ...
@@ -427,7 +427,7 @@ else:
             return None
 
         def view(field):
-            return carray(_trace_data(field[0]), field[1])
+            return readonly_array(carray(_trace_data(field[0]), field[1]))
 
         return view
 

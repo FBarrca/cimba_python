@@ -23,6 +23,8 @@ _u32 = types.uint32
 _u64 = types.uint64
 _f64 = types.float64
 
+trial_abandon = _extern("cimba_trial_abandon", _void())
+
 # --- Event queue and simulation clock --------------------------------------
 event_queue_initialize = _extern("cmb_event_queue_initialize", _void(_f64))
 event_queue_execute = _extern("cmb_event_queue_execute", _void())

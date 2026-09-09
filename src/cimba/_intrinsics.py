@@ -16,6 +16,20 @@ from numba.extending import intrinsic
 
 
 @intrinsic
+def readonly_array(typingctx, array):
+    """Expose shared replay storage without granting compiled write access."""
+    if not isinstance(array, types.Array):
+        raise TypeError("readonly_array() expects an array")
+    result = array.copy(readonly=True)
+
+    def codegen(context, builder, signature, args):
+        context.nrt.incref(builder, signature.return_type, args[0])
+        return args[0]
+
+    return result(array), codegen
+
+
+@intrinsic
 def addressof(typingctx, ptr):
     """Integer address of a typed pointer."""
     if not isinstance(ptr, types.CPointer):

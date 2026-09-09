@@ -1,11 +1,11 @@
-"""Checks for the native ABI consumed by compiled models and cached callbacks."""
+"""Checks for the native ABI consumed by compiled models."""
 
 import ctypes
 
 from numba import types
 
 import cimba
-from cimba import _bindings, _cimba_native, _model
+from cimba import _bindings, _cimba_native
 
 
 def test_native_runtime_is_rc2():
@@ -21,16 +21,3 @@ def test_all_numba_bindings_resolve_in_native_library():
         and not hasattr(library, binding.symbol)
     })
     assert missing == []
-
-
-def test_callback_cache_changes_with_native_version(monkeypatch):
-    from cimba import _cimba
-
-    _model._callback_cache_platform_key.cache_clear()
-    try:
-        original = _model._callback_cache_platform_key()
-        monkeypatch.setattr(_cimba, "native_version", lambda: "different-native-abi")
-        _model._callback_cache_platform_key.cache_clear()
-        assert _model._callback_cache_platform_key() != original
-    finally:
-        _model._callback_cache_platform_key.cache_clear()

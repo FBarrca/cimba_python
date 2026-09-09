@@ -192,11 +192,10 @@ for itself, so a function can weigh a whole collection and return its choice:
 
 Collection lengths are known when the model is built, so compiled code can use
 ``len`` directly; a manually synchronized ``sim.Const[int]`` count field is not
-needed. Reading a field at a self-computed index requires every instance of the
-collection to declare that field, and the field must be a ``Param``,
-``Output``, ``State``, or ``FloatState`` -- scalar ``Const`` values live in a
-side table and have to be indexed by a function argument. Both restrictions are
-reported when the model is constructed.
+needed. Dynamic field access requires every possible selected instance to
+declare that field. Locally computed indices can read ``Param``, ``Output``,
+``State``, ``FloatState``, and scalar ``Const`` values. Reads remain inside the
+helper body, so branches and local assignments control when they happen.
 
 Component-owned statistics
 --------------------------

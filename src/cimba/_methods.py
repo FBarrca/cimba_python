@@ -38,6 +38,14 @@ class _MethodSpec:
                     f"{label} passes {call} argument '{kw.arg}' more than once")
             supplied[kw.arg] = kw.value
 
+        keyword_order = [self.params.index(kw.arg) for kw in keywords]
+        if keyword_order != sorted(keyword_order) and any(
+            not isinstance(kw.value, (ast.Name, ast.Constant)) for kw in keywords
+        ):
+            raise ValueError(
+                f"{label} would reorder expressions in {call}; assign keyword "
+                "values to local variables first, or use parameter order")
+
         # Native external functions have no Python defaults. Supply every
         # argument even when the call has no keywords or omits trailing ones.
         result = []

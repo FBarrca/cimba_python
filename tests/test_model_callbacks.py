@@ -500,7 +500,7 @@ def test_model_function_validation_and_recursion():
         Protected()
 
 
-def test_compilation_plan_covers_all_class_callback_categories_and_reuses():
+def test_compile_covers_all_callback_categories_and_reuses_one_model():
     class Planned(sim.Model):
         ready: sim.Predicate
         alarm: sim.Event
@@ -524,69 +524,19 @@ def test_compilation_plan_covers_all_class_callback_categories_and_reuses():
         def stats(self):
             self.result = self.value
 
-    first = Planned()
-    plan = Planned.compilation_plan()
-    assert plan is not None
-    assert plan.process_names == ("driver",)
-    assert plan.predicate_names == ("is_ready",)
-    assert plan.event_names == ("on_alarm",)
-    assert len(plan.collect_keys) == 1
-    assert plan.callback_count == 13
-
-    first_callbacks = first._aot_class_callbacks()
-    second = Planned()
-    second_callbacks = second._aot_class_callbacks()
-    assert first_callbacks == second_callbacks
-
-    experiment = second.experiment(replications=1, duration=2.0, warmup=0.0)
+    model = Planned()
+    assert model._compiled is None
+    model.compile()
+    compiled = model._compiled
+    experiment = model.experiment(replications=1, duration=2.0, warmup=0.0)
+    assert model._compiled is compiled
     assert experiment.run() == 0
     assert experiment.results.result[0] == 7
-
-
-def test_model_callbacks_respect_lazy_and_explicit_precompile_modes():
-    class CallbackModel(sim.Model):
-        value: sim.State
-        result: sim.Output
-
-        @sim.predicate
-        def positive(self) -> bool:
-            return self.value > 0
-
-        @sim.event
-        def set_value(self, data: int):
-            self.value = data
-
-        @sim.process
-        def driver(self):
-            self._ev_set_value.schedule(0.0, 3)
-            sim.hold(1.0)
-
-        @sim.collect
-        def stats(self):
-            self.result = self.value
-
-    class Lazy(CallbackModel):
-        __cimba_precompile__ = "lazy"
-
-    lazy = Lazy()
-    assert Lazy.compilation_status().state == "pending"
-    lazy_experiment = lazy.experiment(
-        replications=1, duration=2.0, warmup=0.0)
-    assert Lazy.compilation_status().state == "ready"
-    assert lazy_experiment.run() == 0
-    assert lazy_experiment.results.result[0] == 3
-
-    class Explicit(CallbackModel):
-        __cimba_precompile__ = "explicit"
-
-    explicit = Explicit()
-    explicit.experiment(replications=1, duration=2.0, warmup=0.0)
-    assert Explicit.compilation_status().state == "pending"
-    assert Explicit.precompile().state == "ready"
 
 
 def test_removed_instance_callback_api_and_callback_free_direct_model():
     model = sim.Model("plain", outputs=["value"])
     for name in ("process", "collect", "predicate", "event"):
         assert not hasattr(model, name)
-    assert sim.Model.compilation_status().state == "unavailable"
+    with pytest.raises(ValueError, match="model has no processes"):
+        model.compile()

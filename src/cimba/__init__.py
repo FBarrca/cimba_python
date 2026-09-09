@@ -1,4 +1,4 @@
-import os
+from operator import index
 
 from .cimba import (
     gil_enabled,
@@ -45,10 +45,13 @@ def version() -> str:
 
 
 def use_threads(n: int) -> int:
-    """Return the number of worker threads Cimba will use.
+    """Set native workers for the next run and return the effective count.
 
-    The upstream library always runs one worker thread per logical CPU core.
-    The ``n`` argument is accepted for API compatibility (``0`` means all cores)
-    but is not passed through to the C library yet.
+    Call between runs. Zero selects the runtime's CPU-count default.
     """
-    return os.cpu_count() or 1
+    from ._cimba import lib
+
+    n = index(n)
+    if not 0 <= n <= 0xFFFFFFFF:
+        raise ValueError("worker count must fit an unsigned 32-bit integer")
+    return int(lib.cimba_threads_use(n))

@@ -1,7 +1,7 @@
-"""Fresh-process benchmark for Cimba class-callback compilation.
+"""Fresh-process benchmark for Cimba model compilation.
 
 The parent process intentionally imports no Cimba modules.  Every sample is
-collected in a new interpreter so import, class planning, model construction,
+collected in a new interpreter so import, model definition, model construction,
 first-experiment compilation, and cached experiment construction remain
 separate measurements.
 
@@ -9,7 +9,6 @@ Examples::
 
     uv run python benchmark/component_compilation.py
     uv run python benchmark/component_compilation.py --runs 9 --json out.json
-    uv run python benchmark/component_compilation.py --cache warm
 """
 
 from __future__ import annotations
@@ -35,8 +34,11 @@ PHASES = (
     "cimba_import",
     "model_definition",
     "model_build",
+    "compile",
     "first_experiment",
     "cached_experiment",
+    "first_run",
+    "repeat_run",
 )
 
 
@@ -181,13 +183,20 @@ def _worker(scenario: str, scale: int, workdir: Path) -> dict[str, Any]:
             seed=7,
         )
 
+    _, phases["compile"] = _timed(model.compile)
     first, phases["first_experiment"] = _timed(experiment)
     cached, phases["cached_experiment"] = _timed(experiment)
     if first.trials.dtype != cached.trials.dtype:
         raise RuntimeError("cached experiment changed the trial dtype")
 
-    status = getattr(model_type, "compilation_status", lambda: None)()
-    callback_cache = model.callback_cache_stats()
+    failures, phases["first_run"] = _timed(first.run)
+    import numpy as np
+    outputs = {name: first[name].copy() for name in model.outputs}
+    repeated_failures, phases["repeat_run"] = _timed(first.run)
+    if failures or repeated_failures:
+        raise RuntimeError("benchmark trials failed")
+    for name, expected in outputs.items():
+        np.testing.assert_array_equal(first[name], expected)
     import cimba
     return {
         "scenario": scenario,
@@ -195,19 +204,6 @@ def _worker(scenario: str, scale: int, workdir: Path) -> dict[str, Any]:
         "nodes": nodes,
         "instances": instances,
         "phases": phases,
-        "precompile": (
-            None if status is None else {
-                "state": status.state,
-                "seconds": status.seconds,
-                "cache_hits": status.cache_hits,
-                "cache_misses": status.cache_misses,
-            }
-        ),
-        "callback_cache": {
-            "hits": callback_cache.hits,
-            "misses": callback_cache.misses,
-            "writes": callback_cache.writes,
-        },
         "metadata": {
             "python": platform.python_version(),
             "implementation": platform.python_implementation(),
@@ -239,22 +235,11 @@ def _sample(
     scenario: str,
     scale: int,
     runs: int,
-    cache_mode: str,
 ) -> dict[str, Any]:
     samples = []
     with tempfile.TemporaryDirectory(prefix="cimba-component-bench-") as root:
         root_path = Path(root)
-        shared_cache = root_path / "cache"
-        first_run = -1 if cache_mode == "warm" else 0
-        for run in range(first_run, runs):
-            env = os.environ.copy()
-            if cache_mode == "off":
-                env["CIMBA_CACHE"] = "0"
-            else:
-                cache = (shared_cache if cache_mode == "warm"
-                         else root_path / f"cache-{run}")
-                env["CIMBA_CACHE"] = "1"
-                env["CIMBA_CACHE_DIR"] = str(cache)
+        for run in range(runs):
             command = [
                 sys.executable,
                 str(Path(__file__).resolve()),
@@ -263,13 +248,12 @@ def _sample(
                 "--scale",
                 str(scale),
                 "--workdir",
-                str(root_path / ("prime" if run < 0 else f"run-{run}")),
+                str(root_path / f"run-{run}"),
             ]
             try:
                 completed = subprocess.run(
                     command,
                     cwd=ROOT,
-                    env=env,
                     check=True,
                     capture_output=True,
                     text=True,
@@ -279,8 +263,7 @@ def _sample(
                     f"benchmark worker failed for {scenario}-{scale}:\n"
                     f"{exc.stderr}"
                 ) from exc
-            if run >= 0:
-                samples.append(json.loads(completed.stdout))
+            samples.append(json.loads(completed.stdout))
 
     return {
         "scenario": scenario,
@@ -288,7 +271,6 @@ def _sample(
         "nodes": samples[0]["nodes"],
         "instances": samples[0]["instances"],
         "runs": runs,
-        "cache": cache_mode,
         "phases": {
             phase: _summary([sample["phases"][phase] for sample in samples])
             for phase in PHASES
@@ -299,32 +281,16 @@ def _sample(
 
 
 def _print(results: list[dict[str, Any]]) -> None:
-    print("Cimba fresh-process class-callback compilation benchmark")
+    print("Cimba fresh-process model compilation benchmark")
     print("times are median ± MAD; each sample uses a new interpreter")
-    print(
-        "scenario             | instances | import | definition | build | "
-        "first experiment | cached"
-    )
-    print(
-        "---------------------+-----------+--------+------------+-------+"
-        "------------------+-------"
-    )
+    print("scenario | " + " | ".join(PHASES))
     for result in results:
         label = result["scenario"]
         if label == "synthetic":
             label = f"synthetic-{result['scale']}"
-        values = result["phases"]
-
-        def cell(name: str) -> str:
-            item = values[name]
-            return f"{item['median']:.3f}±{item['mad']:.3f}"
-
-        print(
-            f"{label:20} | {result['instances']:9d} | "
-            f"{cell('cimba_import'):>6} | {cell('model_definition'):>10} | "
-            f"{cell('model_build'):>5} | {cell('first_experiment'):>16} | "
-            f"{cell('cached_experiment'):>6}"
-        )
+        cells = [f"{result['phases'][phase]['median']:.4f}"
+                 f"±{result['phases'][phase]['mad']:.4f}" for phase in PHASES]
+        print(label + " | " + " | ".join(cells))
 
 
 def _parse_args() -> argparse.Namespace:
@@ -337,13 +303,11 @@ def _parse_args() -> argparse.Namespace:
         help="scenario to run; defaults to both tutorials and synthetic",
     )
     parser.add_argument("--scales", default="1,10,100,1000")
-    parser.add_argument("--cache", choices=("off", "cold", "warm"),
-                        default="off")
     parser.add_argument("--json", type=Path)
     parser.add_argument(
         "--check",
         action="store_true",
-        help="fail unless models compile and warm-cache runs record hits",
+        help="verify compilation, execution, and repeatable outputs (always checked)",
     )
     parser.add_argument("--worker", choices=(
         "assembly-line", "amusement-park", "synthetic"))
@@ -373,28 +337,12 @@ def main() -> int:
         for scale in (scales if scenario == "synthetic" else [1])
     ]
     results = [
-        _sample(scenario, scale, args.runs, args.cache)
+        _sample(scenario, scale, args.runs)
         for scenario, scale in cases
     ]
-    if args.check:
-        for result in results:
-            for sample in result["samples"]:
-                precompile = sample["precompile"]
-                if precompile is not None and precompile["state"] != "ready":
-                    raise SystemExit(
-                        f"{result['scenario']} precompile was not ready")
-            if args.cache == "warm":
-                if not any(
-                    (sample["precompile"] is not None
-                     and sample["precompile"]["cache_hits"] > 0)
-                    or sample["callback_cache"]["hits"] > 0
-                    for sample in result["samples"]
-                ):
-                    raise SystemExit(
-                        f"{result['scenario']} recorded no warm-cache hit")
     _print(results)
     payload = {
-        "schema": 1,
+        "schema": 2,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "results": results,
     }

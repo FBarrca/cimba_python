@@ -635,3 +635,18 @@ def test_native_text_report_stdout_variants_print_to_console():
     assert "Queue lengths for store:" in text
     assert "Queue lengths for pqs_0:" in text
     assert "#" in text
+
+
+def test_native_keyword_lowering_rejects_reordered_effectful_expressions():
+    from cimba import random
+
+    class Unordered(sim.Model):
+        values: sim.Dataset
+
+        @sim.process
+        def report(self):
+            self.values.histogram(high=random.uniform(2.0, 3.0),
+                                  low=random.uniform(0.0, 1.0))
+
+    with pytest.raises(ValueError, match="would reorder expressions"):
+        Unordered()

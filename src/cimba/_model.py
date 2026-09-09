@@ -3,9 +3,8 @@
 A ``Model`` collects declared entities, parameters, outputs, and process
 functions, then compiles everything on first ``experiment()``:
 
-* component process bodies and data-only lifecycle callbacks are planned from
-  the first normally constructed model and compiled once per model class;
-  instance-specific callbacks are compiled on the first experiment;
+* user callbacks compile once per concrete model, after construction and
+  registration; only fixed library lifecycle callbacks are shared;
 * a fixed lifecycle ABI consumes runtime descriptor tables to create entities,
   schedule the recording window, start processes, run the event queue, collect
   statistics, and tear everything down without per-layout source generation;
@@ -16,26 +15,15 @@ functions, then compiles everything on first ``experiment()``:
 
 import ast
 import copy
-import functools
 import hashlib
-import importlib.metadata
 import inspect
-import os
-import pickle
-import platform
-import sys
-import tempfile
 import threading
-import time
-import types as pytypes
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
-from types import MappingProxyType
+from types import FunctionType, MappingProxyType
+from uuid import uuid4
 from typing import TYPE_CHECKING, Any, Generic, Self, TypeVar, cast, get_type_hints
 
-import llvmlite
-import numba
 import numpy as np
 from numpy.typing import ArrayLike
 
@@ -101,7 +89,8 @@ _LIFECYCLE_FIELDS = (
     "_cimba_process_handles _cimba_process_handle_count "
     "_cimba_process_contexts _cimba_has_spawned _cimba_collect_descriptors "
     "_cimba_collect_descriptor_count _cimba_entity_descriptors "
-    "_cimba_entity_descriptor_count _cimba_runtime_text_handles"
+    "_cimba_entity_descriptor_count _cimba_runtime_text_handles "
+    "_cimba_trial_completed"
 ).split()
 (
     _RECORDING_EVENT_FIELD,
@@ -123,6 +112,7 @@ _LIFECYCLE_FIELDS = (
     _ENTITY_DESCRIPTORS_FIELD,
     _ENTITY_DESCRIPTOR_COUNT_FIELD,
     _RUNTIME_TEXT_HANDLES_FIELD,
+    _TRIAL_COMPLETED_FIELD,
 ) = _LIFECYCLE_FIELDS
 
 _LIFECYCLE_ABI_FIELDS = [
@@ -208,8 +198,34 @@ def _native_cfunc(signature):
 
 
 def _compile_parallel_cfunc(signature, function):
-    """Compile one callback in either the parent or a forked worker."""
-    return _native_cfunc(signature)(function)
+    """Compile a C boundary that turns Numba exceptions into trial failure.
+
+    Numba's default cfunc wrapper prints and discards an exception. Catch it
+    while still in native code, then enter Cimba's native trial recovery.
+    """
+    # Forked compilers inherit Numba's symbol counter. Give each compilation
+    # a unique symbol so separately loaded libraries cannot bind to an older
+    # model's identically named callback with the same record layout.
+    symbol = f"_cimba_callback_{uuid4().hex}"
+    owned = FunctionType(function.__code__, function.__globals__, symbol,
+                         function.__defaults__, function.__closure__)
+    owned.__qualname__ = symbol
+    inner = njit(signature)(owned)
+    arguments = ", ".join(f"a{i}" for i in range(len(signature.args)))
+    fallback = "None" if signature.return_type == types.void else "0"
+    # Numba infers `none` for a body that always raises, even with an explicit
+    # return signature. Such a body has no successful value to forward.
+    if inner.nopython_signatures[0].return_type == types.void:
+        call = f"inner({arguments})\n        return {fallback}"
+    else:
+        call = f"return inner({arguments})"
+    namespace = {"inner": inner, "abandon": _b.trial_abandon}
+    exec(
+        f"def {symbol}_guarded({arguments}):\n"
+        f"    try:\n        {call}\n"
+        f"    except Exception:\n        pass\n"
+        f"    abandon()\n    return {fallback}\n", namespace)
+    return _native_cfunc(signature)(namespace[f"{symbol}_guarded"])
 
 
 def _runtime_trial_processes(vtrl):
@@ -450,6 +466,7 @@ def _runtime_trial(vtrl):
     call_void_callback(env[_TRIAL_PROCESSES_FIELD], vtrl)
     _b.event_queue_execute()
     call_void_callback(env[_TRIAL_TEARDOWN_FIELD], vtrl)
+    env[_TRIAL_COMPLETED_FIELD] = 1
 
 
 _LIFECYCLE_JOBS = (
@@ -473,12 +490,11 @@ _LIFECYCLE_JOBS = (
 class _LoadedCFunc:
     """A callback from a fork-compiled library loaded into the parent."""
 
-    __slots__ = ("address", "library", "native_name", "serialized_state")
+    __slots__ = ("address", "library", "native_name")
 
-    def __init__(self, library, native_name: str, serialized_state=None):
+    def __init__(self, library, native_name: str):
         self.library = library
         self.native_name = native_name
-        self.serialized_state = serialized_state
         self.address = library.get_pointer_to_function(native_name)
 
 
@@ -505,218 +521,6 @@ def _compile_cfunc_job(index: int):
     )
 
 
-def _callback_function_key(function: Callable[..., Any]) -> str:
-    """Fingerprint lowered code and compile-time values used by AOT reuse."""
-    digest = hashlib.sha256()
-    seen: set[int] = set()
-
-    def add(value) -> None:
-        if id(value) in seen:
-            return
-        if inspect.isfunction(value) or hasattr(value, "py_func"):
-            py_func = getattr(value, "py_func", value)
-            if not inspect.isfunction(py_func):
-                return
-            seen.add(id(value))
-            code = py_func.__code__
-            digest.update(code.co_code)
-            digest.update(repr(code.co_consts).encode())
-            digest.update(repr(code.co_names).encode())
-            digest.update(repr(py_func.__defaults__).encode())
-            digest.update(repr(py_func.__kwdefaults__).encode())
-            digest.update(
-                repr(getattr(py_func, "__cimba_cache_salt__", None)).encode()
-            )
-            source = getattr(py_func, "__cimba_source__", None)
-            if source is not None:
-                digest.update(source.encode())
-            if py_func.__closure__ is not None:
-                for cell in py_func.__closure__:
-                    add(cell.cell_contents)
-            for name in code.co_names:
-                if name in py_func.__globals__:
-                    add(py_func.__globals__[name])
-        elif isinstance(value, np.ndarray):
-            seen.add(id(value))
-            digest.update(value.dtype.str.encode())
-            digest.update(repr(value.shape).encode())
-            digest.update(np.ascontiguousarray(value).tobytes())
-        elif isinstance(value, np.generic):
-            digest.update(value.dtype.str.encode())
-            digest.update(value.tobytes())
-        elif isinstance(value, (tuple, list)):
-            seen.add(id(value))
-            for item in value:
-                add(item)
-        elif isinstance(value, Mapping):
-            seen.add(id(value))
-            for key in sorted(value, key=repr):
-                add(key)
-                add(value[key])
-        elif isinstance(value, pytypes.ModuleType):
-            digest.update(value.__name__.encode())
-            digest.update(repr(getattr(value, "__version__", None)).encode())
-        elif isinstance(value, (str, bytes, int, float, bool, type(None))):
-            digest.update(repr(value).encode())
-        elif inspect.isclass(value) and hasattr(value, "_dtype"):
-            digest.update(repr(value._dtype.descr).encode())
-
-    add(function)
-    return digest.hexdigest()
-
-
-_CALLBACK_CACHE_FORMAT = 3
-_MEMORY_CALLBACK_CACHE: dict[str, Any] = {}
-_MEMORY_CALLBACK_CACHE_LOCK = threading.RLock()
-
-
-@dataclass
-class _CacheCounters:
-    """Mutable counters shared by one compilation operation."""
-
-    hits: int = 0
-    misses: int = 0
-    writes: int = 0
-
-
-def _cache_enabled() -> bool:
-    return (
-        os.environ.get("CIMBA_CACHE", "1").lower()
-        not in {"0", "false", "no", "off"}
-    )
-
-
-def _callback_cache_dir() -> Path:
-    configured = os.environ.get("CIMBA_CACHE_DIR")
-    if configured:
-        return Path(configured)
-    if sys.platform == "win32":
-        root = Path(os.environ.get(
-            "LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-        return root / "cimba" / "Cache" / "callbacks"
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Caches" / "cimba" / "callbacks"
-    root = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-    return root / "cimba" / "callbacks"
-
-
-@functools.cache
-def _callback_cache_platform_key() -> str:
-    """Version and target boundary for persisted native object code."""
-    from llvmlite import binding as llvm
-    from numba.core import config
-    from numba.core.registry import cpu_target
-    from ._cimba import native_version
-
-    try:
-        cimba_version = importlib.metadata.version("cimba")
-    except importlib.metadata.PackageNotFoundError:
-        cimba_version = "source-tree"
-    values = (
-        _CALLBACK_CACHE_FORMAT,
-        cimba_version,
-        native_version(),
-        numba.__version__,
-        llvmlite.__version__,
-        np.__version__,
-        sys.implementation.cache_tag,
-        sys.byteorder,
-        platform.system(),
-        platform.machine(),
-        llvm.get_host_cpu_name(),
-        llvm.get_host_cpu_features().flatten(),
-        config.CPU_NAME,
-        config.CPU_FEATURES,
-        str(cpu_target.target_context.target_data),
-    )
-    return hashlib.sha256(repr(values).encode()).hexdigest()
-
-
-def _callback_cache_key(signature: Any, function: Callable[..., Any]) -> str:
-    digest = hashlib.sha256()
-    digest.update(_callback_cache_platform_key().encode())
-    digest.update(repr(signature).encode())
-    digest.update(_callback_function_key(function).encode())
-    return digest.hexdigest()
-
-
-def _callback_cache_path(key: str) -> Path:
-    return _callback_cache_dir() / key[:2] / f"{key}.cimba"
-
-
-def _load_cached_callback(key: str, counters: _CacheCounters) -> Any | None:
-    if not _cache_enabled():
-        counters.misses += 1
-        return None
-    with _MEMORY_CALLBACK_CACHE_LOCK:
-        callback = _MEMORY_CALLBACK_CACHE.get(key)
-    if callback is not None:
-        counters.hits += 1
-        return callback
-    try:
-        path = _callback_cache_path(key)
-        with path.open("rb") as stream:
-            payload = pickle.load(stream)
-        if payload.get("format") != _CALLBACK_CACHE_FORMAT \
-                or payload.get("key") != key:
-            raise ValueError("incompatible callback cache entry")
-        callback = _LoadedCFunc(
-            _load_compiled_library(payload["state"]),
-            payload["native_name"],
-            payload["state"],
-        )
-    except Exception:
-        # Files can be stale, truncated, or incompatible with a local LLVM
-        # build despite their metadata. A cache miss must remain harmless.
-        counters.misses += 1
-        return None
-    with _MEMORY_CALLBACK_CACHE_LOCK:
-        _MEMORY_CALLBACK_CACHE[key] = callback
-    counters.hits += 1
-    return callback
-
-
-def _store_cached_callback(
-    key: str,
-    callback: Any,
-    counters: _CacheCounters,
-) -> None:
-    if not _cache_enabled():
-        return
-    with _MEMORY_CALLBACK_CACHE_LOCK:
-        _MEMORY_CALLBACK_CACHE[key] = callback
-    temporary: Path | None = None
-    try:
-        path = _callback_cache_path(key)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        state = getattr(callback, "serialized_state", None)
-        if state is None:
-            library = getattr(callback, "_library", None)
-            if library is None:
-                library = callback.library
-            state = library.serialize_using_object_code()
-        payload = {
-            "format": _CALLBACK_CACHE_FORMAT,
-            "key": key,
-            "native_name": callback.native_name,
-            "state": state,
-        }
-        with tempfile.NamedTemporaryFile(
-            mode="wb", dir=path.parent, prefix=f".{key}.", delete=False,
-        ) as stream:
-            temporary = Path(stream.name)
-            pickle.dump(payload, stream, protocol=pickle.HIGHEST_PROTOCOL)
-        os.replace(temporary, path)
-        counters.writes += 1
-    except Exception:
-        # A cache is an optimization only. Compilation has already succeeded.
-        try:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
-
-
 def _compile_uncached_cfuncs(
     jobs: Sequence[tuple[Any, Callable[..., Any]]],
 ) -> list[Any]:
@@ -730,7 +534,8 @@ def _compile_uncached_cfuncs(
         # Forking from a non-main Python thread is unsafe, and the inherited
         # job table below is intentionally single-owner. Keep that uncommon
         # path functional with serial compilation.
-        if threading.current_thread() is not threading.main_thread():
+        if (threading.current_thread() is not threading.main_thread()
+                or threading.active_count() != 1):
             raise ValueError
 
         context = multiprocessing.get_context("fork")
@@ -757,41 +562,29 @@ def _compile_uncached_cfuncs(
     callbacks: list[Any] = [None] * len(jobs)
     for local_index, state, native_name in serialized:
         library = _load_compiled_library(state)
-        callbacks[local_index] = _LoadedCFunc(library, native_name, state)
+        callbacks[local_index] = _LoadedCFunc(library, native_name)
     return callbacks
 
 
-def _compile_cfuncs(
-    jobs: Sequence[tuple[Any, Callable[..., Any]]],
-    *,
-    cache_counters: _CacheCounters | None = None,
-) -> list[Any]:
-    """Load content-addressed callbacks and compile only cache misses."""
-    if not jobs:
-        return []
-    counters = cache_counters if cache_counters is not None \
-        else _CacheCounters()
-    callbacks: list[Any] = [None] * len(jobs)
-    missing_jobs: list[tuple[Any, Callable[..., Any]]] = []
-    missing_keys: list[str] = []
-    missing_indices: dict[str, list[int]] = {}
-    for index, (signature, function) in enumerate(jobs):
-        key = _callback_cache_key(signature, function)
-        callback = _load_cached_callback(key, counters)
+# Only these fixed library callbacks are shared across models. User code has
+# no fingerprint or persistent cache: its owner is the concrete Model instance.
+_LIFECYCLE_CALLBACKS: dict[Callable[..., Any], Any] = {}
+
+
+def _compile_cfuncs(jobs: Sequence[tuple[Any, Callable[..., Any]]]) -> list[Any]:
+    cached = dict(_LIFECYCLE_CALLBACKS)
+    missing = [(signature, function) for signature, function in jobs
+               if function not in cached]
+    compiled = iter(_compile_uncached_cfuncs(missing))
+    fixed = {function for _signature, function in _LIFECYCLE_JOBS}
+    callbacks = []
+    for _signature, function in jobs:
+        callback = cached.get(function)
         if callback is None:
-            indices = missing_indices.setdefault(key, [])
-            indices.append(index)
-            if len(indices) == 1:
-                missing_jobs.append((signature, function))
-                missing_keys.append(key)
-        else:
-            callbacks[index] = callback
-    if missing_jobs:
-        compiled = _compile_uncached_cfuncs(missing_jobs)
-        for key, callback in zip(missing_keys, compiled):
-            for index in missing_indices[key]:
-                callbacks[index] = callback
-            _store_cached_callback(key, callback, counters)
+            callback = next(compiled)
+            if function in fixed:
+                _LIFECYCLE_CALLBACKS[function] = callback
+        callbacks.append(callback)
     return callbacks
 
 
@@ -940,67 +733,6 @@ class _CFuncJob:
     signature: Any
     function: Callable[..., Any]
     process: _ProcDecl | None = None
-
-
-@dataclass(frozen=True)
-class CompilationPlan:
-    """Immutable class callback compilation work derived from a real model.
-
-    The plan is created from the first normally initialized model instance,
-    never from a partially initialized object constructed with
-    ``object.__new__``.  It is exposed for diagnostics; callback functions and
-    the owning model are retained privately so Numba lowering state stays
-    alive for the resulting native libraries.
-    """
-
-    model_name: str
-    callback_dtype: np.dtype
-    process_names: tuple[str, ...]
-    process_keys: tuple[str, ...]
-    predicate_names: tuple[str, ...]
-    predicate_keys: tuple[str, ...]
-    event_names: tuple[str, ...]
-    event_keys: tuple[str, ...]
-    function_names: tuple[str, ...]
-    function_keys: tuple[str, ...]
-    collect_keys: tuple[str, ...]
-    lifecycle_key: tuple[str, ...]
-    callback_count: int
-    _record_type: Any
-    _lifecycle_jobs: tuple[tuple[Any, Callable[..., Any]], ...]
-    _owner: Any
-
-
-@dataclass(frozen=True)
-class CompilationStatus:
-    """Observable state of a model class's reusable compilation plan."""
-
-    state: str
-    seconds: float = 0.0
-    process_count: int = 0
-    callback_count: int = 0
-    cache_hits: int = 0
-    cache_misses: int = 0
-    cache_writes: int = 0
-    error: str | None = None
-
-
-@dataclass(frozen=True)
-class CompilationCacheStats:
-    """Cache activity for one model instance's remaining callbacks."""
-
-    hits: int = 0
-    misses: int = 0
-    writes: int = 0
-
-
-@dataclass(frozen=True)
-class _CompiledCallbackPlan:
-    plan: CompilationPlan
-    procs: tuple[tuple[str, Any], ...]
-    predicates: tuple[tuple[str, Any], ...]
-    events: tuple[tuple[str, Any], ...]
-    extras: tuple[Any, ...]
 
 
 type _Compiled = dict[str, Any]
@@ -1552,25 +1284,12 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
     seed: int
 
     _validate_legacy_annotations = True
-    __cimba_precompile__ = "eager"
-    _cimba_callback_plan: CompilationPlan | None = None
-    _cimba_callback_compiled: _CompiledCallbackPlan | None = None
-    _cimba_callback_status = CompilationStatus("pending")
-    _cimba_callback_lock = threading.RLock()
-
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        mode = getattr(cls, "__cimba_precompile__", "eager")
-        if mode not in {"eager", "lazy", "explicit"}:
-            raise ValueError(
-                "__cimba_precompile__ must be 'eager', 'lazy', or 'explicit'"
-            )
-        # Each subclass owns its plan, result, status, and synchronization.
-        # No compilation occurs while the class body's module is importing.
-        cls._cimba_callback_plan = None
-        cls._cimba_callback_compiled = None
-        cls._cimba_callback_status = CompilationStatus("pending")
-        cls._cimba_callback_lock = threading.RLock()
+        if "__cimba_precompile__" in cls.__dict__:
+            raise TypeError(
+                "__cimba_precompile__ was removed; construct the model and "
+                "call model.compile(), or let experiment() compile it")
 
     def __init__(self, name: str | None = None, *,
                  params: Iterable[str] = (),
@@ -1702,7 +1421,7 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
         # instance index as their second argument
         self._component_collects: list[tuple[Callable[..., Any], int]] = []
         self._compiled: _Compiled | None = None
-        self._callback_cache_stats = CompilationCacheStats()
+        self._compile_lock = threading.RLock()
         self._runtime_text_handles: list[int] = []
         self._runtime_text_slots: dict[str, int] = {}
         self._owner_decl = _owner_declaration(type(self), decls)
@@ -1717,8 +1436,6 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
         self._bind_components()
         self._register_component_processes()
         self._register_model_callbacks()
-        if type(self).__cimba_precompile__ == "eager":
-            self._ensure_class_precompiled()
 
     def _bind_components(self) -> None:
         for decl in self._component_roots.values():
@@ -1737,166 +1454,15 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
                 )
             self._bind_component_children(decl, components)
 
-    @classmethod
-    def compilation_status(cls) -> CompilationStatus:
-        """Return reusable class-callback compilation state."""
-        return cls.__dict__.get(
-            "_cimba_callback_status", CompilationStatus("pending"))
+    def compile(self) -> Self:
+        """Compile this fully constructed model once and return it.
 
-    def callback_cache_stats(self) -> CompilationCacheStats:
-        """Return cache activity from this instance's latest compilation."""
-        return self._callback_cache_stats
-
-    @classmethod
-    def compilation_plan(cls) -> CompilationPlan | None:
-        """Return the immutable plan built from the first real instance."""
-        return cls.__dict__.get("_cimba_callback_plan")
-
-    @classmethod
-    def precompile(cls, *args: Any, **kwargs: Any) -> CompilationStatus:
-        """Explicitly prepare reusable class-declared callbacks.
-
-        ``args`` and ``kwargs`` construct a normal model instance, so custom
-        subclass initialization is honored.  A previous failed attempt is
-        retried, which supports modules whose callback globals are populated
-        after the model class declaration.
+        experiment() calls this automatically. Reuse the same model for
+        parameter sweeps; construct a new model after changing callback code
+        or compile-time configuration. Compilation errors propagate here.
         """
-        model = cls(*args, **kwargs)
-        model._ensure_class_precompiled(retry=True)
-        return cls.compilation_status()
-
-    def _build_callback_compilation_plan(self) -> CompilationPlan | None:
-        count = len(self._processes)
-        if (count == 0 and not self._predicates and not self._events
-                and not self._collects):
-            return None
-        callback_dtype = self.dtype
-        rec = from_dtype(callback_dtype)
-        trial_ptr = types.CPointer(rec)
-        collect_jobs = tuple(
-            (
-                types.void(trial_ptr),
-                self._direct_collect_callback(fn, index, instances),
-            )
-            for index, (fn, instances) in enumerate(
-                self._collects)
-        )
-        return CompilationPlan(
-            model_name=self.name,
-            callback_dtype=callback_dtype,
-            **self._callback_plan_fields(),
-            lifecycle_key=self._aot_lifecycle_key(),
-            callback_count=(
-                count
-                + len(_LIFECYCLE_JOBS)
-                + len(self._predicates)
-                + len(self._events)
-                + len(collect_jobs)
-            ),
-            _record_type=rec,
-            _lifecycle_jobs=(*_LIFECYCLE_JOBS, *collect_jobs),
-            _owner=self,
-        )
-
-    def _callback_plan_fields(self) -> dict[str, tuple[str, ...]]:
-        functions = tuple(
-            (spec.graph_name, spec.helper) for spec in self._functions.values()
-        )
-        return {
-            "process_names": tuple(item.name for item in self._processes),
-            "process_keys": tuple(
-                _callback_function_key(item.fn) for item in self._processes
-            ),
-            "predicate_names": tuple(item.name for item in self._predicates),
-            "predicate_keys": tuple(
-                f"{item.label}:{_callback_function_key(item.fn)}"
-                for item in self._predicates
-            ),
-            "event_names": tuple(item.name for item in self._events),
-            "event_keys": tuple(
-                f"{item.label}:{item.takes_data}:{_callback_function_key(item.fn)}"
-                for item in self._events
-            ),
-            "function_names": tuple(name for name, _fn in functions),
-            "function_keys": tuple(
-                _callback_function_key(fn) for _name, fn in functions
-            ),
-            "collect_keys": tuple(
-                f"{_callback_function_key(fn)}:{count}" for fn, count in self._collects
-            ),
-        }
-
-    def _ensure_class_precompiled(self, *, retry: bool = False) -> None:
-        cls = type(self)
-        with cls._cimba_callback_lock:
-            if cls._cimba_callback_compiled is not None:
-                return
-            if cls._cimba_callback_status.state == "failed" and not retry:
-                return
-            started = time.perf_counter()
-            counters = _CacheCounters()
-            try:
-                plan = self._build_callback_compilation_plan()
-                cls._cimba_callback_plan = plan
-                if plan is None:
-                    cls._cimba_callback_status = CompilationStatus(
-                        "unavailable", seconds=time.perf_counter() - started
-                    )
-                    return
-                owner = plan._owner
-                procs, preds, events, extras = owner._compile_callbacks(
-                    plan._record_type,
-                    plan._lifecycle_jobs,
-                    cache_counters=counters,
-                )
-                compiled = _CompiledCallbackPlan(
-                    plan,
-                    tuple(procs.items()),
-                    tuple(preds.items()),
-                    tuple(events.items()),
-                    tuple(extras),
-                )
-                cls._cimba_callback_compiled = compiled
-                cls._cimba_callback_status = CompilationStatus(
-                    "ready",
-                    seconds=time.perf_counter() - started,
-                    process_count=len(plan.process_names),
-                    callback_count=plan.callback_count,
-                    cache_hits=counters.hits,
-                    cache_misses=counters.misses,
-                    cache_writes=counters.writes,
-                )
-            except Exception as exc:
-                # Compilation still falls back to the instance's first
-                # experiment, but the reason is now inspectable instead of
-                # being silently discarded during class creation.
-                cls._cimba_callback_compiled = None
-                cls._cimba_callback_status = CompilationStatus(
-                    "failed",
-                    seconds=time.perf_counter() - started,
-                    process_count=len(self._processes),
-                    cache_hits=counters.hits,
-                    cache_misses=counters.misses,
-                    cache_writes=counters.writes,
-                    error=f"{type(exc).__name__}: {exc}",
-                )
-
-    def _aot_class_callbacks(
-        self,
-    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[int, Any]]:
-        compiled = type(self).__dict__.get("_cimba_callback_compiled")
-        if compiled is None:
-            return {}, {}, {}, {}
-        plan = compiled.plan
-        current = self._callback_plan_fields()
-        if self.dtype != plan.callback_dtype or any(
-            getattr(plan, name) != value for name, value in current.items()
-        ):
-            return {}, {}, {}, {}
-        extras = (dict(enumerate(compiled.extras))
-                  if self._aot_lifecycle_key() == plan.lifecycle_key else {})
-        return (dict(compiled.procs), dict(compiled.predicates),
-                dict(compiled.events), extras)
+        self._compile()
+        return self
 
     def _bind_component_metadata(
         self,
@@ -2615,10 +2181,7 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
             function_node = ProcessDAGNode(spec.graph_name, "function")
             function_nodes[function_node.key] = function_node
             add_function_member(spec.decl.name, function_node.key)
-            for dependency in spec.dependencies:
-                if not dependency.direct:
-                    continue
-                access = dependency.access
+            for access in spec.reads:
                 if access.field in access.decl.constants:
                     continue
                 field_kind = access.decl.decls.kind_of(access.field)
@@ -3010,11 +2573,6 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
         self,
         rec: Any,
         extra_jobs: Sequence[tuple[Any, Callable[..., Any]]] = (),
-        precompiled_procs: Mapping[str, Any] | None = None,
-        precompiled_predicates: Mapping[str, Any] | None = None,
-        precompiled_events: Mapping[str, Any] | None = None,
-        precompiled_extra: Mapping[int, Any] | None = None,
-        cache_counters: _CacheCounters | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], list[Any]]:
         """Compile lowered class callbacks to Cimba's native callback ABIs."""
         trial_ptr = types.CPointer(rec)
@@ -3027,7 +2585,7 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
 
         def make_pred(inner):
             def pred(cnd, prc, ctxp):
-                return inner(carray(ctxp, 1)[0])
+                return bool(inner(carray(ctxp, 1)[0]))
             return pred
 
         def make_event(inner, takes_data):
@@ -3052,15 +2610,6 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
                     inner(env, pair[1], struct(me))
                 return 0
 
-            # The public indexed-process ABI carries an int64 context pointer,
-            # not the model record type. The adapter nevertheless embeds a
-            # record-specific pointer cast, so its cache identity must include
-            # the complete record layout explicitly.
-            proc.__cimba_cache_salt__ = (
-                "indexed-record-v1",
-                rec.dtype.descr,
-                rec.dtype.itemsize,
-            )
             return proc
 
         def make_proc_direct(p):
@@ -3098,17 +2647,13 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
                 ) from exc
             raise exc
 
-        proc_cfuncs = dict(precompiled_procs or {})
-        pred_cfuncs = dict(precompiled_predicates or {})
-        event_cfuncs = dict(precompiled_events or {})
+        proc_cfuncs: dict[str, Any] = {}
+        pred_cfuncs: dict[Any, Any] = {}
+        event_cfuncs: dict[Any, Any] = {}
         extra_callbacks = [None] * len(extra_jobs)
-        for index, callback in (precompiled_extra or {}).items():
-            extra_callbacks[index] = callback
 
         jobs: list[_CFuncJob] = []
         for p in self._processes:
-            if p.name in proc_cfuncs:
-                continue
             try:
                 signature, function = (
                     (proc_sig_ix, make_proc_indexed(p))
@@ -3155,7 +2700,6 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
         try:
             callbacks = _compile_cfuncs(
                 [(job.signature, job.function) for job in jobs],
-                cache_counters=cache_counters,
             )
         except Exception:
             # Recompile in the parent so invalid user code retains its full
@@ -3228,15 +2772,13 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
             like=fn,
         )
 
-    def _aot_lifecycle_key(self) -> tuple[str, ...]:
-        """Version key for the layout-independent lifecycle callback ABI."""
-        return ("cimba-lifecycle-abi-v2",)
-
     def _compile(self) -> _Compiled:
+        with self._compile_lock:
+            return self._compile_model()
+
+    def _compile_model(self) -> _Compiled:
         if self._compiled is not None:
             return self._compiled
-        if type(self).__cimba_precompile__ == "lazy":
-            self._ensure_class_precompiled()
         if not self._processes:
             raise ValueError("model has no processes")
         for kind, fields, callbacks in (
@@ -3319,6 +2861,17 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
         dtype = self.dtype
         rec = from_dtype(dtype)
         trial_ptr = types.CPointer(rec)
+        # Callees precede callers in this insertion-ordered mapping. Explicit
+        # signatures retain the public scalar annotation contract.
+        for spec in self._functions.values():
+            try:
+                spec.helper.compile(spec.return_type(
+                    rec, types.int64, *spec.argument_types))
+                spec.helper.disable_compile()
+            except Exception as exc:
+                raise TypeError(
+                    f"function '{spec.graph_name}' failed Numba nopython compilation"
+                ) from exc
 
         direct_collects = [
             (index, self._direct_collect_callback(fn, index, count))
@@ -3327,28 +2880,13 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
         native_process_names = _native_names(
             process.name for process in self._processes)
 
-        aot_procs, aot_preds, aot_events, precompiled_extra = \
-            self._aot_class_callbacks()
-        cache_counters = _CacheCounters()
         proc_cfuncs, pred_cfuncs, event_cfuncs, lifecycle = self._compile_callbacks(
             rec,
             [
                 *_LIFECYCLE_JOBS,
-                *(
-                    (types.void(trial_ptr), function)
-                    for _index, function in direct_collects
-                ),
+                *((types.void(trial_ptr), function)
+                  for _index, function in direct_collects),
             ],
-            aot_procs,
-            aot_preds,
-            aot_events,
-            precompiled_extra,
-            cache_counters=cache_counters,
-        )
-        self._callback_cache_stats = CompilationCacheStats(
-            hits=cache_counters.hits,
-            misses=cache_counters.misses,
-            writes=cache_counters.writes,
         )
         (recording_event, trial_initialize, trial_entities, trial_processes,
          trial_teardown, trial, trial_stop, trial_process_cleanup,
@@ -3629,6 +3167,7 @@ class Experiment(Generic[_ExperimentResultT]):
         # Trace arrays whose data pointers live in the trial records
         self._keepalive = tuple(keepalive)
         self.failures = None
+        self._run_lock = threading.Lock()
         self.replications = replications
         self.swept = tuple(swept)
         ordered_captures = sorted(history_captures, key=lambda spec: spec.slot)
@@ -3660,9 +3199,23 @@ class Experiment(Generic[_ExperimentResultT]):
             return self.histories(leaf.flattened_name)
         raise ValueError(f"unknown result family: {leaf.family}")
 
+    @property
+    def failed(self) -> np.ndarray:
+        """One failure flag per trial, independent of its output values."""
+        if self.failures is None:
+            raise RuntimeError("run() the experiment before reading failed")
+        return self.trials[_TRIAL_COMPLETED_FIELD] == 0
+
     def run(self) -> int:
-        """Run all trials in parallel, in place. Returns the number of
-        failed trials (their outputs stay NaN)."""
+        """Run fresh trials in place, retaining the inputs and seeds.
+
+        State starts at zero and outputs at NaN on every run. Native failures
+        and uncaught compiled exceptions invalidate every output of that trial.
+        """
+        with self._run_lock:
+            return self._run()
+
+    def _run(self) -> int:
         trials = self.trials
         if trials.dtype.names is None:
             raise TypeError("experiment must be a structured array")
@@ -3670,6 +3223,13 @@ class Experiment(Generic[_ExperimentResultT]):
             raise ValueError("experiment array must be C-contiguous")
         if trials.ndim != 1 or trials.size == 0:
             raise ValueError("experiment must be a non-empty 1-D array")
+
+        self.failures = None
+        trials[_TRIAL_COMPLETED_FIELD] = 0
+        for field in (*self.model.state, *self.model.float_state):
+            trials[field] = 0
+        for field in self.model.outputs:
+            trials[field] = np.nan
 
         fptr = ffi.cast("void(*)(void *)", self._trial_addr)
         buf = ffi.from_buffer(trials, require_writable=True)
@@ -3684,7 +3244,7 @@ class Experiment(Generic[_ExperimentResultT]):
             trials[HISTORY_CAPTURE_STORE_FIELD] = int(
                 ffi.cast("intptr_t", capture_store))
         try:
-            lib.cimba_run(buf, trials.size, trials.itemsize, fptr)
+            failures = int(lib.cimba_run(buf, trials.size, trials.itemsize, fptr))
             if self._capture_slot_count:
                 self._history_capture_data = copy_capture_store(
                     capture_store,
@@ -3701,13 +3261,12 @@ class Experiment(Generic[_ExperimentResultT]):
                 destroy_capture_store(capture_store)
                 trials[HISTORY_CAPTURE_STORE_FIELD] = 0
 
-        if not self.model.outputs:
-            self.failures = 0
-        else:
-            failed = np.isnan(self.trials[self.model.outputs[0]])
-            if failed.ndim > 1:
-                failed = failed.reshape(failed.shape[0], -1).any(axis=1)
-            self.failures = int(failed.sum())
+        failed = trials[_TRIAL_COMPLETED_FIELD] == 0
+        if int(failed.sum()) != failures:
+            raise RuntimeError("native trial outcomes disagree with completion records")
+        for field in self.model.outputs:
+            trials[field][failed] = np.nan
+        self.failures = failures
         return self.failures
 
     def summary(self, *outputs: str,
@@ -3718,9 +3277,9 @@ class Experiment(Generic[_ExperimentResultT]):
         the Student-t confidence-interval half-width under
         ``<name>_hw``. With no arguments every output is summarized.
 
-        Failed trials (NaN outputs) are excluded per output; the mean is
-        NaN when no trial survived and the half-width is NaN when fewer
-        than two did."""
+        Failed trials are excluded from every output. Missing (NaN) values
+        from successful trials are excluded per output; the mean is NaN with
+        no observations and the half-width is NaN with fewer than two."""
         if self.failures is None:
             raise RuntimeError("run() the experiment before summary()")
         names = list(outputs) if outputs else list(self.model.outputs)
@@ -3742,7 +3301,8 @@ class Experiment(Generic[_ExperimentResultT]):
         for p in self.swept:
             table[p] = self.trials[p][::reps]
         for o in names:
-            vals = self.trials[o]
+            vals = self.trials[o].copy()
+            vals[self.failed] = np.nan
             vals = vals.reshape((n_points, reps) + vals.shape[1:])
             with np.errstate(invalid="ignore", divide="ignore"):
                 n = (~np.isnan(vals)).sum(axis=1).astype(np.float64)

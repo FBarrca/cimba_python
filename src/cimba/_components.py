@@ -34,12 +34,13 @@ component declares is lowered before compilation:
   constants, and Ref/Refs dereferences.
 * read-only ``@sim.function`` methods become explicitly typed Numba helpers.
   Calls keep their component syntax in user code, while lowering passes the
-  ordinary arguments followed by the scalar component values the helper reads.
+  trial record, receiver index, and ordinary arguments. Field reads stay
+  inside the helper body.
 
 The module is organized in five parts, in order: the nested-owner API
 (``Component`` and the wiring/Ref metadata captured from instance defaults;
 callback markers and shared MRO normalization live in ``_callbacks``);
-declaration metadata (``_ComponentDecl``, one per component tree node);
+declaration metadata (``_OwnerDecl``, one per component tree node);
 declaration building (``_class_declarations`` and ``_DeclBuilder``);
 the AST lowerers; and the codegen helpers that compile the lowered
 functions.
@@ -50,7 +51,6 @@ import copy
 import inspect
 import linecache
 import textwrap
-import weakref
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, get_args, get_origin, get_type_hints
@@ -1500,21 +1500,6 @@ class _FieldAccess:
 
 
 @dataclass
-class _FunctionDependency:
-    """One owner value threaded into a compiled function helper.
-
-    Normally a scalar the caller reads at the call site. When the helper
-    indexes a collection with a value it computes itself (a loop target
-    or a local), the caller cannot pick the element, so ``array`` threads
-    the whole flattened field and the helper subscripts it."""
-
-    access: _FieldAccess
-    parameter: str
-    direct: bool = True
-    array: bool = False
-
-
-@dataclass
 class _FunctionSpec:
     """A Model/Component synchronous function lowered to one helper."""
 
@@ -1526,14 +1511,14 @@ class _FunctionSpec:
     parameter_names: tuple[str, ...]
     argument_types: tuple[Any, ...]
     return_type: Any
-    dependencies: tuple[_FunctionDependency, ...]
+    reads: tuple[_FieldAccess, ...]
     helper: Any
     callees: tuple[str, ...]
-    receiver_indexed: bool = False
     #: None for the homogeneous shared helper; otherwise the recursive
     #: specialization ordinal and its logical instance indexes.
     variant: int | None = None
     instance_indices: tuple[int, ...] = ()
+    dispatchers: dict[tuple[str, ...], tuple[str, Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -2010,13 +1995,6 @@ class _OwnerPathLowerer(ast.NodeTransformer):
         assert slot_symbol is not None
         return _subscript(ast.Name(id=slot_symbol, ctx=ast.Load()), index, ast.Load())
 
-    def _field_array_target(self, access: _FieldAccess) -> ast.expr:
-        """The whole flattened field, for a component function helper that
-        indexes it itself. Only reached for fields every instance of the
-        collection declares, so logical index == storage slot."""
-        flat_name = access.decl.direct_field_map[access.field]
-        return _env_attr(self.env_name, flat_name, ast.Load())
-
     def _constant_expr(self, access: _FieldAccess) -> ast.expr:
         owners = access.decl.constant_owners[access.field]
         slots = access.decl.constant_slots[access.field]
@@ -2116,72 +2094,26 @@ class _OwnerPathLowerer(ast.NodeTransformer):
             )
         return tuple(ordered)
 
-    @staticmethod
-    def _substitute_expr(
-        expression: ast.expr | None, replacements: Mapping[str, ast.expr]
-    ) -> ast.expr | None:
-        if expression is None:
-            return None
-
-        class Substitute(ast.NodeTransformer):
-            def visit_Name(self, node: ast.Name) -> ast.AST:
-                replacement = replacements.get(node.id)
-                if replacement is None:
-                    return node
-                return ast.copy_location(copy.deepcopy(replacement), node)
-
-        result = Substitute().visit(copy.deepcopy(expression))
-        if not isinstance(result, ast.expr):
-            raise TypeError(
-                "component function dependency did not lower to an expression"
-            )
-        return result
-
     def _lower_one_component_function_call(
         self, node: ast.Call, receiver: _OwnerAccess, spec: _FunctionSpec
     ) -> ast.Call:
-        arguments = [self.visit(copy.deepcopy(arg)) for arg in node.args]
-        replacements = {
-            name: arg
-            for name, arg in zip(spec.parameter_names, arguments)
-        }
-        if receiver.index is not None:
-            replacements["__cimba_receiver_index"] = receiver.index
-
-        dependency_args: list[ast.expr] = []
-        for dependency in spec.dependencies:
-            access = dependency.access
-            bound = _FieldAccess(
-                access.decl,
-                self._substitute_expr(access.index, replacements),
-                access.field,
-                access.text,
-                access.possible_indices,
-            )
-            if bound.field in bound.decl.constants:
-                value = self._constant_expr(bound)
-            elif dependency.array:
-                value = self._field_array_target(bound)
-            else:
-                value = self._field_target(bound, ast.Load())
-            dependency_args.append(value)
-            replacements[dependency.parameter] = value
-
-        self.called_functions.add(spec.graph_name)
-        helper_args = list(arguments)
-        if spec.receiver_indexed:
-            if receiver.index is None:
-                raise TypeError(
-                    "indexed component function has no receiver index")
-            helper_args.append(copy.deepcopy(receiver.index))
+        self._bind_function(spec)
         return ast.copy_location(
             ast.Call(
                 func=ast.Name(id=spec.symbol, ctx=ast.Load()),
-                args=[*helper_args, *dependency_args],
+                args=[
+                    ast.Name(id=self.env_name, ctx=ast.Load()),
+                    copy.deepcopy(receiver.index) if receiver.index is not None
+                    else ast.Constant(0),
+                    *(self.visit(copy.deepcopy(arg)) for arg in node.args),
+                ],
                 keywords=[],
             ),
             node,
         )
+
+    def _bind_function(self, spec: _FunctionSpec) -> None:
+        self.called_functions.add(spec.graph_name)
 
     def _validate_function_call(self, node: ast.Call, spec: _FunctionSpec) -> None:
         if node.keywords:
@@ -2198,11 +2130,10 @@ class _OwnerPathLowerer(ast.NodeTransformer):
         node: ast.Call,
         receiver: _OwnerAccess,
         specs: Sequence[_FunctionSpec],
-        lower_one: Callable[[ast.Call, _OwnerAccess, _FunctionSpec], ast.Call],
     ) -> ast.expr:
         self._validate_function_call(node, specs[0])
         if len(specs) == 1:
-            return lower_one(node, receiver, specs[0])
+            return self._lower_one_component_function_call(node, receiver, specs[0])
         first = specs[0]
         contract = (first.parameter_names, first.argument_types,
                     first.return_type)
@@ -2213,30 +2144,34 @@ class _OwnerPathLowerer(ast.NodeTransformer):
             )
         if receiver.index is None:
             raise TypeError("polymorphic component function has no index")
-        expression = lower_one(copy.deepcopy(node), receiver, specs[-1])
-        variant_expr = _subscript(
-            ast.Name(id=_variant_slots_symbol(receiver.decl.name), ctx=ast.Load()),
-            copy.deepcopy(receiver.index),
-            ast.Load(),
-        )
-        for spec in reversed(specs[:-1]):
-            expression = ast.IfExp(
-                test=ast.Compare(
-                    left=copy.deepcopy(variant_expr),
-                    ops=[ast.Eq()],
-                    comparators=[ast.Constant(spec.variant)],
-                ),
-                body=lower_one(copy.deepcopy(node), receiver, spec),
-                orelse=expression,
-            )
-        return ast.copy_location(expression, node)
-
-    def _lower_component_function_call(
-        self, node: ast.Call, receiver: _OwnerAccess, specs: Sequence[_FunctionSpec]
-    ) -> ast.expr:
-        return self._dispatch_function_call(
-            node, receiver, specs, self._lower_one_component_function_call
-        )
+        key = tuple(spec.graph_name for spec in specs)
+        dispatch = first.dispatchers.get(key)
+        if dispatch is None:
+            symbol = f"{first.symbol}_dispatch_{len(first.dispatchers)}"
+            parameters = ["__cimba_env", "__cimba_index", *first.parameter_names]
+            arguments = ", ".join(parameters)
+            table = _variant_slots_symbol(receiver.decl.name)
+            lines = [f"def {symbol}({arguments}):"]
+            for spec in specs[:-1]:
+                lines.extend([
+                    f"    if {table}[__cimba_index] == {spec.variant}:",
+                    f"        return {spec.symbol}({arguments})",
+                ])
+            lines.append(f"    return {specs[-1].symbol}({arguments})")
+            namespace = _lowering_namespace((receiver.decl,))
+            namespace.update({spec.symbol: spec.helper for spec in specs})
+            exec("\n".join(lines), namespace)
+            dispatch = symbol, njit(namespace[symbol])
+            first.dispatchers[key] = dispatch
+        # Resolve callees for graph metadata and the helper-body namespace.
+        for spec in specs:
+            self._bind_function(spec)
+        return ast.copy_location(ast.Call(
+            func=ast.Name(id=dispatch[0], ctx=ast.Load()),
+            args=[ast.Name(id=self.env_name, ctx=ast.Load()),
+                  copy.deepcopy(receiver.index),
+                  *(self.visit(copy.deepcopy(arg)) for arg in node.args)],
+            keywords=[]), node)
 
     # -- node visitors -----------------------------------------------------------
 
@@ -2297,7 +2232,7 @@ class _OwnerPathLowerer(ast.NodeTransformer):
             if receiver is not None:
                 specs = self._function_specs(receiver, node.func.attr)
                 if specs:
-                    return self._lower_component_function_call(node, receiver, specs)
+                    return self._dispatch_function_call(node, receiver, specs)
             access = self._field_ref(node.func.value)
             if access is not None and access.decl.owner_root:
                 node.args = [self.visit(arg) for arg in node.args]
@@ -2596,11 +2531,6 @@ _FORBIDDEN_FUNCTION_SIM_CALLS = frozenset({
     "timer_add", "timer_cancel", "timers_clear", "clear_events",
 })
 
-_FUNCTION_CACHE: weakref.WeakValueDictionary[tuple[Any, ...], Any] = (
-    weakref.WeakValueDictionary()
-)
-
-
 def _function_scalar_type(annotation: Any, label: str) -> Any:
     numba_type = next(
         (candidate for scalar, candidate in _FUNCTION_SCALAR_TYPES.items()
@@ -2658,39 +2588,6 @@ def _rooted_at_name(node: ast.AST, name: str) -> bool:
     while isinstance(node, (ast.Attribute, ast.Subscript)):
         node = node.value
     return isinstance(node, ast.Name) and node.id == name
-
-
-def _locally_bound_names(node: ast.AST) -> set[str]:
-    """Names a function body binds itself: loop targets, assignments,
-    comprehension targets, ``with``/``except`` bindings, walrus.
-
-    Parameters are deliberately excluded -- a component function's
-    dependencies are read at the call site, where the arguments are in
-    scope but these names are not."""
-    bound: set[str] = set()
-
-    def add(target: ast.AST) -> None:
-        for sub in ast.walk(target):
-            if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store):
-                bound.add(sub.id)
-
-    for sub in ast.walk(node):
-        if isinstance(sub, (ast.Assign, ast.Delete)):
-            for target in sub.targets:
-                add(target)
-        elif isinstance(sub, (ast.AnnAssign, ast.AugAssign, ast.For,
-                              ast.AsyncFor, ast.comprehension)):
-            add(sub.target)
-        elif isinstance(sub, ast.NamedExpr):
-            add(sub.target)
-        elif isinstance(sub, (ast.With, ast.AsyncWith)):
-            for item in sub.items:
-                if item.optional_vars is not None:
-                    add(item.optional_vars)
-        elif isinstance(sub, ast.ExceptHandler):
-            if sub.name is not None:
-                bound.add(sub.name)
-    return bound
 
 
 class _FunctionValidator(ast.NodeVisitor):
@@ -2753,7 +2650,7 @@ class _FunctionValidator(ast.NodeVisitor):
 
 
 class _FunctionBodyLowerer(_OwnerPathLowerer):
-    """Turn a component function body into a scalar-only helper body."""
+    """Lower field paths while preserving reads inside the helper body."""
 
     def __init__(
         self,
@@ -2762,29 +2659,19 @@ class _FunctionBodyLowerer(_OwnerPathLowerer):
         decl: _OwnerDecl,
         method_name: str,
         receiver_name: str,
-        parameter_names: tuple[str, ...],
         instance_indices: tuple[int, ...],
         variant: int | None,
     ):
-        super().__init__(env_name="__cimba_no_env")
+        super().__init__(env_name="__cimba_env")
         self.builder = builder
         self.decl = decl
         self.method_name = method_name
         self.receiver_name = receiver_name
-        self.parameter_names = parameter_names
         self.instance_indices = instance_indices
         self.variant = variant
-        self.dependencies: list[_FunctionDependency] = []
-        self._dependency_keys: dict[tuple[Any, ...], int] = {}
+        self.reads: list[_FieldAccess] = []
         self.callees: list[str] = []
         self.helper_namespace: dict[str, Any] = {}
-        #: Names the body binds itself; an instance index built from one of
-        #: these cannot be resolved at the call site (see _array_dependency).
-        self._local_names: set[str] = set()
-
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
-        self._local_names = _locally_bound_names(node)
-        return self.generic_visit(node)
 
     def _root_namespace_ref(self, node: ast.AST) -> _OwnerAccess | None:
         if isinstance(node, ast.Name) and node.id == self.receiver_name:
@@ -2805,65 +2692,6 @@ class _FunctionBodyLowerer(_OwnerPathLowerer):
 
     def _callback_label(self) -> str:
         return f"component function '{self.decl.name}.{self.method_name}'"
-
-    def _dependency(
-        self, access: _FieldAccess, *, direct: bool, array: bool = False
-    ) -> ast.Name:
-        key = (
-            access.decl.name,
-            access.field,
-            None if access.index is None else ast.dump(access.index),
-            array,
-        )
-        index = self._dependency_keys.get(key)
-        if index is None:
-            index = len(self.dependencies)
-            self._dependency_keys[key] = index
-            self.dependencies.append(
-                _FunctionDependency(
-                    access=copy.deepcopy(access),
-                    parameter=f"__cimba_dep_{index}",
-                    direct=direct,
-                    array=array,
-                )
-            )
-        elif direct:
-            self.dependencies[index].direct = True
-        return ast.Name(
-            id=self.dependencies[index].parameter, ctx=ast.Load())
-
-    def _index_is_local(self, index: ast.expr | None) -> bool:
-        """Whether an instance index depends on a name the body binds, and
-        so cannot be evaluated by the caller."""
-        if index is None or not self._local_names:
-            return False
-        return any(isinstance(sub, ast.Name) and sub.id in self._local_names
-                   for sub in ast.walk(index))
-
-    def _array_dependency(self, access: _FieldAccess) -> ast.expr:
-        """Thread the whole flattened field in and subscript it here, for a
-        collection read whose index the body computes for itself."""
-        label = self._callback_label()
-        detail = (
-            f"{label} indexes {access.text} with a value computed inside the function"
-        )
-        if access.field in access.decl.constants:
-            raise ValueError(
-                f"{detail}, which is only supported for Param, Output, State, and FloatState fields; index '{access.field}' with a function argument instead"
-            )
-        owners = access.decl.field_owners[access.field]
-        slots = access.decl.field_slots[access.field]
-        if len(owners) > 1 and slots != tuple(range(len(slots))):
-            raise ValueError(
-                f"{detail}, which requires every instance of '{access.decl.name}' to declare '{access.field}'; index it with a function argument instead"
-            )
-        whole = _FieldAccess(access.decl, None, access.field, access.text, None)
-        if len(owners) <= 1:
-            # A single owner means the flattened field is a plain scalar;
-            # there is no array to index and the index is irrelevant.
-            return self._dependency(whole, direct=True)
-        parameter = self._dependency(whole, direct=True, array=True)
-        return _subscript(parameter, access.index, ast.Load())
 
     def _validate_scalar_field(self, access: _FieldAccess) -> None:
         if access.field in access.decl.constants:
@@ -2897,7 +2725,7 @@ class _FunctionBodyLowerer(_OwnerPathLowerer):
                 )
                 if candidates:
                     return self._dispatch_function_call(
-                        node, receiver, candidates, self._callee_call
+                        node, receiver, candidates
                     )
 
             access = self._field_ref(node.func.value)
@@ -2916,38 +2744,13 @@ class _FunctionBodyLowerer(_OwnerPathLowerer):
                 )
         return self.generic_visit(node)
 
-    def _callee_call(
-        self, node: ast.Call, receiver: _OwnerAccess, callee: _FunctionSpec
-    ) -> ast.Call:
-        arguments = [self.visit(copy.deepcopy(arg)) for arg in node.args]
-        replacements = dict(zip(callee.parameter_names, arguments))
-        if receiver.index is not None:
-            replacements["__cimba_receiver_index"] = receiver.index
-        dependencies: list[ast.expr] = []
-        for dependency in callee.dependencies:
-            access = dependency.access
-            bound = _FieldAccess(
-                access.decl,
-                self._substitute_expr(access.index, replacements),
-                access.field,
-                access.text,
-                access.possible_indices,
-            )
-            value = self._dependency(bound, direct=False, array=dependency.array)
-            dependencies.append(value)
-            replacements[dependency.parameter] = value
+    def _bind_function(self, callee: _FunctionSpec) -> None:
+        super()._bind_function(callee)
         self.helper_namespace[callee.symbol] = callee.helper
         if callee.graph_name not in self.callees:
             self.callees.append(callee.graph_name)
-        if callee.receiver_indexed:
-            if receiver.index is None:
-                raise TypeError("indexed component function has no receiver index")
-            arguments.append(copy.deepcopy(receiver.index))
-        return ast.Call(
-            func=ast.Name(id=callee.symbol, ctx=ast.Load()),
-            args=[*arguments, *dependencies],
-            keywords=[],
-        )
+        for symbol, helper in callee.dispatchers.values():
+            self.helper_namespace[symbol] = helper
 
     def _lower_attribute(self, access: _FieldAccess, node: ast.Attribute) -> ast.AST:
         if not isinstance(node.ctx, ast.Load):
@@ -2955,12 +2758,8 @@ class _FunctionBodyLowerer(_OwnerPathLowerer):
                 f"{self._callback_label()} cannot mutate component field {access.text}"
             )
         self._validate_scalar_field(access)
-        value = (
-            self._array_dependency(access)
-            if self._index_is_local(access.index)
-            else self._dependency(access, direct=True)
-        )
-        return ast.copy_location(value, node)
+        self.reads.append(copy.deepcopy(access))
+        return super()._lower_attribute(access, node)
 
     def _direct_path_error(self, kind: str, text: str) -> ValueError:
         suffix = {
@@ -2984,20 +2783,6 @@ class _FunctionBuilder:
     def __init__(self):
         self.specs: dict[str, _FunctionSpec] = {}
         self._building: list[str] = []
-
-    @staticmethod
-    def _dependency_type(dependency: _FunctionDependency) -> Any:
-        access = dependency.access
-        if access.field in access.decl.constants:
-            return _function_scalar_type(
-                access.decl.decls.consts[access.field],
-                f"component function constant '{access.field}'",
-            )
-        kind = access.decl.decls.kind_of(access.field)
-        scalar = types.int64 if kind == "state" else types.float64
-        # A shaped env field reaches the helper as a NestedArray, which
-        # matches an unspecified-layout array parameter but not "::1".
-        return scalar[:] if dependency.array else scalar
 
     def build(
         self,
@@ -3037,111 +2822,40 @@ class _FunctionBuilder:
                 receiver_name=receiver_name, method=method, label=label
             ).visit(node)
 
-            # Two names, because callers and the compiler want different
-            # things. `symbol` identifies the declaration: callers bind
-            # helpers into their namespace under it, and two collections of
-            # the same class can lower to helpers with different signatures
-            # (only a multi-instance one takes a receiver index), so sharing
-            # one name across declarations binds the wrong helper.
-            # `canonical` names the generated function itself and so decides
-            # source_key: keeping it per class/method lets structurally
-            # identical declarations share one compiled helper via the cache.
-            symbol = (
-                f"_CIMBA_MODEL_FUNCTION_{method_name}_{id(method):x}"
-                if decl.owner_root
-                else f"_CIMBA_FUNCTION_{graph_name}_{id(method):x}"
-            )
-            canonical = (
-                f"_CIMBA_FUNCTION_{decl.cls.__name__}_{method_name}_{id(method):x}"
-                + ("" if variant is None else f"_V{variant}")
-            )
+            symbol = f"_CIMBA_FUNCTION_{graph_name.replace(':', '_')}"
             lowerer = _FunctionBodyLowerer(
                 builder=self,
                 decl=decl,
                 method_name=method_name,
                 receiver_name=receiver_name,
-                parameter_names=parameter_names,
                 instance_indices=instance_indices,
                 variant=variant,
             )
             lowered = lowerer.visit(node)
             if not isinstance(lowered, ast.FunctionDef):
                 raise TypeError(f"{label} lowering produced a non-function")
-            lowered.name = canonical
+            lowered.name = symbol
             _strip_function_annotations(lowered)
-            lowered.args.args = lowered.args.args[1:]
-            receiver_indexed = decl.count > 1 and len(instance_indices) > 1
-            if receiver_indexed:
-                lowered.args.args.append(
-                    ast.arg(arg="__cimba_receiver_index"))
-            lowered.args.args.extend(
-                ast.arg(arg=dependency.parameter) for dependency in lowerer.dependencies
-            )
-
+            lowered.args.args = [
+                ast.arg(arg="__cimba_env"),
+                ast.arg(arg="__cimba_receiver_index"),
+                *lowered.args.args[1:],
+            ]
             namespace = _closure_namespace(method)
-            # An array dependency keeps its index expression inside the
-            # helper, so the offset/slot tables it may reference have to be
-            # in scope here as well as at the call site.
             namespace.update(_lowering_namespace((decl,)))
             namespace.update(lowerer.helper_namespace)
-            ast.fix_missing_locations(lowered)
-            source_key = ast.unparse(
-                ast.Module(body=[lowered], type_ignores=[]))
-            dependency_types = tuple(
-                self._dependency_type(dependency) for dependency in lowerer.dependencies
+            plain = _compile_lowered(
+                lowered,
+                filename=f"<cimba {owner} function '{decl.name}.{method_name}'>",
+                fn_name=symbol,
+                qualname=symbol,
+                namespace=namespace,
+                like=method,
             )
-            signature = return_type(
-                *argument_types,
-                *((types.int64,) if receiver_indexed else ()),
-                *dependency_types,
-            )
-            closure_key = tuple(
-                (name,
-                 value if _primitive_constant(value) else id(value))
-                for name, value in (
-                    (name, cell.cell_contents)
-                    for name, cell in zip(
-                        method.__code__.co_freevars, method.__closure__ or ()
-                    )
-                )
-            )
-            length_table_key = tuple(
-                (name, tuple(int(item) for item in value.tolist()))
-                for name, value in namespace.items()
-                if (name.startswith("_CIMBA_LEN_")
-                    or name.startswith("_CIMBA_REFLEN_"))
-                and isinstance(value, np.ndarray)
-            )
-            cache_key = (
-                decl.class_at(instance_indices[0]),
-                decl.specialization_key(instance_indices[0]),
-                id(method),
-                source_key,
-                str(signature),
-                closure_key,
-                length_table_key,
-                tuple(id(value)
-                      for value in lowerer.helper_namespace.values()),
-            )
-            helper = _FUNCTION_CACHE.get(cache_key)
-            if helper is None:
-                plain = _compile_lowered(
-                    lowered,
-                    filename=f"<cimba {owner} function '{decl.name}.{method_name}'>",
-                    fn_name=canonical,
-                    qualname=canonical,
-                    namespace=namespace,
-                    like=method,
-                )
-                try:
-                    helper = njit(signature)(plain)
-                    helper.disable_compile()
-                except Exception as exc:
-                    raise TypeError(
-                        f"{label} failed Numba nopython compilation"
-                    ) from exc
-                helper.__cimba_source__ = plain.__cimba_source__
-                _FUNCTION_CACHE[cache_key] = helper
+            # The complete record layout exists only after every callback has
+            # been registered. Model.compile() supplies its explicit signature.
+            helper = njit(plain)
+            helper.__cimba_source__ = plain.__cimba_source__
 
             spec = _FunctionSpec(
                 decl=decl,
@@ -3152,10 +2866,9 @@ class _FunctionBuilder:
                 parameter_names=parameter_names,
                 argument_types=argument_types,
                 return_type=return_type,
-                dependencies=tuple(lowerer.dependencies),
+                reads=tuple(lowerer.reads),
                 helper=helper,
                 callees=tuple(lowerer.callees),
-                receiver_indexed=receiver_indexed,
                 variant=variant,
                 instance_indices=instance_indices,
             )
@@ -3628,6 +3341,8 @@ def _model_lowering_namespace(
     namespace.update(entity_lowering_namespace())
     if functions:
         namespace.update({spec.symbol: spec.helper for spec in functions.values()})
+        for spec in functions.values():
+            namespace.update(spec.dispatchers.values())
     namespace.update(_lowering_namespace(component_roots.values()))
     return namespace
 
