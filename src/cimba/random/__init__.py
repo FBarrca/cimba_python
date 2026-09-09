@@ -1,83 +1,122 @@
-"""Public random draw API for Cimba."""
+"""Random draws for compiled model callbacks and their Numba helpers."""
+
+from collections.abc import Iterable
 
 from numba.extending import overload as _nb_overload
 
-from .._cimba import (
-    AliasSampler,
-    bernoulli,
-    beta as _beta,
-    binomial,
-    cauchy,
-    chi_squared,
-    current_seed,
-    dice,
-    erlang,
-    exponential as _exponential,
-    f_dist,
-    fmix64,
-    gamma as _gamma,
-    geometric,
-    hwseed,
-    hyperexponential,
-    hypoexponential,
-    loaded_dice as _categorical,
-    logistic,
-    lognormal,
-    negative_binomial,
-    normal as _normal,
-    pareto,
-    pert,
-    pert_mod,
-    poisson,
-    random_u64,
-    rayleigh,
-    seed,
-    student_t,
-    triangular,
-    uniform as _uniform,
-    weibull,
+_MODEL_ONLY = (
+    "cimba.random draws require a compiled model callback. "
+    "Use model.experiment(seed=...) for reproducibility; "
+    "use numpy.random.default_rng() outside models."
 )
 
 
 def uniform(min: float = 0.0, max: float = 1.0) -> float:
-    """Draw from a continuous uniform distribution on [min, max]."""
-
-    return _uniform(min, max)
+    raise RuntimeError(_MODEL_ONLY)
 
 
-def exponential(mean: float = 1.0) -> float:
-    """Draw from an exponential distribution with the given mean."""
-
-    return _exponential(mean)
-
-
-def gamma(shape: float, scale: float = 1.0) -> float:
-    """Draw from a gamma distribution with shape and scale parameters."""
-
-    return _gamma(shape, scale)
+def triangular(min: float, mode: float, max: float) -> float:
+    raise RuntimeError(_MODEL_ONLY)
 
 
 def normal(mu: float = 0.0, sigma: float = 1.0) -> float:
-    """Draw from a normal distribution with mean mu and standard deviation sigma."""
-
-    return _normal(mu, sigma)
+    raise RuntimeError(_MODEL_ONLY)
 
 
-def beta(
-    a: float,
-    b: float,
-    min: float = 0.0,
-    max: float = 1.0,
-) -> float:
-    """Draw from a beta distribution scaled to [min, max]."""
-
-    return _beta(a, b, min, max)
+def lognormal(m: float, s: float) -> float:
+    raise RuntimeError(_MODEL_ONLY)
 
 
-def categorical(probabilities) -> int:
-    """Draw one index from nonnegative probabilities that sum to 1.0."""
+def logistic(m: float, s: float) -> float:
+    raise RuntimeError(_MODEL_ONLY)
 
-    return _categorical(probabilities)
+
+def cauchy(mode: float, scale: float) -> float:
+    raise RuntimeError(_MODEL_ONLY)
+
+
+def exponential(mean: float = 1.0) -> float:
+    raise RuntimeError(_MODEL_ONLY)
+
+
+def erlang(k: int, mean: float) -> float:
+    raise RuntimeError(_MODEL_ONLY)
+
+
+def hypoexponential(means: Iterable[float]) -> float:
+    raise RuntimeError(_MODEL_ONLY)
+
+
+def hyperexponential(means: Iterable[float], probabilities: Iterable[float]) -> float:
+    raise RuntimeError(_MODEL_ONLY)
+
+
+def gamma(shape: float, scale: float = 1.0) -> float:
+    raise RuntimeError(_MODEL_ONLY)
+
+
+def beta(a: float, b: float, min: float = 0.0, max: float = 1.0) -> float:
+    raise RuntimeError(_MODEL_ONLY)
+
+
+def pert(min: float, mode: float, max: float) -> float:
+    raise RuntimeError(_MODEL_ONLY)
+
+
+def pert_mod(min: float, mode: float, max: float, lambda_: float) -> float:
+    raise RuntimeError(_MODEL_ONLY)
+
+
+def weibull(shape: float, scale: float) -> float:
+    raise RuntimeError(_MODEL_ONLY)
+
+
+def pareto(shape: float, mode: float) -> float:
+    raise RuntimeError(_MODEL_ONLY)
+
+
+def chi_squared(k: float) -> float:
+    raise RuntimeError(_MODEL_ONLY)
+
+
+def f_dist(a: float, b: float) -> float:
+    raise RuntimeError(_MODEL_ONLY)
+
+
+def student_t(v: float, m: float = 0.0, s: float = 1.0) -> float:
+    raise RuntimeError(_MODEL_ONLY)
+
+
+def rayleigh(s: float) -> float:
+    raise RuntimeError(_MODEL_ONLY)
+
+
+def dice(min: int, max: int) -> int:
+    raise RuntimeError(_MODEL_ONLY)
+
+
+def bernoulli(p: float) -> bool:
+    raise RuntimeError(_MODEL_ONLY)
+
+
+def geometric(p: float) -> int:
+    raise RuntimeError(_MODEL_ONLY)
+
+
+def binomial(n: int, p: float) -> int:
+    raise RuntimeError(_MODEL_ONLY)
+
+
+def negative_binomial(m: int, p: float) -> int:
+    raise RuntimeError(_MODEL_ONLY)
+
+
+def poisson(r: float) -> int:
+    raise RuntimeError(_MODEL_ONLY)
+
+
+def categorical(probabilities: Iterable[float]) -> int:
+    raise RuntimeError(_MODEL_ONLY)
 
 
 def _compiled_namespace():
@@ -85,7 +124,7 @@ def _compiled_namespace():
     return _compiled
 
 
-# Model callbacks and standalone @njit helpers share these implementations.
+# Model callbacks and the @njit helpers they call share these implementations.
 @_nb_overload(uniform)
 def _ol_uniform(min=0.0, max=1.0):
     compiled = _compiled_namespace()
@@ -330,22 +369,18 @@ def _ol_categorical(probabilities):
 
 
 __all__ = [
-    "AliasSampler",
     "bernoulli",
     "beta",
     "binomial",
     "categorical",
     "cauchy",
     "chi_squared",
-    "current_seed",
     "dice",
     "erlang",
     "exponential",
     "f_dist",
-    "fmix64",
     "gamma",
     "geometric",
-    "hwseed",
     "hyperexponential",
     "hypoexponential",
     "logistic",
@@ -356,9 +391,7 @@ __all__ = [
     "pert",
     "pert_mod",
     "poisson",
-    "random_u64",
     "rayleigh",
-    "seed",
     "student_t",
     "triangular",
     "uniform",

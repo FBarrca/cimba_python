@@ -58,13 +58,32 @@ class RandomCallbacks(sim.Model):
         self.collected_value = cimba.random.beta(a=2.0, b=3.0)
 
 
-def test_callbacks_share_the_standalone_njit_random_stream():
+class ReferenceDraws(sim.Model):
+    first: sim.Output
+    second: sim.Output
+    third: sim.Output
+    fourth: sim.Output
+    fifth: sim.Output
+
+    @sim.process
+    def draw(self):
+        values = expected_draws()
+        self.first = values[0]
+        self.second = values[1]
+        self.third = values[2]
+        self.fourth = values[3]
+        self.fifth = values[4]
+
+
+def test_callbacks_and_njit_helpers_share_the_trial_random_stream():
     experiment = RandomCallbacks().experiment(
         replications=16, duration=1.0, warmup=0.0, seed=42)
-    expected = []
-    for seed in experiment.trials["seed"]:
-        cimba.random.seed(int(seed))
-        expected.append(expected_draws())
+    reference = ReferenceDraws().experiment(
+        replications=16, duration=1.0, warmup=0.0, seed=42)
+    np.testing.assert_array_equal(experiment.trials["seed"], reference.trials["seed"])
+    assert reference.run() == 0
+    expected = np.column_stack([
+        reference[field] for field in ("first", "second", "third", "fourth", "fifth")])
 
     fields = (
         "sampler__value", "normal_value", "gamma_value",

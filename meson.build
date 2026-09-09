@@ -1,10 +1,9 @@
 # Build for the Cimba Python wrapper: consume the upstream Cimba C library
 # (vendored as a git submodule under subprojects/cimba) and statically link it
-# into the Cython extension.
+# into the private native runtime module.
 project(
     'cimba',
     'c',
-    'cython',
     version: '0.5.10',
     meson_version: '>=1.1.0',
     # Fast wheels by default. Use -Dbuildtype=debugoptimized for native INFO logs.
@@ -18,7 +17,7 @@ cimba_default_options = [
     'default_library=static',
     'enable_docs=false',
     'warning_level=1',
-    'external_context_switch_wrapper=true',
+    'external_context_switch_wrapper=false',
     'enable_extras=false',
 ]
 
@@ -54,13 +53,9 @@ py.install_sources(
     'src/cimba/_intrinsics.py',
     'src/cimba/_methods.py',
     'src/cimba/_model.py',
-    'src/cimba/cimba.py',
-    'src/cimba/cmb_logger.py',
     'src/cimba/py.typed',
     'src/cimba/__init__.pyi',
     'src/cimba/_cimba.pyi',
-    'src/cimba/cimba.pyi',
-    'src/cimba/cmb_logger.pyi',
     subdir: 'cimba',
 )
 
@@ -112,7 +107,7 @@ py.install_sources(
 
 cimba_native_ext = py.extension_module(
     '_cimba_native',
-    'src/cimba/_cimba_native.pyx',
+    'src/cimba/native/module.c',
     # nbshim.c re-exports the static-inline cimba functions that sim.py binds
     # as Numba external symbols (cpy_*).
     'src/cimba/native/nbshim.c',

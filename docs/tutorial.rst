@@ -107,10 +107,11 @@ rate of 0.75 and service rate of 1.0 gives the 0.75 utilization we wanted for
 the first run.
 
 The ``self`` argument is the trial-local model record. It holds the parameter,
-output, state, and entity handles declared on ``MM1``. Process functions are
-plain Python functions, but the blocking ``sim.hold()`` call and entity
-methods such as ``self.queue.get()`` make them simulation processes. If the
-service process tries to get from an empty queue, it pauses. The dispatcher
+output, state, and entity handles declared on ``MM1``. Cimba compiles process
+functions with Numba before running trials. Their bodies use Python syntax
+supported by Numba, with blocking calls such as ``sim.hold()`` and
+``self.queue.get()``. If the service process tries to get from an empty queue,
+it pauses. The dispatcher
 then runs some other event, such as the arrival process waking up and putting
 a customer into the queue. When the service process resumes, it continues
 immediately after the same ``self.queue.get()`` call.
@@ -130,10 +131,10 @@ The collector runs after the trial finishes. ``self.queue.mean_level()`` uses
 the recording window controlled by the experiment's ``warmup`` and
 ``duration``.
 
-We also need an experiment to set it all up and run the simulation. Unlike a
-lower-level program, there is no manual object lifecycle code here: the model
+We also need an experiment to set it all up and run the simulation. The model
 declaration tells Cimba Python what each trial needs, and
-``model.experiment(...)`` generates the trial table.
+``model.experiment(...)`` generates the trial table and manages native objects
+throughout each trial.
 
 Let us try this:
 
@@ -155,8 +156,11 @@ Let us try this:
         print(f"Average queue length over the first 10 time units: {avg:.6f}")
 
 There is one utilization value and one replication, so this experiment has one
-trial. The seed makes the random stream reproducible. ``exp.run()`` executes the
-trial table and returns the number of failed trials. Outputs are available by
+trial. The seed makes the random stream reproducible. ``cimba.random`` draws
+belong inside compiled callbacks and the Numba helpers they call. For sampling
+in Python before or after a run, use ``numpy.random.default_rng(seed)``.
+``exp.run()`` executes the trial table and returns the number of failed trials.
+Outputs are available by
 name, so ``exp.results.avg_queue_length`` returns an array with one element per
 trial.
 
@@ -1507,8 +1511,8 @@ so the ride has happened and the visitor can choose a new destination:
         vip.rides += 1
         break
 
-Alias sampling probabilities
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Categorical routing probabilities
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Queueing networks often use a transition matrix: after each attraction, choose
 the next attraction according to row-specific probabilities. Cimba Python
@@ -2095,7 +2099,7 @@ small production system:
 
 The key lesson is the same as in every earlier chapter, now with a richer
 workflow: active entities are processes, passive constraints are model fields,
-randomness comes from ``cimba.sim``, and experiments are independent trial
+randomness comes from ``cimba.random``, and experiments are independent trial
 tables that can be swept and summarized from Python.
 
 This is where the tutorial stops, but not where the modeling style stops. The

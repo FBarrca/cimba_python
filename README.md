@@ -4,7 +4,7 @@
 
 ## Fast discrete event simulation for Python
 
-Cimba Python is a Python interface to [Cimba](https://github.com/ambonvik/cimba),
+Cimba Python provides one modeling API, `cimba.sim`, for [Cimba](https://github.com/ambonvik/cimba),
 a multithreaded discrete event simulation engine written in C and assembly.
 
 It is designed for Python simulation models that need more speed than pure
@@ -39,11 +39,14 @@ our fork of Cimba **3.0.0-RC2**, so you do not need to install Cimba separately.
 macOS wheels are available for Apple Silicon. Numba does not currently publish
 the required llvmlite wheels for Intel Macs.
 
-The bindings manage the strict native object lifecycle required since Cimba
+The model runtime manages the strict native object lifecycle required since Cimba
 3.0.0 RC1: initialize before use, terminate after use, and destroy allocated
 objects. This includes temporary statistics objects and spawned processes.
-Abandoned trials also release the bindings' spawned-process registry before
+Abandoned trials also release the runtime's spawned-process registry before
 the worker runs another trial. Python models do not need manual lifecycle calls.
+
+Migration from the removed direct Python and capsule APIs is documented in
+[`docs/about/cimba_python.rst`](docs/about/cimba_python.rst#migrating-from-the-lower-level-api).
 
 ## What is it?
 

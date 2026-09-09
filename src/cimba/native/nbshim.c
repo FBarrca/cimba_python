@@ -1,5 +1,5 @@
 /*
- * nbshim.c - exported wrappers for the Layer-2 Numba binding.
+ * nbshim.c - exported wrappers for compiled model callbacks.
  *
  * Numba-compiled model code binds cimba functions as external symbols at
  * JIT link time. That works for everything declared extern, but several

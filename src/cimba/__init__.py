@@ -1,35 +1,24 @@
-from operator import index
+"""Cimba model runtime configuration and compiled random draws."""
 
-from .cimba import (
-    gil_enabled,
-    native_version,
-    run_experiment,
-    run_native_experiment,
-    set_native_thread_hooks,
-)
-from .cmb_logger import (
-    LOGGER_ERROR,
-    LOGGER_FATAL,
-    LOGGER_INFO,
-    LOGGER_WARNING,
-    logger_flags_off,
-    logger_flags_on,
-)
+from operator import index as _index
+
+from ._cimba import ffi as _ffi, lib as _lib
 from . import random as random
+
+LOGGER_FATAL = 0x80000000
+LOGGER_ERROR = 0x40000000
+LOGGER_WARNING = 0x20000000
+LOGGER_INFO = 0x10000000
 
 __all__ = [
     "LOGGER_ERROR",
     "LOGGER_FATAL",
     "LOGGER_INFO",
     "LOGGER_WARNING",
-    "gil_enabled",
     "logger_flags_off",
     "logger_flags_on",
     "native_version",
     "random",
-    "run_experiment",
-    "run_native_experiment",
-    "set_native_thread_hooks",
     "use_threads",
     "version",
     "__version__",
@@ -37,6 +26,21 @@ __all__ = [
 
 #: Version of this Python wrapper (distinct from the native Cimba version).
 __version__ = "0.5.10"
+
+
+def native_version() -> str:
+    """Return the bundled Cimba engine version."""
+    return _ffi.string(_lib.cimba_version()).decode("utf-8")
+
+
+def logger_flags_on(flags: int) -> None:
+    """Enable logging categories for subsequent model runs."""
+    _lib.cpy_logger_flags_on(_index(flags))
+
+
+def logger_flags_off(flags: int) -> None:
+    """Disable logging categories for subsequent model runs."""
+    _lib.cpy_logger_flags_off(_index(flags))
 
 
 def version() -> str:
@@ -49,9 +53,7 @@ def use_threads(n: int) -> int:
 
     Call between runs. Zero selects the runtime's CPU-count default.
     """
-    from ._cimba import lib
-
-    n = index(n)
+    n = _index(n)
     if not 0 <= n <= 0xFFFFFFFF:
         raise ValueError("worker count must fit an unsigned 32-bit integer")
-    return int(lib.cimba_threads_use(n))
+    return int(_lib.cimba_threads_use(n))

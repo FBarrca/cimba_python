@@ -1,6 +1,6 @@
 """Numba bindings for the native cimba symbols.
 
-The compiled ``_cimba`` extension embeds libcimba plus the nbshim.c wrappers
+The private ``_cimba_native`` module embeds libcimba plus the nbshim.c wrappers
 (``cpy_*``, re-exporting upstream's static-inline helpers). Loading the
 extension into LLVM makes those symbols visible to the JIT linker; each
 ``types.ExternalFunction`` below declares one symbol and its signature.
