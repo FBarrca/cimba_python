@@ -583,6 +583,72 @@ Use stdout reports for short single-trial runs. In parallel experiments, text
 from several trials may interleave; prefer scalar outputs for final analysis
 and file reports only when each run has an unambiguous destination.
 
+.. _mm1-reporting-figures:
+
+The same statistics are easier to explore graphically. The following figures
+and sample reports are preserved from the original M/M/1 reporting walkthrough,
+with utilization 0.75, a warmup of 1,000 time units, and a measurement window of
+one million time units. They come from an earlier run than the console output
+above, so their sample values differ slightly.
+
+.. figure:: static/mm1_reporting_histogram.svg
+   :alt: Duration-weighted histogram of the M/M/1 waiting-queue length.
+
+   Distribution of queue levels, weighted by the time spent at each level.
+
+Duration weighting matters here. A queue length held for ten simulated minutes
+should contribute ten times as much as one held for a single minute. Counting
+each recorded change equally would describe the observations at change events,
+rather than the fraction of time the queue spends at each level.
+
+A five-number summary gives another view of the distribution: its minimum,
+lower quartile, median, upper quartile, and maximum. The saved run's structured
+summary was:
+
+.. literalinclude:: static/mm1_reporting_five_number.txt
+   :language: none
+
+The median queue length was one and the upper quartile was three, while the
+maximum reached 35. That long tail is easy to miss if we look only at the mean.
+For a new run, print the native five-number summary from the collector with
+``self.queue.history().fivenum()``. The structured representation above is the
+saved example's display format.
+
+.. figure:: static/mm1_reporting_pacf.svg
+   :alt: Partial autocorrelation of the recorded M/M/1 queue-level observations.
+
+   Partial autocorrelation of the queue-level observations at successive lags.
+
+The correlogram shows dependence between observations at each lag after
+accounting for the intervening observations. Here, lags count recorded
+observations, not fixed intervals of simulated time. The histogram describes
+the distribution of queue levels; the correlogram adds information about their
+ordering. The :download:`full text report from this saved run
+<static/mm1_reporting_report.txt>` includes its summary, histogram, and
+partial autocorrelation values.
+
+For plots of a new run, use the captured history introduced above with
+Matplotlib (install the ``cimba[plot]`` extra). This example plots the fraction
+of measured time spent at each integer queue level for trial zero:
+
+.. code-block:: python
+
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    history = exp.history("queue", trial=0)
+    levels = history[:, 1]
+    durations = history[:, 2]
+    bins = np.arange(int(levels.max()) + 2) - 0.5
+
+    fig, ax = plt.subplots()
+    ax.hist(levels, bins=bins, weights=durations / durations.sum())
+    ax.set_xlabel("Waiting-queue length")
+    ax.set_ylabel("Fraction of measured time")
+    fig.tight_layout()
+    fig.savefig("queue_length_histogram.svg")
+    plt.close(fig)
+
 Use ``sim.Dataset`` when you need to record individual samples, such as each
 customer's time in system:
 

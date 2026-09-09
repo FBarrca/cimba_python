@@ -36,13 +36,18 @@ text handles created outside the hot loop:
 Use logging for small runs while validating behavior. Turn it off for large
 experiments unless the output is part of the experiment design.
 
+Keep text handles as scalar constants or tuples. Global Python lists and
+dictionaries follow Numba's usual restrictions; Cimba does not reconstruct
+them inside callbacks. Select a handle from such a container in Python before
+using it in compiled code.
+
 Native text reports
 -------------------
 
 Every entity's ``.report()`` method prints a native-style text report for
-queues, resources, pools, stores, and priority queues (datasets and time
-series have the same ``.report()``/``.report_file()`` pair, described in
-:doc:`../api_reference/data`):
+queues, resources, pools, stores, and priority queues. Datasets and time
+series instead expose ``.print()``, ``.fivenum()``, ``.histogram()``, and their
+file variants, described in :doc:`../api_reference/data`:
 
 .. code-block:: python
 
@@ -60,25 +65,14 @@ series have the same ``.report()``/``.report_file()`` pair, described in
 ``sim.log_text()``. These reports are most useful for single-trial debugging
 and tutorial-style inspection.
 
-Structured Python reports
--------------------------
+Retaining data for Python analysis
+----------------------------------
 
-Outside compiled process code, prefer :mod:`cimba.reporting` when you want
-records, tables, or plots:
-
-.. code-block:: python
-
-   from cimba import reporting
-
-   report = reporting.resource_report(trial.queue, lags=20)
-   print(reporting.format_report(report))
-
-   rows = report.histogram.to_records()
-   summary = report.summary.as_dict()
-
-Structured reports return ordinary Python data that can be handed to pandas,
-Polars, CSV writers, notebooks, or plotting code. Plotting helpers are imported
-only when used and require the optional plotting extra.
+Call ``self.waits.capture()`` or ``self.waiting_room.history().capture()`` in
+the model's ``@sim.collect`` callback to retain raw samples or time histories.
+After ``exp.run()``, read their NumPy arrays with ``exp.dataset("waits")`` or
+``exp.history("waiting_room")``. These arrays can be passed to Python analysis,
+export, or plotting tools. Native entity handles expire when a trial ends.
 
 Outputs for experiments
 -----------------------
@@ -110,8 +104,7 @@ Use logging when you need to watch model behavior as it unfolds.
 
 Use native text reports when validating one trial interactively.
 
-Use structured ``cimba.reporting`` helpers when you need report data in Python
-after a run.
+Use captures when you need raw sample arrays in Python after a run.
 
 Use ``sim.Output`` fields when a metric belongs in every trial row of an
 experiment.

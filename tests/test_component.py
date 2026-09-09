@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
 
-import cimba
 import cimba.sim as sim
 
 
@@ -1338,7 +1337,6 @@ def test_component_compilation_reuses_one_model_on_serial_backend(
 
     # Exercise the serial fallback used on Windows and reuse the compiled model.
     monkeypatch.setattr(multiprocessing, "get_context", no_fork)
-    monkeypatch.setenv("CIMBA_CACHE", "0")
 
     class Worker(sim.Component):
         count: sim.State
@@ -1369,36 +1367,41 @@ def test_component_compilation_reuses_one_model_on_serial_backend(
     assert other["worker__total"][0] == 1
 
 
-def test_component_callback_log_text_handle_uses_runtime_sidecar(monkeypatch):
-    monkeypatch.setenv("CIMBA_CACHE", "0")
-    log_flag = 0x00010000
-    cimba.logger_flags_off(log_flag)
-    message = sim.log_text("component runtime text sidecar")
+@pytest.mark.parametrize("serial", [False, True])
+def test_component_callbacks_use_native_text_handles(tmp_path, monkeypatch, serial):
+    if serial:
+        import multiprocessing
+
+        def no_fork(_method):
+            raise ValueError("fork unavailable")
+
+        monkeypatch.setattr(multiprocessing, "get_context", no_fork)
+
+    reports = (tmp_path / "process.txt", tmp_path / "collect.txt")
+    paths = tuple(sim.log_text(str(path)) for path in reports)
 
     class Worker(sim.Component):
         done: sim.Output
+        samples: sim.Dataset
 
         @sim.process
         def run(self, env):
-            sim.log_user(log_flag, message)
-            self.done = 1.0
-            sim.suspend()
+            self.samples.add(42.0)
+            self.done = self.samples.print_file(paths[0], append=0)
+
+        @sim.collect
+        def collect(self, env):
+            self.done += self.samples.print_file(paths[1], append=0)
 
     class Network(sim.Model):
         worker: Worker = Worker()
 
-    model = Network()
-    (process,) = model._processes
-    source = process.fn.__cimba_source__
-    assert "_CIMBA_RUNTIME_TEXT_HANDLE" in source
-    assert str(message) not in source
-    assert model._runtime_text_handles == [message]
-
-    experiment = model.experiment(
-        replications=1, duration=1.0, warmup=0.0, seed=9)
-    assert experiment.run() == 0
-    assert experiment["worker__done"][0] == 1.0
-    cimba.logger_flags_on(log_flag)
+    experiment = Network().experiment(duration=None, warmup=0, seed=9)
+    for _ in range(2):
+        assert experiment.run() == 0
+        assert experiment["worker__done"][0] == 2.0
+        for path in reports:
+            np.testing.assert_array_equal(np.loadtxt(path), 42.0)
 
 
 def test_component_process_dag_uses_lowered_source():

@@ -89,7 +89,7 @@ _LIFECYCLE_FIELDS = (
     "_cimba_process_handles _cimba_process_handle_count "
     "_cimba_process_contexts _cimba_has_spawned _cimba_collect_descriptors "
     "_cimba_collect_descriptor_count _cimba_entity_descriptors "
-    "_cimba_entity_descriptor_count _cimba_runtime_text_handles "
+    "_cimba_entity_descriptor_count "
     "_cimba_trial_completed"
 ).split()
 (
@@ -111,7 +111,6 @@ _LIFECYCLE_FIELDS = (
     _COLLECT_DESCRIPTOR_COUNT_FIELD,
     _ENTITY_DESCRIPTORS_FIELD,
     _ENTITY_DESCRIPTOR_COUNT_FIELD,
-    _RUNTIME_TEXT_HANDLES_FIELD,
     _TRIAL_COMPLETED_FIELD,
 ) = _LIFECYCLE_FIELDS
 
@@ -124,12 +123,6 @@ _LIFECYCLE_ABI_RECORD = from_dtype(_LIFECYCLE_ABI_DTYPE)
 _LIFECYCLE_ABI_PTR = types.CPointer(_LIFECYCLE_ABI_RECORD)
 _INT64_FROM_ADDRESS = ptr_caster(types.int64)
 _FLOAT64_FROM_ADDRESS = ptr_caster(types.float64)
-
-
-@njit(inline="always")
-def _runtime_text_handle(table_address, slot):
-    """Read a process-local text pointer from a model sidecar table."""
-    return carray(_INT64_FROM_ADDRESS(table_address), slot + 1)[slot]
 
 
 _PROCESS_DESCRIPTOR_WIDTH = 8
@@ -511,7 +504,12 @@ _PARALLEL_CFUNC_JOBS: tuple[tuple[Any, Callable[..., Any]], ...] = ()
 
 
 def _compile_cfunc_job(index: int):
-    """Compile and serialize one callback in a forked worker."""
+    """Compile a callback for this worker's parent process only.
+
+    Captured text handles point to buffers kept alive in the parent and
+    inherited by fork. The returned object code must not be persisted or
+    loaded into another interpreter.
+    """
     signature, function = _PARALLEL_CFUNC_JOBS[index]
     callback = _compile_parallel_cfunc(signature, function)
     return (
@@ -1026,87 +1024,6 @@ def _spawnable_slot_label(field: str, index: int | None) -> str:
     return field if index is None else f"{field}[{index}]"
 
 
-def _runtime_text_expression(
-    value: Any,
-    register: Callable[[int], int],
-    env_name: str,
-) -> tuple[ast.expr, bool] | None:
-    """Convert constants containing ``log_text`` handles to sidecar reads."""
-    if isinstance(value, int) and not isinstance(value, bool):
-        if _b.cstring_value(value) is not None:
-            slot = register(value)
-            expression = ast.parse(
-                f"_CIMBA_RUNTIME_TEXT_HANDLE({env_name}[{_RUNTIME_TEXT_HANDLES_FIELD!r}], {slot})",
-                mode="eval",
-            ).body
-            assert isinstance(expression, ast.expr)
-            return expression, True
-        return ast.Constant(value=value), False
-    if isinstance(value, (str, bytes, float, bool, type(None))):
-        return ast.Constant(value=value), False
-    if isinstance(value, (tuple, list)):
-        items = [_runtime_text_expression(item, register, env_name) for item in value]
-        if any(item is None for item in items):
-            return None
-        converted = [item for item in items if item is not None]
-        node_type = ast.Tuple if isinstance(value, tuple) else ast.List
-        return (
-            node_type(elts=[item[0] for item in converted], ctx=ast.Load()),
-            any(item[1] for item in converted),
-        )
-    if isinstance(value, Mapping):
-        pairs = [
-            (
-                _runtime_text_expression(key, register, env_name),
-                _runtime_text_expression(item, register, env_name),
-            )
-            for key, item in value.items()
-        ]
-        if any(key is None or item is None for key, item in pairs):
-            return None
-        converted = [
-            (key, item) for key, item in pairs if key is not None and item is not None
-        ]
-        return (
-            ast.Dict(
-                keys=[key[0] for key, _item in converted],
-                values=[item[0] for _key, item in converted],
-            ),
-            any(key[1] or item[1] for key, item in converted),
-        )
-    return None
-
-
-class _RuntimeTextHandleLowerer(ast.NodeTransformer):
-    """Replace captured process-local text pointers with sidecar lookups."""
-
-    def __init__(
-        self,
-        *,
-        namespace: Mapping[str, Any],
-        local_names: set[str],
-        register: Callable[[int], int],
-        env_name: str,
-    ) -> None:
-        self.namespace = namespace
-        self.local_names = local_names
-        self.register = register
-        self.env_name = env_name
-        self.changed = False
-
-    def visit_Name(self, node: ast.Name) -> ast.AST:
-        if (not isinstance(node.ctx, ast.Load)
-                or node.id in self.local_names
-                or node.id not in self.namespace):
-            return node
-        converted = _runtime_text_expression(
-            self.namespace[node.id], self.register, self.env_name)
-        if converted is None or not converted[1]:
-            return node
-        self.changed = True
-        return ast.copy_location(converted[0], node)
-
-
 _ExperimentResultT = TypeVar(
     "_ExperimentResultT", default="ExperimentResults")
 
@@ -1274,8 +1191,8 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
     conventionally ``self``, as that root trial environment view. Entity names
     may also be passed as keyword lists for
     quick callback-free untyped models. Class-declared model and component
-    callbacks are compiled from the first real model instance and reused by
-    the class."""
+    callbacks compile once per model instance and are reused by its
+    experiments."""
 
     start_time: float
     warmup_s: float
@@ -1422,8 +1339,6 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
         self._component_collects: list[tuple[Callable[..., Any], int]] = []
         self._compiled: _Compiled | None = None
         self._compile_lock = threading.RLock()
-        self._runtime_text_handles: list[int] = []
-        self._runtime_text_slots: dict[str, int] = {}
         self._owner_decl = _owner_declaration(type(self), decls)
         self._functions = _build_functions((self._owner_decl,))
         self._lowering_context = _CallbackLoweringContext(
@@ -1523,10 +1438,6 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
         for root in self._component_roots.values():
             for decl in root.walk():
                 self._register_component_decl_processes(decl)
-        self._component_collects = [
-            (self._lower_runtime_text_handles(fn), count)
-            for fn, count in self._component_collects
-        ]
 
     def _register_model_callbacks(self) -> None:
         callbacks = type(self)._callbacks()
@@ -1889,9 +1800,6 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
             entity_fields=entity_fields,
         )
         changed |= lowered
-        node, lowered = self._lower_runtime_text_handles_in_node(
-            node, namespace)
-        changed |= lowered
         if not changed:
             return fn
 
@@ -1902,70 +1810,6 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
             *called_functions,
         }))
         return generated
-
-    def _register_runtime_text_handle(self, address: int) -> int:
-        """Register one local cstring address under a stable text slot."""
-        text = _b.cstring_value(address)
-        if text is None:
-            raise ValueError("runtime text handle is not owned by Cimba")
-        slot = self._runtime_text_slots.get(text)
-        if slot is not None:
-            return slot
-        slot = len(self._runtime_text_handles)
-        self._runtime_text_slots[text] = slot
-        self._runtime_text_handles.append(address)
-        return slot
-
-    def _lower_runtime_text_handles(self, fn: _F) -> _F:
-        """Move captured ``sim.log_text`` pointers into a runtime sidecar."""
-        namespace = _closure_namespace(fn)
-        try:
-            node = copy.deepcopy(_function_def_from_source(fn))
-        except (OSError, TypeError):
-            return fn
-        lowered, changed = self._lower_runtime_text_handles_in_node(
-            node, namespace)
-        if not changed:
-            return fn
-        return _compile_model_callback_lowering(
-            fn, lowered, self.name, {}, namespace)
-
-    def _lower_runtime_text_handles_in_node(
-        self,
-        node: ast.FunctionDef,
-        namespace: dict[str, Any],
-    ) -> tuple[ast.FunctionDef, bool]:
-        """Rewrite captured text handles in an already parsed callback."""
-        if not node.args.args:
-            return node, False
-        env_name = node.args.args[0].arg
-        local_names = {
-            arg.arg
-            for arg in (
-                *node.args.posonlyargs,
-                *node.args.args,
-                *node.args.kwonlyargs,
-            )
-        }
-        local_names.update(
-            child.id
-            for child in ast.walk(node)
-            if isinstance(child, ast.Name)
-            and isinstance(child.ctx, (ast.Store, ast.Del))
-        )
-        lowerer = _RuntimeTextHandleLowerer(
-            namespace=namespace,
-            local_names=local_names,
-            register=self._register_runtime_text_handle,
-            env_name=env_name,
-        )
-        lowered = lowerer.visit(node)
-        if not lowerer.changed:
-            return node, False
-        if not isinstance(lowered, ast.FunctionDef):
-            raise TypeError("runtime text lowering produced a non-function")
-        namespace["_CIMBA_RUNTIME_TEXT_HANDLE"] = _runtime_text_handle
-        return lowered, True
 
     def _process_dag_blocks(
         self,
@@ -2669,33 +2513,29 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
             (
                 "predicate",
                 self._predicates,
-                pred_cfuncs,
                 pred_sig,
                 lambda item: make_pred(njit(item.fn)),
             ),
             (
                 "event",
                 self._events,
-                event_cfuncs,
                 ev_sig,
                 lambda item: make_event(njit(item.fn), item.takes_data),
             ),
         )
-        for category, declarations, compiled, signature, adapt in signal_groups:
+        for category, declarations, signature, adapt in signal_groups:
             for callback in declarations:
-                if callback.key not in compiled:
-                    jobs.append(
-                        _CFuncJob(
-                            category,
-                            callback.name,
-                            callback.key,
-                            signature,
-                            adapt(callback),
-                        )
+                jobs.append(
+                    _CFuncJob(
+                        category,
+                        callback.name,
+                        callback.key,
+                        signature,
+                        adapt(callback),
                     )
+                )
         for index, (signature, function) in enumerate(extra_jobs):
-            if extra_callbacks[index] is None:
-                jobs.append(_CFuncJob("extra", str(index), index, signature, function))
+            jobs.append(_CFuncJob("extra", str(index), index, signature, function))
 
         try:
             callbacks = _compile_cfuncs(
@@ -2928,10 +2768,6 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
         )
         if collect_descriptors.size == 0:
             collect_descriptors = np.zeros(1, dtype=np.int64)
-        runtime_text_handles = np.asarray(
-            self._runtime_text_handles, dtype=np.int64)
-        if runtime_text_handles.size == 0:
-            runtime_text_handles = np.zeros(1, dtype=np.int64)
 
         # Keep every compiled artifact alive for the model's lifetime
         self._compiled = {
@@ -2955,7 +2791,6 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
             "process_handle_count": process_handle_count,
             "entity_descriptors": entity_descriptors,
             "entity_descriptor_count": entity_descriptor_count,
-            "runtime_text_handles": runtime_text_handles,
             "spawns": spawn_descs,
             "spawn_assignments": spawn_assignments,
             "dtype": dtype,
@@ -3072,8 +2907,6 @@ class Model(_DeclarationOwner, Generic[_ExperimentResultT]):
             compiled["entity_descriptors"].ctypes.data
         trials[_ENTITY_DESCRIPTOR_COUNT_FIELD] = \
             compiled["entity_descriptor_count"]
-        trials[_RUNTIME_TEXT_HANDLES_FIELD] = \
-            compiled["runtime_text_handles"].ctypes.data
         if self._history_captures or self._dataset_captures:
             trials[HISTORY_CAPTURE_TRIAL_FIELD] = np.arange(
                 n_trials, dtype=np.uint64)
