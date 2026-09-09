@@ -3,6 +3,7 @@ import sys
 import textwrap
 
 import numpy as np
+import pytest
 
 import cimba.sim as sim
 
@@ -72,7 +73,7 @@ def test_compiled_lifecycle_uses_ownership_appropriate_cleanup(monkeypatch):
         initialize_entities,
         initialize_processes,
         teardown_trial,
-        _stop_trial,
+        stop_trial,
         cleanup_processes,
         _collect,
     ) = model._compiled["events"]
@@ -81,6 +82,7 @@ def test_compiled_lifecycle_uses_ownership_appropriate_cleanup(monkeypatch):
     entity_init_ir = initialize_entities.inspect_llvm()
     process_init_ir = initialize_processes.inspect_llvm()
     teardown_ir = teardown_trial.inspect_llvm()
+    process_stop_ir = stop_trial.inspect_llvm()
     process_cleanup_ir = cleanup_processes.inspect_llvm()
 
     for family in (
@@ -104,17 +106,18 @@ def test_compiled_lifecycle_uses_ownership_appropriate_cleanup(monkeypatch):
     assert "cmb_random_terminate" in teardown_ir
     assert "cmb_process_create" in process_init_ir
     assert "cmb_process_initialize" in process_init_ir
-    assert "cmb_process_stop" in process_cleanup_ir
+    assert "cmb_process_stop" in process_stop_ir
     assert "cmb_process_terminate" in process_cleanup_ir
     assert "cmb_process_destroy" in process_cleanup_ir
-    assert "cpy_spawned_stop_all" in process_cleanup_ir
+    assert "cpy_spawned_stop_all" in process_stop_ir
 
 
-def test_lifecycle_cleanup_supports_reused_workers_and_experiment_reruns():
+@pytest.mark.parametrize("duration", [1.0, None], ids=["timed", "idle"])
+def test_lifecycle_cleanup_supports_reused_workers_and_experiment_reruns(duration):
     model = LifecycleModel()
     experiment = model.experiment(
         replications=32,
-        duration=1.0,
+        duration=duration,
         warmup=0.0,
         seed=11,
     )
@@ -125,11 +128,12 @@ def test_lifecycle_cleanup_supports_reused_workers_and_experiment_reruns():
         np.testing.assert_array_equal(experiment["samples"], 1.0)
 
 
-def test_early_event_queue_exit_stops_static_and_spawned_processes():
+@pytest.mark.parametrize("duration", [10.0, None], ids=["timed", "idle"])
+def test_early_event_queue_exit_stops_static_and_spawned_processes(duration):
     model = EarlyExitModel()
     experiment = model.experiment(
         replications=32,
-        duration=10.0,
+        duration=duration,
         warmup=0.0,
         seed=13,
     )
@@ -212,11 +216,12 @@ class FiniteIdleModel(sim.Model):
 
     @sim.process
     def producer(self):
+        sim.spawn(self.consumer, self)
         for index in range(3):
             sim.hold(1.0)
             self.store.put(index + 1)
 
-    @sim.process
+    @sim.process(spawnable=True)
     def consumer(self):
         self.completed = 0.0
         while True:
@@ -262,26 +267,7 @@ def test_idle_trial_without_work_collects_at_start_time():
     np.testing.assert_array_equal(experiment['finished_at'], 7.0)
 
 
-def test_idle_trials_clean_up_all_entity_types_and_suspended_processes():
-    experiment = LifecycleModel().experiment(
-        duration=None, warmup=0.0, replications=32, seed=19)
-    for _ in range(3):
-        assert experiment.run() == 0
-        np.testing.assert_array_equal(experiment['completed'], 1.0)
-        np.testing.assert_array_equal(experiment['samples'], 1.0)
-
-
-def test_idle_trials_clean_up_spawned_processes():
-    experiment = EarlyExitModel().experiment(
-        duration=None, warmup=0.0, replications=32, seed=23)
-    for _ in range(3):
-        assert experiment.run() == 0
-        np.testing.assert_array_equal(experiment['completed'], 1.0)
-
-
 def test_idle_mode_rejects_recording_window_and_cooldown():
-    import pytest
-
     model = EmptyIdleModel()
     for kwargs in ({}, {'warmup': 1.0}, {'warmup': 0.0, 'cooldown': 1.0}):
         with pytest.raises(ValueError, match='duration=None requires'):

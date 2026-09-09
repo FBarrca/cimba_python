@@ -1,6 +1,6 @@
 # Build for the Cimba Python wrapper: consume the upstream Cimba C library
-# (vendored as a git submodule under subprojects/cimba), generate the cffi
-# glue module, and statically link libcimba into it.
+# (vendored as a git submodule under subprojects/cimba) and statically link it
+# into the Cython extension.
 project(
     'cimba',
     'c',
@@ -66,7 +66,6 @@ py.install_sources(
     'src/cimba/py.typed',
     'src/cimba/__init__.pyi',
     'src/cimba/_cimba.pyi',
-    'src/cimba/_types.pyi',
     'src/cimba/cimba.pyi',
     'src/cimba/cmb_logger.pyi',
     subdir: 'cimba',
@@ -76,7 +75,6 @@ py.install_sources(
     'src/cimba/random/__init__.py',
     'src/cimba/random/__init__.pyi',
     'src/cimba/random/_compiled.py',
-    'src/cimba/random/_lowering.py',
     subdir: 'cimba/random',
 )
 
@@ -133,11 +131,5 @@ cimba_native_ext = py.extension_module(
     subdir: 'cimba',
 )
 
-# Upstream adds its tutorials/benchmarks/tests to the default `all` target (one
-# links system HDF5). meson-python compiles only this alias instead -- see
-# tool.meson-python.args.compile in pyproject.toml.
+# Stable extension target for meson-python's editable rebuilds.
 alias_target('cimba_ext', cimba_native_ext)
-
-if get_option('enable_docs')
-    subdir('docs')
-endif

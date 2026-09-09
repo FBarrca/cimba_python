@@ -2,9 +2,7 @@
 
 from .lowering import (
     lower_dataset_capture_calls,
-    lower_dataset_capture_methods,
     lower_history_capture_calls,
-    lower_history_capture_methods,
 )
 from .runtime import (
     HISTORY_CAPTURE_STORE_FIELD,
@@ -23,7 +21,5 @@ __all__ = [
     "create_capture_store",
     "destroy_capture_store",
     "lower_dataset_capture_calls",
-    "lower_dataset_capture_methods",
     "lower_history_capture_calls",
-    "lower_history_capture_methods",
 ]

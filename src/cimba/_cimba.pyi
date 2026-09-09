@@ -1,11 +1,11 @@
-"""Type stubs for the compiled ``cimba._cimba`` cffi extension module."""
+"""Type stubs for the native facade's CFFI interface."""
 
 from typing import Any
 
 from _cffi_backend import FFI
 
 class _Lib:
-    """The cdef'd symbols exposed through cffi (see _cffi_build.py)."""
+    """The native symbols declared in _cimba.py."""
 
     def cimba_version(self) -> Any: ...  # cdata char *
     def cimba_run(self, trials: Any, num_trials: int,
@@ -20,9 +20,6 @@ class _Lib:
                                         slot: int) -> int: ...
     def cpy_history_capture_store_data(self, store: Any, trial: int,
                                        slot: int) -> Any: ...
-    def cpy_logger_flags_on(self, flags: int) -> None: ...
-    def cpy_logger_flags_off(self, flags: int) -> None: ...
-    def cmb_logger_flags_off(self, flags: int) -> None: ...
 
 ffi: FFI
 lib: _Lib

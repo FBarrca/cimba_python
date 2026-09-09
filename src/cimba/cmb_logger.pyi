@@ -2,8 +2,6 @@
 
 from typing import Final
 
-from ._types import _LoggerFlags
-
 LOGGER_FATAL: Final[int]
 """Fatal logger flag; fatal messages abort the program."""
 LOGGER_ERROR: Final[int]
@@ -13,10 +11,10 @@ LOGGER_WARNING: Final[int]
 LOGGER_INFO: Final[int]
 """Internal informational logger flag."""
 
-def logger_flags_on(flags: _LoggerFlags) -> None:
-    """Enable one or more Cimba logger flags in the current thread."""
+def logger_flags_on(flags: int) -> None:
+    """Enable logger flags in this thread and subsequent model trials."""
     ...
 
-def logger_flags_off(flags: _LoggerFlags) -> None:
-    """Disable one or more Cimba logger flags in the current thread."""
+def logger_flags_off(flags: int) -> None:
+    """Disable logger flags in this thread and subsequent model trials."""
     ...

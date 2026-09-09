@@ -85,8 +85,7 @@ def _compiled_namespace():
     return _compiled
 
 
-# Standalone @njit helpers do not pass through Cimba's model callback lowering,
-# so register direct Numba implementations for the same public names.
+# Model callbacks and standalone @njit helpers share these implementations.
 @_nb_overload(uniform)
 def _ol_uniform(min=0.0, max=1.0):
     compiled = _compiled_namespace()

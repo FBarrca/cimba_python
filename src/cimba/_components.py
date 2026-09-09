@@ -76,10 +76,6 @@ from ._timeseries.methods import (
     lower_env_history_method_calls,
     timeseries_lowering_namespace,
 )
-from .random._lowering import (
-    lower_random_calls_in_node,
-    random_lowering_namespace,
-)
 from .store.methods import (
     ENTITY_METHOD_NAMES,
     entity_lowering_namespace,
@@ -3093,11 +3089,6 @@ class _FunctionBuilder:
             # in scope here as well as at the call site.
             namespace.update(_lowering_namespace((decl,)))
             namespace.update(lowerer.helper_namespace)
-            lowered, random_changed = lower_random_calls_in_node(
-                lowered, namespace=namespace, label=label
-            )
-            if random_changed:
-                namespace.update(random_lowering_namespace())
             ast.fix_missing_locations(lowered)
             source_key = ast.unparse(
                 ast.Module(body=[lowered], type_ignores=[]))
@@ -3317,10 +3308,6 @@ def _lower_owner_methods(
         namespace.update(entity_lowering_namespace())
         changed = True
 
-    node, lowered = lower_random_calls_in_node(node, namespace=namespace, label=label)
-    if lowered:
-        namespace.update(random_lowering_namespace())
-        changed = True
     return node, changed
 
 

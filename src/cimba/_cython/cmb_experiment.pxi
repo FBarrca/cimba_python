@@ -1,4 +1,4 @@
-# This file is included by ../_cimba.pyx.
+# This file is included by ../_cimba_native.pyx.
 #
 # Parallel experiment orchestration for Python-defined simulations.
 #
@@ -196,7 +196,7 @@ def run_experiment(
     """Run independent replications of ``trial_fn``.
 
     ``trial_fn(index, seed)`` is called once per replication; it typically builds
-    and runs a :class:`Simulation` and returns a result. Results are returned in
+    a simulation and returns a result. Results are returned in
     a list indexed by replication.
 
     Parameters

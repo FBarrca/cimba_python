@@ -1,19 +1,13 @@
-import os
-import re
+from pathlib import Path
 import sys
+import tomllib
 
-sys.path.insert(0, os.path.abspath("../src"))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 
 project = "cimba"
-with open(os.path.join(os.path.dirname(__file__), "../pyproject.toml"), "r") as f:
-    pyproject = f.read()
-version_match = re.search(r"version\s*=\s*\"([^\"]+)\"", pyproject)
-if version_match:
-    release = version_match.group(1)
-    version = release
-else:
-    release = "0.5.10"
-    version = release
+with (ROOT / "pyproject.toml").open("rb") as f:
+    release = version = tomllib.load(f)["project"]["version"]
 
 copyright = "Francisco Barragán Castro 2025-26"
 

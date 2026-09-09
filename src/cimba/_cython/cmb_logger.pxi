@@ -1,10 +1,15 @@
-# This file is included by ../_cimba.pyx.
+# This file is included by ../_cimba_native.pyx.
 
-def logger_flags_on(int flags) -> None:
-    """Turn on Cimba logger flags in the current thread."""
-    cmb_logger_flags_on(<uint32_t>flags)
+cdef extern from "nbshim.h":
+    void cpy_logger_flags_on(uint32_t flags)
+    void cpy_logger_flags_off(uint32_t flags)
 
 
-def logger_flags_off(int flags) -> None:
-    """Turn off Cimba logger flags in the current thread."""
-    cmb_logger_flags_off(<uint32_t>flags)
+def logger_flags_on(uint32_t flags) -> None:
+    """Enable logger flags in this thread and subsequent model trials."""
+    cpy_logger_flags_on(flags)
+
+
+def logger_flags_off(uint32_t flags) -> None:
+    """Disable logger flags in this thread and subsequent model trials."""
+    cpy_logger_flags_off(flags)

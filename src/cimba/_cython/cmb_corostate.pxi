@@ -1,4 +1,4 @@
-# This file is included by ../_cimba.pyx.
+# This file is included by ../_cimba_native.pyx.
 #
 # CPython per-thread state save/restore across Cimba's stackful-coroutine
 # context switches, for Python 3.14+. Pure binding/build-layer fix: the vendored
@@ -96,24 +96,9 @@ cdef extern from *:
         return r;
     }
 
-    /* Give a freshly started coroutine its own empty frame datastack so its
-     * frames can't collide with other coroutines' on the shared thread state.
-     * CPython allocates a datastack chunk on the first frame push and recycles
-     * it (via its one-chunk cache) when the coroutine's frames pop. The
-     * exception-handling stack (exc_info) is carried by save/restore. */
-    static inline void _cimba_corostate_enter_fresh(void) {
-        PyThreadState *ts = PyThreadState_GetUnchecked();
-        if (ts == NULL) { return; }
-        ts->current_frame = NULL;
-        ts->datastack_chunk = NULL;
-        ts->datastack_top = NULL;
-        ts->datastack_limit = NULL;
-    }
     #else
     void *cmi_coroutine_context_switch(void **old, void **newc, void *ret) {
         return cmi_coroutine_context_switch_raw(old, newc, ret);
     }
-    static inline void _cimba_corostate_enter_fresh(void) { }
     #endif
     """
-    void _cimba_corostate_enter_fresh()

@@ -5,18 +5,11 @@ from __future__ import annotations
 import ast
 import copy
 from collections.abc import Callable, Mapping
-from typing import Any, TypeVar
+from typing import Any
 
 from .. import _bindings as _b
-from .._components import (
-    _closure_namespace,
-    _compile_lowered,
-    _function_def_from_source,
-)
 from .._timeseries.methods import timeseries_lowering_namespace
 from .runtime import HISTORY_CAPTURE_STORE_FIELD, HISTORY_CAPTURE_TRIAL_FIELD
-
-_F = TypeVar("_F", bound=Callable[..., Any])
 
 
 class _HistoryCaptureLowerer(ast.NodeTransformer):
@@ -271,7 +264,7 @@ def lower_history_capture_calls(
     history_fields: Mapping[str, str],
     indexed_history_fields: Mapping[str, int],
     register: Callable[[str, str, int | None], int],
-    namespace: dict[str, Any] | None = None,
+    namespace: dict[str, Any],
 ) -> tuple[ast.FunctionDef, bool]:
     if not node.args.args:
         return node, False
@@ -288,56 +281,11 @@ def lower_history_capture_calls(
     lowered = lowerer.visit(node)
     if not isinstance(lowered, ast.FunctionDef):
         raise TypeError("history capture lowering produced a non-function")
-    if lowerer.changed and namespace is not None:
+    if lowerer.changed:
         namespace.update(timeseries_lowering_namespace())
         namespace["_cimba_capture_history"] = \
             _b.history_capture_store_capture
     return lowered, lowerer.changed
-
-
-def lower_history_capture_methods(
-    fn: _F,
-    *,
-    model_name: str,
-    history_fields: Mapping[str, str],
-    indexed_history_fields: Mapping[str, int],
-    register: Callable[[str, str, int | None], int],
-) -> _F:
-    names = set(fn.__code__.co_names)
-    if "capture" not in names or "history" not in names:
-        return fn
-    try:
-        node = copy.deepcopy(_function_def_from_source(fn))
-    except (OSError, TypeError) as exc:
-        raise ValueError(
-            f"model '{model_name}' callback '{fn.__qualname__}' needs "
-            "inspectable source to use history capture"
-        ) from exc
-    lowered, changed = lower_history_capture_calls(
-        node, model_name=model_name, history_fields=history_fields,
-        indexed_history_fields=indexed_history_fields, register=register)
-    if not changed:
-        return fn
-
-    lowered.decorator_list = []
-    lowered.returns = None
-    lowered.type_comment = None
-    for arg in lowered.args.args:
-        arg.annotation = None
-        arg.type_comment = None
-
-    namespace = _closure_namespace(fn)
-    namespace.update(timeseries_lowering_namespace())
-    namespace["_cimba_capture_history"] = _b.history_capture_store_capture
-    lowered_fn = _compile_lowered(
-        lowered,
-        filename=f"<cimba model callback '{model_name}.{fn.__name__}'>",
-        fn_name=fn.__name__,
-        qualname=fn.__qualname__,
-        namespace=namespace,
-        like=fn,
-    )
-    return lowered_fn
 
 
 def lower_dataset_capture_calls(
@@ -346,7 +294,7 @@ def lower_dataset_capture_calls(
     model_name: str,
     dataset_fields: set[str],
     register: Callable[[str, str], int],
-    namespace: dict[str, Any] | None = None,
+    namespace: dict[str, Any],
 ) -> tuple[ast.FunctionDef, bool]:
     if not node.args.args:
         return node, False
@@ -362,58 +310,13 @@ def lower_dataset_capture_calls(
     lowered = lowerer.visit(node)
     if not isinstance(lowered, ast.FunctionDef):
         raise TypeError("dataset capture lowering produced a non-function")
-    if lowerer.changed and namespace is not None:
+    if lowerer.changed:
         namespace["_cimba_capture_dataset"] = \
             _b.dataset_capture_store_capture
     return lowered, lowerer.changed
 
 
-def lower_dataset_capture_methods(
-    fn: _F,
-    *,
-    model_name: str,
-    dataset_fields: set[str],
-    register: Callable[[str, str], int],
-) -> _F:
-    names = set(fn.__code__.co_names)
-    if "capture" not in names or not names.intersection(dataset_fields):
-        return fn
-    try:
-        node = copy.deepcopy(_function_def_from_source(fn))
-    except (OSError, TypeError) as exc:
-        raise ValueError(
-            f"model '{model_name}' callback '{fn.__qualname__}' needs "
-            "inspectable source to use dataset capture"
-        ) from exc
-    lowered, changed = lower_dataset_capture_calls(
-        node, model_name=model_name, dataset_fields=dataset_fields,
-        register=register)
-    if not changed:
-        return fn
-
-    lowered.decorator_list = []
-    lowered.returns = None
-    lowered.type_comment = None
-    for arg in lowered.args.args:
-        arg.annotation = None
-        arg.type_comment = None
-
-    namespace = _closure_namespace(fn)
-    namespace["_cimba_capture_dataset"] = _b.dataset_capture_store_capture
-    lowered_fn = _compile_lowered(
-        lowered,
-        filename=f"<cimba model callback '{model_name}.{fn.__name__}'>",
-        fn_name=fn.__name__,
-        qualname=fn.__qualname__,
-        namespace=namespace,
-        like=fn,
-    )
-    return lowered_fn
-
-
 __all__ = [
     "lower_dataset_capture_calls",
-    "lower_dataset_capture_methods",
     "lower_history_capture_calls",
-    "lower_history_capture_methods",
 ]
