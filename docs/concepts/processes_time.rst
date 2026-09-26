@@ -2,8 +2,8 @@ Processes and Simulated Time
 ============================
 
 A process is an active entity in the simulated world. In ``cimba.sim``, a
-process is an ordinary Python method declared with ``@sim.process`` in a
-``sim.Model`` subclass.
+process is a method declared with ``@sim.process`` in a ``sim.Model`` subclass
+and compiled with Numba before trials run.
 Inside that function, ``sim.hold()`` and entity methods such as
 ``env.queue.get()`` and ``env.resource.acquire()`` can pause the process and
 let another scheduled activity run.
@@ -11,6 +11,7 @@ let another scheduled activity run.
 .. code-block:: python
 
    import cimba.random as random
+   import cimba.sim as sim
 
    class Clinic(sim.Model):
        mean_service: sim.Param

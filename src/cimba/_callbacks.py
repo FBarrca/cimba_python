@@ -2,8 +2,8 @@
 
 This module deliberately knows nothing about trial layouts or component
 flattening.  It owns the public decorators and reduces a callback owner's MRO
-to one immutable, effective declaration set.  Root and nested owners consume
-that same set with different lowering policies later.
+to one immutable, effective declaration set (``_callback_set``).  Root and
+nested owners consume that same set with different lowering policies later.
 """
 
 from collections.abc import Callable, Mapping
@@ -18,9 +18,9 @@ from ._declarations import (
     _MISSING,
     _Declarations,
     _FieldDecl,
-    Spawnable,
     _check_name,
 )
+from ._struct import _is_struct_class
 
 _F = TypeVar("_F", bound=Callable[..., Any])
 
@@ -29,46 +29,6 @@ _COLLECT_ATTR = "__cimba_collect__"
 _PREDICATE_ATTR = "__cimba_predicate__"
 _EVENT_ATTR = "__cimba_event__"
 _FUNCTION_ATTR = "__cimba_function__"
-
-
-class _DeclarationOwner:
-    """Shared declaration and callback behavior for Models and Components.
-
-    Both public owner types expose the same callback language.  Keeping the
-    class-level validation and declaration binding here prevents the two
-    implementations from growing subtly different rules.
-    """
-
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        super().__init_subclass__(**kwargs)
-        if not getattr(cls, "_validate_legacy_annotations", False):
-            return
-        for name, annotation in vars(cls).get("__annotations__", {}).items():
-            if annotation is Spawnable:
-                raise ValueError(
-                    f"field '{name}': sim.Spawnable has been replaced by @sim.process(spawnable=True)"
-                )
-
-    @classmethod
-    def _callbacks(cls) -> "_CallbackSet":
-        return _callback_set(cls)
-
-    @classmethod
-    def _field_declarations(cls, **options: Any) -> _Declarations:
-        """Collect this owner's typed field declarations."""
-        from ._declarations import _field_declarations
-
-        return _field_declarations(cls, **options)
-
-    @classmethod
-    def _bind_callbacks(
-        cls,
-        decls: _Declarations,
-        *,
-        owner: str,
-        protected: frozenset[str] = frozenset(),
-    ) -> "_CallbackSet":
-        return _bind_callback_fields(cls, decls, owner=owner, protected=protected)
 
 
 def _positional_parameters(
@@ -99,7 +59,6 @@ def _callback_arg_count(
 def _process_signature(
     method: Callable[..., Any],
     receiver_count: int,
-    is_struct_class: Callable[[Any], bool],
     label: str,
     signature: str,
     localns: Mapping[str, Any] | None = None,
@@ -110,11 +69,11 @@ def _process_signature(
     hints = get_type_hints(method, localns=localns)
     own = (hints.get(parameter_names[-1])
            if len(parameter_names) > receiver_count else None)
-    struct_view = own if is_struct_class(own) else None
+    struct_view = own if _is_struct_class(own) else None
     injected = struct_view is not None
     end = len(parameter_names) - (1 if injected else 0)
     for name in parameter_names[receiver_count:end]:
-        if is_struct_class(hints.get(name)):
+        if _is_struct_class(hints.get(name)):
             raise ValueError(
                 f"{label}: the {hints[name].__name__} view must be the last "
                 "parameter")
@@ -159,7 +118,18 @@ class _CallbackDecl:
     fn: Callable[..., Any]
     spec: Any
     order: int
+    #: predicates/events: the (possibly hidden) field publishing the
+    #: callback; spawnable processes: their spawn field; bound processes:
+    #: their Processes field; otherwise None
     field: str | None = None
+
+    @property
+    def bound_field(self) -> str:
+        """The field of a callback kind that always publishes one."""
+        if self.field is None:
+            raise AssertionError(
+                f"{self.kind} callback '{self.name}' has no field")
+        return self.field
 
 
 @dataclass(frozen=True)
@@ -202,13 +172,14 @@ def _callback_set(cls: type) -> _CallbackSet:
     effective: dict[str, _CallbackDecl] = {}
     next_order = 0
     for base in reversed(cls.__mro__):
-        if base in (object, _DeclarationOwner):
+        if base is object:
             continue
         for name, value in vars(base).items():
             marked = [
-                (kind, getattr(value, marker, None))
+                (kind, spec)
                 for kind, marker in _MARKERS
-                if getattr(value, marker, None) not in (None, False)
+                if (spec := getattr(value, marker, None)) is not None
+                and spec is not False
             ]
             if not marked:
                 effective.pop(name, None)
@@ -323,12 +294,12 @@ def _bind_callback_fields(
                 field_bindings[key] = callback.name
             elif callback.kind in {"predicate", "event"}:
                 decls.add(_FieldDecl(
-                    callback.field,
+                    callback.bound_field,
                     _FIELD_KINDS[callback.kind],
                 ))
             elif callback.spec.spawnable:
                 decls.add(_FieldDecl(
-                    callback.field, _FIELD_KINDS["spawnable"]))
+                    callback.bound_field, _FIELD_KINDS["spawnable"]))
 
     if component:
         for kind in ("processes", "predicate", "event"):
@@ -368,7 +339,7 @@ def process(fn: _F) -> _F: ...
 def process(fn: None = None, *, copies: Literal[1] = 1,
             priority: int = 0, spawnable: Literal[True],
             struct: Any = None, field: None = None,
-            ) -> Callable[[_F], SpawnableProcess]: ...
+            ) -> Callable[[Callable[..., Any]], SpawnableProcess]: ...
 
 
 @overload

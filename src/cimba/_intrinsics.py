@@ -15,7 +15,28 @@ from numba.core import cgutils
 from numba.extending import intrinsic
 
 
-@intrinsic
+def _intrinsic(definition: Callable[..., Any]) -> Callable[..., Any]:
+    """``numba.extending.intrinsic``, typed as the callable it produces
+    (its arguments are the definition's, minus the typing context)."""
+    return intrinsic(definition)
+
+
+
+@_intrinsic
+def readonly_array(typingctx, array):
+    """Expose shared replay storage without granting compiled write access."""
+    if not isinstance(array, types.Array):
+        raise TypeError("readonly_array() expects an array")
+    result = array.copy(readonly=True)
+
+    def codegen(context, builder, signature, args):
+        context.nrt.incref(builder, signature.return_type, args[0])
+        return args[0]
+
+    return result(array), codegen
+
+
+@_intrinsic
 def addressof(typingctx, ptr):
     """Integer address of a typed pointer."""
     if not isinstance(ptr, types.CPointer):
@@ -27,7 +48,7 @@ def addressof(typingctx, ptr):
     return types.intp(ptr), codegen
 
 
-@intrinsic
+@_intrinsic
 def record_addr(typingctx, rec):
     """Integer address of a record value."""
     if not isinstance(rec, types.Record):
@@ -43,7 +64,7 @@ def ptr_caster(pointee: Any) -> Callable[[int], Any]:
     """Build an intrinsic casting an integer address to ``pointee *``."""
     ptr_type = types.CPointer(pointee)
 
-    @intrinsic
+    @_intrinsic
     def cast(typingctx, addr):
         if not isinstance(addr, types.Integer):
             raise TypeError("expected an integer address")
@@ -56,7 +77,7 @@ def ptr_caster(pointee: Any) -> Callable[[int], Any]:
     return cast
 
 
-@intrinsic
+@_intrinsic
 def call_void_callback(typingctx, addr, ptr):
     """Call a ``void (*)(T *)`` callback stored as an integer address."""
     if not isinstance(addr, types.Integer):
@@ -74,7 +95,7 @@ def call_void_callback(typingctx, addr, ptr):
     return types.void(addr, ptr), codegen
 
 
-@intrinsic
+@_intrinsic
 def store_get(typingctx, store):
     """Blocking objectqueue get returning (status, object)."""
     if not isinstance(store, types.Integer):
@@ -98,7 +119,7 @@ def store_get(typingctx, store):
     return ret_type(store), codegen
 
 
-@intrinsic
+@_intrinsic
 def pq_get(typingctx, pqueue):
     """Blocking priorityqueue get returning (status, object)."""
     if not isinstance(pqueue, types.Integer):
@@ -122,7 +143,7 @@ def pq_get(typingctx, pqueue):
     return ret_type(pqueue), codegen
 
 
-@intrinsic
+@_intrinsic
 def f2i(typingctx, x):
     """Bit-cast a float64 to int64."""
     if x != types.float64:
@@ -134,7 +155,7 @@ def f2i(typingctx, x):
     return types.int64(x), codegen
 
 
-@intrinsic
+@_intrinsic
 def i2f(typingctx, i):
     """Bit-cast an int64 back to float64."""
     if not isinstance(i, types.Integer):

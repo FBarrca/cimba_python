@@ -1,6 +1,7 @@
 """Joint bootstrap trajectory generators for panels of related series."""
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -43,11 +44,21 @@ def joint(panel: "Mapping[str, ArrayLike]", length: int, *,
     p = 1.0 / float(mean_block)
     tag = f"joint:{name}"
 
-    def make(column: np.ndarray) -> TraceGenerator:
-        def generate(rng: np.random.Generator) -> np.ndarray:
-            return column[_stationary_indices(rng, n, length, p)]
+    return {key: _JointGenerator(column, n, length, p, tag)
+            for key, column in series.items()}
 
-        generate.trace_rng_name = tag
-        return generate
 
-    return {key: make(column) for key, column in series.items()}
+@dataclass(frozen=True)
+class _JointGenerator:
+    """One column of a joint resample; ``trace_rng_name`` is the shared
+    rng tag that makes every column draw the same blocks."""
+
+    column: np.ndarray
+    n: int
+    length: int
+    p: float
+    trace_rng_name: str
+
+    def __call__(self, rng: np.random.Generator) -> np.ndarray:
+        return self.column[_stationary_indices(rng, self.n, self.length,
+                                               self.p)]

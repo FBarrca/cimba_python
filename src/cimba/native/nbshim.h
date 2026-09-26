@@ -25,7 +25,6 @@ CIMBA_PY_EXPORT double cpy_random_PERT(double min, double mode, double max);
 CIMBA_PY_EXPORT double cpy_random_PERT_mod(double min, double mode,
                                            double max, double lambda);
 CIMBA_PY_EXPORT uint64_t cpy_random_bernoulli(double p);
-CIMBA_PY_EXPORT uint64_t cpy_random_flip(void);
 CIMBA_PY_EXPORT double cpy_random_triangular(double min, double mode,
                                              double max);
 CIMBA_PY_EXPORT double cpy_random_weibull(double shape, double scale);
@@ -35,21 +34,15 @@ CIMBA_PY_EXPORT double cpy_random_beta(double a, double b,
                                        double min, double max);
 CIMBA_PY_EXPORT uint64_t cpy_random_poisson(double r);
 CIMBA_PY_EXPORT int64_t cpy_random_dice(int64_t a, int64_t b);
-CIMBA_PY_EXPORT double cpy_random_std_normal(void);
-CIMBA_PY_EXPORT double cpy_random_std_exponential(void);
-CIMBA_PY_EXPORT double cpy_random_std_gamma(double shape);
-CIMBA_PY_EXPORT double cpy_random_std_beta(double a, double b);
 CIMBA_PY_EXPORT double cpy_random_logistic(double m, double s);
 CIMBA_PY_EXPORT double cpy_random_cauchy(double mode, double scale);
 CIMBA_PY_EXPORT double cpy_random_pareto(double shape, double mode);
 CIMBA_PY_EXPORT double cpy_random_chisquared(double k);
 CIMBA_PY_EXPORT double cpy_random_F_dist(double a, double b);
-CIMBA_PY_EXPORT double cpy_random_std_t_dist(double v);
 CIMBA_PY_EXPORT double cpy_random_t_dist(double m, double s, double v);
 CIMBA_PY_EXPORT uint64_t cpy_random_geometric(double p);
 CIMBA_PY_EXPORT uint64_t cpy_random_binomial(uint64_t n, double p);
 CIMBA_PY_EXPORT uint64_t cpy_random_negative_binomial(uint64_t m, double p);
-CIMBA_PY_EXPORT uint64_t cpy_random_pascal(uint64_t m, double p);
 CIMBA_PY_EXPORT uint64_t cpy_event_cancel(uint64_t hndl);
 CIMBA_PY_EXPORT uint64_t cpy_event_reschedule(uint64_t hndl, double time);
 CIMBA_PY_EXPORT uint64_t cpy_event_reprioritize(uint64_t hndl,
@@ -65,8 +58,6 @@ CIMBA_PY_EXPORT double cpy_dataset_stddev(const void *dsp);
 CIMBA_PY_EXPORT double cpy_dataset_quantile(const void *dsp, double q);
 CIMBA_PY_EXPORT double cpy_dataset_median(const void *dsp);
 CIMBA_PY_EXPORT int64_t cpy_process_yield(void);
-CIMBA_PY_EXPORT uint64_t cpy_wtdsummary_sizeof(void);
-CIMBA_PY_EXPORT double cpy_wtdsummary_mean(const void *wsp);
 CIMBA_PY_EXPORT int64_t cpy_buffer_put(void *bp, uint64_t amnt);
 CIMBA_PY_EXPORT int64_t cpy_buffer_get(void *bp, uint64_t amnt);
 CIMBA_PY_EXPORT double cpy_buffer_mean_level(void *bp);
@@ -188,7 +179,6 @@ CIMBA_PY_EXPORT uint64_t cpy_spawned_unregister(void *pp);
 CIMBA_PY_EXPORT void cpy_spawned_stop_all(void);
 CIMBA_PY_EXPORT void cpy_spawned_reclaim(void);
 CIMBA_PY_EXPORT void *cpy_process_current(void);
-CIMBA_PY_EXPORT uint32_t cpy_cpu_cores(void);
 CIMBA_PY_EXPORT void cpy_logger_flags_on(uint32_t flags);
 CIMBA_PY_EXPORT void cpy_logger_flags_off(uint32_t flags);
 CIMBA_PY_EXPORT void cpy_logger_apply_flags(void);

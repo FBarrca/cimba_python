@@ -1,5 +1,7 @@
 """Numba-compatible helpers for ``cimba.random`` calls."""
 
+from math import isfinite
+
 from numba import njit
 
 from .. import _bindings as _b
@@ -57,8 +59,8 @@ def categorical(probabilities):
 
     total = 0.0
     for probability in probabilities:
-        if probability < 0.0:
-            raise ValueError("categorical() probabilities must be non-negative")
+        if not isfinite(probability) or probability < 0.0:
+            raise ValueError("categorical() probabilities must be finite and non-negative")
         total += probability
 
     tolerance = 1.0e-3

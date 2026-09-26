@@ -1,11 +1,9 @@
-"""Facade over Cimba's CFFI and Cython native extension modules."""
+"""Private CFFI access to the compiled model runtime."""
 
-from . import _cimba_native as _native
+# The extension is built outside the source tree; _cimba_native.pyi
+# stands in for it.
+from . import _cimba_native as _native  # pyright: ignore[reportMissingModuleSource]
 from cffi import FFI
-
-for _name in dir(_native):
-    if not _name.startswith("__"):
-        globals()[_name] = getattr(_native, _name)
 
 ffi = FFI()
 ffi.cdef("""
@@ -14,6 +12,9 @@ ffi.cdef("""
                               uint64_t num_trials,
                               size_t trial_struct_size,
                               void (*your_trial_func)(void *));
+    uint32_t cimba_threads_use(uint32_t n_threads);
+    void cpy_logger_flags_on(uint32_t flags);
+    void cpy_logger_flags_off(uint32_t flags);
     uint64_t cmb_random_hwseed(void);
     uint64_t cpy_process_sizeof(void);
     void *cpy_history_capture_store_create(uint64_t num_trials,
@@ -25,24 +26,5 @@ ffi.cdef("""
     const double *cpy_history_capture_store_data(const void *store,
                                                  uint64_t trial,
                                                  uint64_t slot);
-    void cpy_logger_flags_on(uint32_t flags);
-    void cpy_logger_flags_off(uint32_t flags);
-    void cmb_logger_flags_off(uint32_t flags);
 """)
 lib = ffi.dlopen(_native.__file__)
-
-
-def logger_flags_on(flags: int) -> None:
-    """Turn on native logger flags in both native extension runtimes."""
-    _native.logger_flags_on(flags)
-    lib.cpy_logger_flags_on(flags)
-
-
-def logger_flags_off(flags: int) -> None:
-    """Turn off native logger flags in both native extension runtimes."""
-    _native.logger_flags_off(flags)
-    lib.cpy_logger_flags_off(flags)
-
-
-__all__ = [name for name in dir(_native) if not name.startswith("__")]
-__all__.extend(["ffi", "lib", "logger_flags_on", "logger_flags_off"])

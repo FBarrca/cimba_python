@@ -1,23 +1,92 @@
-"""AST lowering for collect-declared history and dataset capture."""
+"""Capture of entity histories and datasets for Python-side analysis.
 
-from __future__ import annotations
+A model ``@sim.collect`` callback may call ``env.<entity>.history().capture()``
+or ``env.<dataset>.capture()``. Lowering rewrites each call into a copy of
+the native data into a per-experiment capture store, one slot per captured
+field (or collection item); after the run, ``copy_capture_store`` turns the
+store into NumPy arrays for ``Experiment.histories()``/``datasets()``.
+"""
 
 import ast
 import copy
 from collections.abc import Callable, Mapping
-from typing import Any, TypeVar
+from dataclasses import dataclass
+from typing import Any
 
-from .. import _bindings as _b
-from .._components import (
-    _closure_namespace,
-    _compile_lowered,
-    _function_def_from_source,
-)
-from .._timeseries.methods import timeseries_lowering_namespace
-from .runtime import HISTORY_CAPTURE_STORE_FIELD, HISTORY_CAPTURE_TRIAL_FIELD
+import numpy as np
 
-_F = TypeVar("_F", bound=Callable[..., Any])
+from . import _bindings as _b
+from ._cimba import ffi, lib
+from ._entity_methods import helper_namespace, history_getter_name
 
+HISTORY_CAPTURE_TRIAL_FIELD = "_cimba_trial_index"
+HISTORY_CAPTURE_STORE_FIELD = "_cimba_history_capture_store"
+
+
+@dataclass(frozen=True)
+class HistoryCaptureSpec:
+    name: str
+    binding: str
+    slot: int
+    columns: int = 3
+    #: ``None`` for a scalar capture; ``(items,)`` for an indexed component
+    #: collection, whose items occupy contiguous slots from ``slot``.
+    shape: tuple[int] | None = None
+
+    @property
+    def slot_count(self) -> int:
+        return 1 if self.shape is None else self.shape[0]
+
+
+def create_capture_store(num_trials: int, num_slots: int) -> Any:
+    store = lib.cpy_history_capture_store_create(num_trials, num_slots)
+    if store == ffi.NULL:
+        raise MemoryError("could not allocate capture store")
+    return store
+
+
+def destroy_capture_store(store: Any) -> None:
+    lib.cpy_history_capture_store_destroy(store)
+
+
+def copy_capture_store(
+    store: Any,
+    *,
+    num_trials: int,
+    specs: tuple[HistoryCaptureSpec, ...],
+) -> dict[str, Any]:
+    captured: dict[str, Any] = {}
+    itemsize = np.dtype(np.float64).itemsize
+
+    def copy_slot(slot: int, columns: int) -> np.ndarray:
+        count = int(lib.cpy_history_capture_store_count(
+            store, trial, slot))
+        data = lib.cpy_history_capture_store_data(store, trial, slot)
+        if count == 0:
+            shape = (0,) if columns == 1 else (0, columns)
+            return np.empty(shape, dtype=np.float64)
+        if data == ffi.NULL:
+            raise MemoryError("capture data is missing")
+        view = ffi.buffer(data, count * columns * itemsize)
+        arr = np.frombuffer(view, dtype=np.float64).copy()
+        if columns != 1:
+            arr = arr.reshape(count, columns)
+        return arr
+
+    for spec in specs:
+        rows: list[Any] = []
+        for trial in range(num_trials):
+            if spec.shape is None:
+                rows.append(copy_slot(spec.slot, spec.columns))
+            else:
+                rows.append(tuple(
+                    copy_slot(spec.slot + index, spec.columns)
+                    for index in range(spec.shape[0])))
+        captured[spec.name] = tuple(rows)
+    return captured
+
+
+# --- Lowering -------------------------------------------------------------------
 
 class _HistoryCaptureLowerer(ast.NodeTransformer):
     """Rewrite scalar and bounded indexed history captures."""
@@ -143,15 +212,7 @@ class _HistoryCaptureLowerer(ast.NodeTransformer):
                     f"{self.label} history capture() takes no arguments")
             slot = self.register(field, binding, indexed_count)
             self.changed = True
-            getter_name = {
-                "buffer": "_cimba_history_buffer",
-                "resource": "_cimba_history_resource",
-                "resourcepool": "_cimba_history_resourcepool",
-                "objectqueue": "_cimba_history_objectqueue",
-            }.get(binding)
-            if getter_name is None:
-                raise ValueError(
-                    f"{self.label} has no capture support for '{field}'")
+            getter_name = history_getter_name(binding)
             return ast.copy_location(
                 ast.Call(
                     func=ast.Name(id="_cimba_capture_history",
@@ -271,7 +332,7 @@ def lower_history_capture_calls(
     history_fields: Mapping[str, str],
     indexed_history_fields: Mapping[str, int],
     register: Callable[[str, str, int | None], int],
-    namespace: dict[str, Any] | None = None,
+    namespace: dict[str, Any],
 ) -> tuple[ast.FunctionDef, bool]:
     if not node.args.args:
         return node, False
@@ -288,56 +349,11 @@ def lower_history_capture_calls(
     lowered = lowerer.visit(node)
     if not isinstance(lowered, ast.FunctionDef):
         raise TypeError("history capture lowering produced a non-function")
-    if lowerer.changed and namespace is not None:
-        namespace.update(timeseries_lowering_namespace())
+    if lowerer.changed:
+        namespace.update(helper_namespace())
         namespace["_cimba_capture_history"] = \
             _b.history_capture_store_capture
     return lowered, lowerer.changed
-
-
-def lower_history_capture_methods(
-    fn: _F,
-    *,
-    model_name: str,
-    history_fields: Mapping[str, str],
-    indexed_history_fields: Mapping[str, int],
-    register: Callable[[str, str, int | None], int],
-) -> _F:
-    names = set(fn.__code__.co_names)
-    if "capture" not in names or "history" not in names:
-        return fn
-    try:
-        node = copy.deepcopy(_function_def_from_source(fn))
-    except (OSError, TypeError) as exc:
-        raise ValueError(
-            f"model '{model_name}' callback '{fn.__qualname__}' needs "
-            "inspectable source to use history capture"
-        ) from exc
-    lowered, changed = lower_history_capture_calls(
-        node, model_name=model_name, history_fields=history_fields,
-        indexed_history_fields=indexed_history_fields, register=register)
-    if not changed:
-        return fn
-
-    lowered.decorator_list = []
-    lowered.returns = None
-    lowered.type_comment = None
-    for arg in lowered.args.args:
-        arg.annotation = None
-        arg.type_comment = None
-
-    namespace = _closure_namespace(fn)
-    namespace.update(timeseries_lowering_namespace())
-    namespace["_cimba_capture_history"] = _b.history_capture_store_capture
-    lowered_fn = _compile_lowered(
-        lowered,
-        filename=f"<cimba model callback '{model_name}.{fn.__name__}'>",
-        fn_name=fn.__name__,
-        qualname=fn.__qualname__,
-        namespace=namespace,
-        like=fn,
-    )
-    return lowered_fn
 
 
 def lower_dataset_capture_calls(
@@ -346,7 +362,7 @@ def lower_dataset_capture_calls(
     model_name: str,
     dataset_fields: set[str],
     register: Callable[[str, str], int],
-    namespace: dict[str, Any] | None = None,
+    namespace: dict[str, Any],
 ) -> tuple[ast.FunctionDef, bool]:
     if not node.args.args:
         return node, False
@@ -362,58 +378,7 @@ def lower_dataset_capture_calls(
     lowered = lowerer.visit(node)
     if not isinstance(lowered, ast.FunctionDef):
         raise TypeError("dataset capture lowering produced a non-function")
-    if lowerer.changed and namespace is not None:
+    if lowerer.changed:
         namespace["_cimba_capture_dataset"] = \
             _b.dataset_capture_store_capture
     return lowered, lowerer.changed
-
-
-def lower_dataset_capture_methods(
-    fn: _F,
-    *,
-    model_name: str,
-    dataset_fields: set[str],
-    register: Callable[[str, str], int],
-) -> _F:
-    names = set(fn.__code__.co_names)
-    if "capture" not in names or not names.intersection(dataset_fields):
-        return fn
-    try:
-        node = copy.deepcopy(_function_def_from_source(fn))
-    except (OSError, TypeError) as exc:
-        raise ValueError(
-            f"model '{model_name}' callback '{fn.__qualname__}' needs "
-            "inspectable source to use dataset capture"
-        ) from exc
-    lowered, changed = lower_dataset_capture_calls(
-        node, model_name=model_name, dataset_fields=dataset_fields,
-        register=register)
-    if not changed:
-        return fn
-
-    lowered.decorator_list = []
-    lowered.returns = None
-    lowered.type_comment = None
-    for arg in lowered.args.args:
-        arg.annotation = None
-        arg.type_comment = None
-
-    namespace = _closure_namespace(fn)
-    namespace["_cimba_capture_dataset"] = _b.dataset_capture_store_capture
-    lowered_fn = _compile_lowered(
-        lowered,
-        filename=f"<cimba model callback '{model_name}.{fn.__name__}'>",
-        fn_name=fn.__name__,
-        qualname=fn.__qualname__,
-        namespace=namespace,
-        like=fn,
-    )
-    return lowered_fn
-
-
-__all__ = [
-    "lower_dataset_capture_calls",
-    "lower_dataset_capture_methods",
-    "lower_history_capture_calls",
-    "lower_history_capture_methods",
-]

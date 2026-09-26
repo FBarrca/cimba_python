@@ -6,7 +6,8 @@ Cimba Python - Process-Oriented Discrete Event Simulation
 Cimba Python is a fast process-oriented discrete event simulation package for
 Python. It gives Python models access to the native
 `Cimba <https://github.com/ambonvik/cimba>`_ simulation engine, while keeping
-the model itself in ordinary Python functions and ``sim.Model`` declarations.
+the model itself in ``sim.Model`` declarations and Python-syntax callbacks
+compiled with Numba.
 
 The goal is simple: make simulation experiments feel like Python, but run the
 hot simulation loop with compiled machinery underneath.
@@ -20,7 +21,7 @@ It is fast, expressive, explicit, and open source.
   makes high replication counts, dense parameter sweeps, and hot process loops
   much more practical than with pure Python event scheduling alone.
 
-* *Expressive*: Processes are ordinary Python functions that call blocking
+* *Expressive*: Processes use Python syntax and call blocking
   simulation operations such as ``sim.hold()``, ``env.queue.get()``,
   ``env.resource.acquire()``, or ``env.condition.wait_for()``. There is no
   ``yield`` protocol to thread through every helper function.
@@ -31,8 +32,8 @@ It is fast, expressive, explicit, and open source.
 
 * *Well-equipped*: The ``cimba.sim`` API includes processes, queues, buffers,
   stores, priority queues, resources, resource pools, conditions, timers,
-  events, datasets, time series summaries, random distributions, logging
-  helpers, and dynamic process spawning.
+  events, datasets, time series summaries, logging helpers, and dynamic process
+  spawning. ``cimba.random`` supplies distributions for compiled callbacks.
 
 * *Observable*: Models can log process activity, record queue/resource
   histories, tally datasets, and collect named outputs from every trial. That
@@ -92,8 +93,8 @@ For example, you can model:
 
 These domains share one modeling pattern. Active entities are written as
 processes, the constraints they compete over are declared as model fields, and
-randomness is drawn from ``cimba.sim``. Running the model then produces the data
-you analyze.
+randomness is drawn from ``cimba.random``. Running the model then produces the
+data you analyze.
 
 How can I get it?
 -----------------

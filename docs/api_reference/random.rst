@@ -31,16 +31,11 @@ when Cimba should choose independent seeds for you. In model code, import
 
    model = Clinic()
 
-Use ``cimba.random`` in both model code and ordinary Python code. Importing it
-as ``random`` keeps process bodies compact, while the package boundary stays
-visible at the top of the file:
-
-.. code-block:: python
-
-   import cimba
-
-   cimba.random.seed(1234)
-   samples = [cimba.random.normal(mu=10.0, sigma=2.0) for _ in range(5)]
+``cimba.random`` draws are available inside compiled model callbacks and the
+``@numba.njit`` helpers those callbacks invoke. Calling them from ordinary
+Python raises ``RuntimeError``. For preprocessing and other Python-side draws,
+use ``numpy.random.default_rng(seed)``; trace generators receive their own NumPy
+generator from the experiment.
 
 The random API is intentionally namespaced. Flat spellings such as
 ``sim.exponential(...)``, ``sim.random.exponential(...)``, or
@@ -60,7 +55,7 @@ legacy aliases. In particular:
 * ``student_t(v, m=0.0, s=1.0)`` uses degrees of freedom ``v``, location
   ``m``, and scale ``s``.
 
-Keyword arguments are supported in compiled model callbacks and standalone
+Keyword arguments are supported in compiled model callbacks and their
 ``@numba.njit`` helpers:
 
 .. code-block:: python
@@ -130,8 +125,8 @@ Continuous Draws
 Discrete Draws
 --------------
 
-Discrete functions return Python integers except ``bernoulli()``, which returns
-``True`` or ``False``.
+Discrete functions produce integer-valued draws. Use ``bernoulli(p)`` directly
+in a condition to choose an outcome with probability ``p``.
 
 .. list-table::
    :header-rows: 1
@@ -140,7 +135,7 @@ Discrete functions return Python integers except ``bernoulli()``, which returns
    * - Function
      - Meaning
    * - ``bernoulli(p)``
-     - ``True`` with probability ``p`` and ``False`` otherwise.
+     - Success with probability ``p``, suitable for an ``if`` condition.
    * - ``dice(min, max)``
      - Integer draw from the inclusive range ``[min, max]``.
    * - ``poisson(r)``
@@ -160,8 +155,8 @@ Probability Vectors
 -------------------
 
 ``categorical()`` and ``hyperexponential()`` accept Python sequences, tuples, or
-NumPy arrays. Probabilities may contain zero entries, must not contain negative
-entries, and must sum to ``1.0``. The selected index is zero-based, which makes
+NumPy arrays. Probabilities must be finite and non-negative and must sum to
+``1.0``. Zero entries are allowed. The selected index is zero-based, which makes
 it convenient for arrays:
 
 .. code-block:: python
@@ -175,26 +170,10 @@ it convenient for arrays:
            i = random.categorical(DESTINATION)
            sim.hold(WALK_TIME[i])
 
-For repeated categorical sampling outside model code, ``cimba.random`` also
-provides ``AliasSampler``:
-
-.. code-block:: python
-
-   sampler = cimba.random.AliasSampler([0.55, 0.30, 0.15])
-   try:
-       choice = sampler.sample()
-   finally:
-       sampler.close()
-
-``AliasSampler`` can also be used as a context manager. It is mainly useful for
-ordinary Python code that samples the same probability vector many times; inside
-model callbacks, prefer ``random.categorical(...)`` from the imported
-``cimba.random`` module.
-
 Seeds And Reproducibility
 -------------------------
 
-For simulation experiments, prefer the experiment-level seed:
+Control simulation streams with the experiment-level seed:
 
 .. code-block:: python
 
@@ -202,27 +181,9 @@ For simulation experiments, prefer the experiment-level seed:
    exp.run()
 
 That seed is expanded into independent per-trial streams, so parallel execution
-stays reproducible. The seed helpers on ``cimba.random`` are lower-level tools
-for ordinary Python code:
+stays reproducible. Re-running an experiment resets each trial to its original
+seed. There is no public thread-local reseeding API.
 
-.. list-table::
-   :header-rows: 1
-   :widths: 28 72
-
-   * - Helper
-     - Meaning
-   * - ``seed(value=None)``
-     - Initialize the current thread's random generator and return the seed
-       used. Passing ``None`` chooses a hardware-derived seed.
-   * - ``current_seed()``
-     - Return the current thread's Cimba random seed.
-   * - ``hwseed()``
-     - Return a hardware-derived seed without installing it.
-   * - ``random_u64()``
-     - Draw a raw unsigned 64-bit random integer.
-   * - ``fmix64(seed, nonce)``
-     - Deterministically mix a seed and nonce into another 64-bit seed.
-
-Do not reseed from inside process bodies. Use experiment seeds to reproduce
-models, and use ``sim.Param`` fields when distribution parameters should vary
-across design points.
+Use ``sim.Param`` fields when distribution parameters should vary across design
+points. Use NumPy generators to create exogenous inputs before the run, and pass
+those inputs through ``sim.Trace``.

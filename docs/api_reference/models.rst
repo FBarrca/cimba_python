@@ -150,36 +150,44 @@ copy index: ``def visitor(self, idx, view: Visitor)``. ``Visitor(handle)``
 returns a read/write view of another process's fields when model code already
 has that process handle.
 
-Compilation plans and cache
----------------------------
+Compilation and reuse
+---------------------
 
-Reusable class-declared model and component callbacks are planned from the
-first normally constructed model instance; importing a module or defining a
-model class does not construct
-a hidden prototype. ``Model.compilation_status()`` reports ``pending``,
-``ready``, ``failed``, or ``unavailable`` together with elapsed time, callback
-counts, persistent-cache hits/misses, and an error message when preparation
-failed. ``Model.compilation_plan()`` returns the immutable
-``sim.CompilationPlan`` after a plan has been built.
-After an instance compiles its remaining processes, predicates, events, and
-collectors, ``model.callback_cache_stats()`` reports their cache hits, misses,
-and writes separately from the reusable class preparation.
+Construction collects and lowers declarations. ``model.compile()`` compiles a
+fully constructed model and returns it. ``model.experiment()`` calls the same
+compilation step automatically. Compilation errors propagate to the caller;
+there is no hidden preparation attempt or class-wide fallback.
 
-The default ``__cimba_precompile__ = "eager"`` prepares reusable class
-callbacks during the first real model construction. A subclass can select
-``"lazy"`` to prepare them on its first experiment or ``"explicit"`` and call
-``Model.precompile(*constructor_args, **constructor_kwargs)`` itself. Explicit
-precompilation retries a previous failure, which is useful when callback
-globals are initialized later during module startup.
+Reuse the same model for experiments with different parameters, traces, seeds,
+and replication counts. Native user callbacks belong to that model. Construct
+a new model after changing callback code or compile-time configuration. Numba
+captures globals during compilation; values that should vary between
+experiments belong in ``sim.Param`` or ``sim.Trace``.
 
-Compiled native callbacks are cached by code, signature, record layout,
-compiler versions, operating system, architecture, and CPU target. The cache
-is enabled by default. Set ``CIMBA_CACHE=0`` to disable both memory and disk
-reuse, or ``CIMBA_CACHE_DIR`` to choose the persistent cache directory. Cache
-entries are optimization-only: an absent, stale, or unreadable entry falls
-back to normal compilation. Process-local handles returned by
-``sim.log_text()`` are placed in a runtime sidecar, so callbacks that write
-logs or reports can safely reuse persisted object code in another process.
+Only Cimba's fixed lifecycle callbacks are shared between models. User code is
+not loaded from a persistent object-code cache. The previous
+``__cimba_precompile__`` modes, class ``precompile()``, ``compilation_plan()``,
+``compilation_status()``, ``callback_cache_stats()``, and their result types
+have been removed. Replace them with an ordinary instance:
+
+.. code-block:: python
+
+   model = Network(...).compile()
+   first = model.experiment(...)
+   second = model.experiment(...)
+
+``CIMBA_CACHE`` and ``CIMBA_CACHE_DIR`` no longer affect compilation. Old cache
+files are unused and can be removed. For timing measurements, use
+``benchmark/component_compilation.py``; its version 2 JSON separates explicit
+compilation, experiment construction, and execution.
+
+Synchronous helpers receive the trial record and read fields inside their own
+control flow. Arguments and dynamic receivers are evaluated once. Locally
+computed indices can access ``Const`` tables as well as stored scalar fields.
+Native entity/statistics methods accept keyword arguments, but reject
+out-of-order keyword expressions that could change evaluation order when
+converted to native positional arguments. Evaluate those expressions into
+local variables first, or supply them in parameter order.
 
 Process graphs
 --------------
@@ -219,7 +227,8 @@ half-width (``name_hw``, 95% by default)::
              f"wait={row['avg_wait']:.2f} +- {row['avg_wait_hw']:.2f}")
 
 ``exp.summary("a", "b", confidence=0.99)`` selects outputs and the confidence
-level; failed trials (NaN) are excluded per output. ``exp.replications`` and
+level; failed trials are excluded from every output, and missing NaN values
+from successful trials are excluded per output. ``exp.replications`` and
 ``exp.swept`` expose the layout (trial order is design-point-major with
 replications innermost).
 
@@ -290,3 +299,31 @@ If a model-level collector declares ``self.<dataset>.capture()``,
 ``exp.dataset("field", trial=i)`` returns that trial's raw dataset samples as a
 one-dimensional NumPy array. ``exp.datasets("field")`` returns one array per
 trial, also aligned with the experiment row order.
+
+Trial outcomes and replay
+-------------------------
+
+Every ``exp.run()`` starts ``State`` and ``FloatState`` fields at zero and
+outputs at NaN, retaining experiment parameters, traces, and seeds. Repeating
+a run therefore repeats the same experiment for deterministic callbacks.
+Use a parameter and assign it in a process when you need nonzero initial
+state; writing state directly into ``exp.trials`` before ``run()`` is no longer
+an initialization mechanism.
+
+``exp.failures`` and the return value of ``run()`` are the native failure count.
+``exp.failed`` is a Boolean array identifying failed trials. Both native trial
+abandonment and uncaught compiled callback exceptions count as failures, and
+all scalar outputs of those trials become NaN. A successful trial may itself
+produce NaN, or declare no outputs, without being classified as failed.
+Captured datasets and histories can contain partial data from a failed trial;
+filter them using ``exp.failed`` before analyzing successful trials.
+
+``sim.Trace(field)`` exposes read-only replay storage inside compiled code.
+Call ``.copy()`` if a callback needs a mutable working array. The Python arrays
+supplying an experiment must remain unchanged while it runs. Trial tables
+contain native pointers and are runtime views, not a serialization format.
+
+``cimba.use_threads(n)`` now sets the native worker count for subsequent runs;
+zero selects the native CPU-count default. Call it between runs. Calls to
+``run()`` on the same experiment are serialized, as is compilation of the same
+model from multiple Python threads.

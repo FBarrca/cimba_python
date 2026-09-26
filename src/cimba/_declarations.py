@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, get_type_hints
 from numba import carray, types
 from numba.extending import overload as _nb_overload
 
-from ._intrinsics import ptr_caster
+from ._intrinsics import ptr_caster, readonly_array
 
 #: Opaque native entity handle (process, queue, resource, ...) as stored
 #: in env fields.
@@ -61,21 +61,14 @@ class _FieldKind:
     name: str
     #: numpy field format in the trial record
     fmt: str
-    #: native entity prefix: "buffer" -> buffer_create()/_initialize()/
-    #: _destroy() in the generated trial source (None: not an entity)
+    #: native entity prefix used by history getters (None: not an entity)
     binding: str | None = None
-    #: recording_start/stop over the measurement window
-    recordable: bool = False
-    #: <binding>_initialize takes an interned entity-name cstring
-    named: bool = True
     #: may be wired to another component instance's same-kind field
     wirable: bool = False
     #: the declaration default is a Queue/Pool/Store capacity
     capacitated: bool = False
     #: appears as an entity node in the inferred process DAG
     dag_entity: bool = False
-    #: may be declared on Component classes
-    on_component: bool = True
 
 
 _KIND_LIST = [
@@ -83,22 +76,21 @@ _KIND_LIST = [
     _FieldKind("output", "<f8"),
     _FieldKind("state", "<i8", dag_entity=True),
     _FieldKind("fstate", "<f8", dag_entity=True),
-    _FieldKind("queue", "<i8", binding="buffer", recordable=True,
+    _FieldKind("queue", "<i8", binding="buffer",
                wirable=True, capacitated=True, dag_entity=True),
-    _FieldKind("resource", "<i8", binding="resource", recordable=True,
+    _FieldKind("resource", "<i8", binding="resource",
                wirable=True, dag_entity=True),
-    _FieldKind("pool", "<i8", binding="resourcepool", recordable=True,
+    _FieldKind("pool", "<i8", binding="resourcepool",
                wirable=True, capacitated=True, dag_entity=True),
-    _FieldKind("store", "<i8", binding="objectqueue", recordable=True,
+    _FieldKind("store", "<i8", binding="objectqueue",
                wirable=True, capacitated=True, dag_entity=True),
-    _FieldKind("dataset", "<i8", binding="dataset", named=False),
+    _FieldKind("dataset", "<i8", binding="dataset"),
     _FieldKind("condition", "<i8", binding="condition", wirable=True,
                dag_entity=True),
     _FieldKind("predicate", "<i8"),
     _FieldKind("event", "<i8", dag_entity=True),
     _FieldKind("processes", "<i8"),
-    # PQueues elements are created/recorded/destroyed per element, so the
-    # trial codegen handles them apart from the scalar entity kinds.
+    # PQueues declares its own element count rather than a scalar handle.
     _FieldKind("pqueues", "<i8", binding="priorityqueue", dag_entity=True),
     _FieldKind("spawnable", "<i8"),
     _FieldKind("trace", "<i8"),
@@ -331,7 +323,7 @@ if TYPE_CHECKING:
 
     class Trace:
         """Per-trial replay array, fed to experiment(); inside model code
-        ``Trace(env.<field>)`` returns the trial's trace as a float64
+        ``Trace(env.<field>)`` returns the trial's trace as a read-only float64
         NumPy view."""
 
         def __new__(cls, field: "Trace") -> "NDArray[np.float64]": ...
@@ -349,11 +341,18 @@ else:
     class _Decl:
         """Marker for env field declarations in Model subclasses."""
 
-    _DECL_NAMES = (
-        "Param Output State FloatState Queue Resource Pool Store Dataset Condition Predicate Event Processes PQueues Spawnable"
-    ).split()
+    #: marker class name -> declaration kind
+    _MARKER_KINDS = {
+        "Param": "param", "Output": "output", "State": "state",
+        "FloatState": "fstate", "Queue": "queue", "Resource": "resource",
+        "Pool": "pool", "Store": "store", "Dataset": "dataset",
+        "Condition": "condition", "Predicate": "predicate", "Event": "event",
+        "Processes": "processes", "PQueues": "pqueues",
+    }
+    # Spawnable declares nothing; it only exists to report its migration.
     globals().update(
-        {name: type(name, (_Decl,), {"__module__": __name__}) for name in _DECL_NAMES}
+        {name: type(name, (_Decl,), {"__module__": __name__})
+         for name in (*_MARKER_KINDS, "Spawnable")}
     )
 
     class Trace(_Decl):
@@ -417,13 +416,8 @@ else:
         """Declare the number of elements in a PQueues field."""
         return n
 
-    _DECL_KINDS = {
-        globals()[name]: _FIELD_KINDS[kind]
-        for name, kind in zip(
-            _DECL_NAMES[:-1],
-            "param output state fstate queue resource pool store dataset condition predicate event processes pqueues".split(),
-        )
-    }
+    _DECL_KINDS = {globals()[name]: _FIELD_KINDS[kind]
+                   for name, kind in _MARKER_KINDS.items()}
     _DECL_KINDS[Trace] = _FIELD_KINDS["trace"]
 
     _trace_data = ptr_caster(types.float64)
@@ -435,9 +429,18 @@ else:
             return None
 
         def view(field):
-            return carray(_trace_data(field[0]), field[1])
+            return readonly_array(carray(_trace_data(field[0]), field[1]))
 
         return view
+
+
+def _declared_kind(hint: Any) -> _FieldKind | None:
+    """The field kind a marker annotation declares, or None for any other
+    (possibly unhashable) annotation."""
+    try:
+        return _DECL_KINDS.get(hint)
+    except TypeError:
+        return None
 
 
 def class_type_hints(cls: type) -> dict[str, Any]:
@@ -487,7 +490,6 @@ def _field_declarations(
     *,
     allow_symbolic_pqueues: bool = False,
     allow_refs: bool = False,
-    generated_spawnables: Iterable[str] = (),
 ) -> _Declarations:
     """Collect direct env field declarations from a Model/Component class."""
     decls = _Declarations()
@@ -513,19 +515,17 @@ def _field_declarations(
             _check_name(fname, "const")
             decls.consts[fname] = hint.type
             continue
-        try:
-            kind = _DECL_KINDS.get(hint)
-        except TypeError:
-            kind = None
+        kind = _declared_kind(hint)
         if kind is None:
             continue
         default = getattr(cls, fname, _MISSING)
         if kind.capacitated:
-            if default is _MISSING:
-                default = None
-            if isinstance(default, _Capacity):
-                default = default.cap
-            decls.add(_FieldDecl(fname, kind, capacity=default))
+            capacity = default.cap if isinstance(default, _Capacity) else (
+                None if default is _MISSING else default)
+            if not (capacity is None or isinstance(capacity, (int, str))):
+                raise ValueError(f"capacity '{capacity}' is neither an int "
+                                 "nor a declared param")
+            decls.add(_FieldDecl(fname, kind, capacity=capacity))
         elif kind.name == "pqueues":
             if isinstance(default, int) and default >= 1:
                 decls.add(_FieldDecl(fname, kind, count=default))
@@ -551,12 +551,4 @@ def _field_declarations(
                     f"field '{fname}': only Queue/Pool/Store declarations "
                     "and Param declarations may carry a default")
             decls.add(_FieldDecl(fname, kind))
-    for fname in generated_spawnables:
-        existing = decls.fields.get(fname)
-        if existing is None:
-            decls.add(_FieldDecl(fname, _FIELD_KINDS["spawnable"]))
-        elif existing.kind.name != "spawnable":
-            raise ValueError(
-                f"spawnable process '{cls.__name__}.{fname}' conflicts "
-                f"with its {existing.kind.name} field declaration")
     return decls

@@ -1,27 +1,40 @@
 """Numba bindings for the native cimba symbols.
 
-The compiled ``_cimba`` extension embeds libcimba plus the nbshim.c wrappers
+The private ``_cimba_native`` module embeds libcimba plus the nbshim.c wrappers
 (``cpy_*``, re-exporting upstream's static-inline helpers). Loading the
 extension into LLVM makes those symbols visible to the JIT linker; each
 ``types.ExternalFunction`` below declares one symbol and its signature.
 They are callable only from nopython-compiled code.
 """
 
+from collections.abc import Callable
+from typing import Any
+
 import llvmlite.binding as _llvm
 from numba import types
 
-from . import _cimba_native
+# The extension is built outside the source tree; _cimba_native.pyi
+# stands in for it.
+from . import _cimba_native  # pyright: ignore[reportMissingModuleSource]
 from ._cimba import ffi as _ffi
 
 _llvm.load_library_permanently(_cimba_native.__file__)
 
-_extern = types.ExternalFunction
+
+
+def _extern(symbol: str, signature: Any) -> Callable[..., Any]:
+    """Declare one native symbol with its Numba signature."""
+    return types.ExternalFunction(symbol, signature)
+
+
 _intp = types.intp
 _void = types.void
 _i64 = types.int64
 _u32 = types.uint32
 _u64 = types.uint64
 _f64 = types.float64
+
+trial_abandon = _extern("cimba_trial_abandon", _void())
 
 # --- Event queue and simulation clock --------------------------------------
 event_queue_initialize = _extern("cmb_event_queue_initialize", _void(_f64))
@@ -53,7 +66,6 @@ random_pert = _extern("cpy_random_PERT", _f64(_f64, _f64, _f64))
 random_pert_mod = _extern(
     "cpy_random_PERT_mod", _f64(_f64, _f64, _f64, _f64))
 random_bernoulli = _extern("cpy_random_bernoulli", _u64(_f64))
-random_flip = _extern("cpy_random_flip", _u64())
 random_triangular = _extern("cpy_random_triangular", _f64(_f64, _f64, _f64))
 random_weibull = _extern("cpy_random_weibull", _f64(_f64, _f64))
 random_lognormal = _extern("cpy_random_lognormal", _f64(_f64, _f64))
@@ -61,22 +73,16 @@ random_erlang = _extern("cpy_random_erlang", _f64(_u64, _f64))
 random_beta = _extern("cpy_random_beta", _f64(_f64, _f64, _f64, _f64))
 random_poisson = _extern("cpy_random_poisson", _u64(_f64))
 random_dice = _extern("cpy_random_dice", _i64(_i64, _i64))
-random_std_normal = _extern("cpy_random_std_normal", _f64())
-random_std_exponential = _extern("cpy_random_std_exponential", _f64())
-random_std_gamma = _extern("cpy_random_std_gamma", _f64(_f64))
-random_std_beta = _extern("cpy_random_std_beta", _f64(_f64, _f64))
 random_logistic = _extern("cpy_random_logistic", _f64(_f64, _f64))
 random_cauchy = _extern("cpy_random_cauchy", _f64(_f64, _f64))
 random_pareto = _extern("cpy_random_pareto", _f64(_f64, _f64))
 random_chisquared = _extern("cpy_random_chisquared", _f64(_f64))
 random_f_dist = _extern("cpy_random_F_dist", _f64(_f64, _f64))
-random_std_t = _extern("cpy_random_std_t_dist", _f64(_f64))
 random_t = _extern("cpy_random_t_dist", _f64(_f64, _f64, _f64))
 random_geometric = _extern("cpy_random_geometric", _u64(_f64))
 random_binomial = _extern("cpy_random_binomial", _u64(_u64, _f64))
 random_negative_binomial = _extern(
     "cpy_random_negative_binomial", _u64(_u64, _f64))
-random_pascal = _extern("cpy_random_pascal", _u64(_u64, _f64))
 
 # --- Processes ---------------------------------------------------------------
 process_create = _extern("cmb_process_create", _intp())
@@ -170,7 +176,6 @@ objectqueue_initialize = _extern(
 objectqueue_terminate = _extern("cmb_objectqueue_terminate", _void(_intp))
 objectqueue_destroy = _extern("cmb_objectqueue_destroy", _void(_intp))
 objectqueue_put = _extern("cpy_objectqueue_put", _i64(_intp, _intp))
-objectqueue_get = _extern("cpy_objectqueue_get", _i64(_intp, _intp))
 objectqueue_take = _extern("cpy_objectqueue_take", _intp(_intp))
 objectqueue_length = _extern("cpy_objectqueue_length", _u64(_intp))
 objectqueue_space = _extern("cpy_objectqueue_space", _u64(_intp))
@@ -272,18 +277,10 @@ logger_user_f64 = _extern("cpy_logger_user_f64", _void(_u32, _intp, _f64))
 
 
 _keepalive: list[object] = []
-_cstring_values: dict[int, str] = {}
 
 
 def cstring(s: str) -> int:
     """Address of a NUL-terminated copy of ``s``, kept alive forever."""
     buf = _ffi.new("char[]", s.encode())
     _keepalive.append(buf)
-    address = int(_ffi.cast("intptr_t", buf))
-    _cstring_values[address] = s
-    return address
-
-
-def cstring_value(address: int) -> str | None:
-    """Return text owned by a process-local ``cstring`` address, if any."""
-    return _cstring_values.get(address)
+    return int(_ffi.cast("intptr_t", buf))

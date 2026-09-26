@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
 
-import cimba
 import cimba.sim as sim
 
 
@@ -105,7 +104,7 @@ def test_heterogeneous_component_collection_dispatches_dynamic_function_calls():
     assert model.dtype["policies__lot_size"].shape == (2,)
     assert model.dtype["policies__ordering_cost"].shape == ()
     calculate_specs = [
-        spec for spec in model._component_functions.values()
+        spec for spec in model._functions.values()
         if spec.decl.name == "policies" and spec.name == "calculate"
     ]
     assert len(calculate_specs) == 2
@@ -347,7 +346,7 @@ def test_long_shaped_entity_names_fit_native_buffer():
 
 
 def test_native_names_are_unique_bounded_and_stable():
-    from cimba._model import _native_names
+    from cimba._runtime import _native_names
 
     short = "ok_queue"
     alpha = "warehouse_regional_backorder_queue_alpha"
@@ -605,15 +604,10 @@ def test_component_function_reads_params_and_returns_value():
     model = System()
 
 
-    source = model._processes[0].fn.__cimba_source__
-    # the call site names the helper per declaration, not per class, so
-    # same-class declarations with different signatures cannot collide
-    assert "_CIMBA_FUNCTION_policy__decide_" in source
-    assert "self.policy__threshold" in source
-    assert "self.policy__target" in source
-    (spec,) = model._component_functions.values()
+    (spec,) = model._functions.values()
+    assert not spec.helper.nopython_signatures
+    model.compile()
     assert spec.helper.nopython_signatures
-    assert "__cimba_dep_0" in spec.helper.__cimba_source__
     graph = model.process_dag()
     assert {node.key for node in graph.nodes} >= {
         "process:run",
@@ -842,7 +836,7 @@ def test_component_function_nested_component_ref_and_collect():
     assert exp["collected"][0] == 16.0
 
 
-def test_component_function_classes_and_cache_are_independent():
+def test_component_function_declarations_are_independent():
     class Add(sim.Component):
         value: sim.Param
 
@@ -871,11 +865,11 @@ def test_component_function_classes_and_cache_are_independent():
 
     model = System()
     add_specs = [
-        spec for spec in model._component_functions.values()
+        spec for spec in model._functions.values()
         if spec.decl.cls is Add
     ]
     assert len(add_specs) == 2
-    assert add_specs[0].helper is add_specs[1].helper
+    assert add_specs[0].helper is not add_specs[1].helper
 
 
     exp = model.experiment(
@@ -928,7 +922,7 @@ def test_item_functions_compile_across_collections_of_unequal_length():
         three: Owner = Owner(3)
 
     model = Supply()
-    symbols = [spec.symbol for spec in model._component_functions.values()]
+    symbols = [spec.symbol for spec in model._functions.values()]
     assert len(symbols) == len(set(symbols))
 
     exp = model.experiment(one__items__factor=[5.0],
@@ -1111,8 +1105,12 @@ def test_component_function_rejects_invalid_signatures_and_calls():
     class BadBodySystem(sim.Model):
         item: BadBody = BadBody()
 
+        @sim.process
+        def run(self):
+            self.item.bad(1.0)
+
     with pytest.raises(TypeError, match="failed Numba nopython compilation"):
-        BadBodySystem()
+        BadBodySystem().compile()
 
 
 def test_component_function_rejects_mutation_scheduling_and_entity_calls():
@@ -1329,7 +1327,7 @@ def test_component_process_copies_and_priority_are_registered():
     assert proc.indexed
 
 
-def test_component_process_and_data_lifecycle_callbacks_reuse_class_aot(
+def test_component_compilation_reuses_one_model_on_serial_backend(
     monkeypatch,
 ):
     import multiprocessing
@@ -1337,10 +1335,8 @@ def test_component_process_and_data_lifecycle_callbacks_reuse_class_aot(
     def no_fork(_method):
         raise ValueError("fork unavailable")
 
-    # Exercise the serial fallback used on Windows while planning from the
-    # first real model, then reuse those artifacts during the experiment.
+    # Exercise the serial fallback used on Windows and reuse the compiled model.
     monkeypatch.setattr(multiprocessing, "get_context", no_fork)
-    monkeypatch.setenv("CIMBA_CACHE", "0")
 
     class Worker(sim.Component):
         count: sim.State
@@ -1357,74 +1353,55 @@ def test_component_process_and_data_lifecycle_callbacks_reuse_class_aot(
     class Network(sim.Model):
         worker: Worker = Worker()
 
-    assert Network.compilation_status().state == "pending"
-    assert Network.compilation_plan() is None
+    model = Network().compile()
+    compiled = model._compiled
+    experiment = model.experiment(replications=1, duration=1.0, warmup=0.0)
+    assert model._compiled is compiled
+    assert experiment.run() == 0
+    assert experiment["worker__total"][0] == 1
 
-    model = Network()
-    status = Network.compilation_status()
-    plan = Network.compilation_plan()
-    compiled = Network.__dict__["_cimba_callback_compiled"]
-    assert status.state == "ready"
-    assert status.error is None
-    assert plan is not None
-    assert compiled is not None
-    assert plan.process_names == ("worker__run",)
-    assert plan.callback_count == 11
-
-    procs, predicates, events, extras = model._aot_class_callbacks()
-    assert procs["worker__run"] is dict(compiled.procs)["worker__run"]
-    assert predicates == {}
-    assert events == {}
-    assert extras == dict(enumerate(compiled.extras))
-
-    model.experiment(replications=1, duration=1.0, warmup=0.0)
-    assert model._compiled["procs"]["worker__run"] is procs["worker__run"]
-    assert model._compiled["events"][:3] == tuple(
-        extras[index] for index in range(3))
-    assert model._compiled["events"][4] is extras[4]
-    assert model._compiled["collect_callbacks"][0] is extras[9]
-
-    # A constructor-added entity shifts the class data layout and changes
-    # entity setup, so both AOT groups must be rejected safely.
     extended = Network(queues=["extra"])
-    extended_procs, extended_predicates, extended_events, extended_extras = \
-        extended._aot_class_callbacks()
-    assert extended_procs == {}
-    assert extended_predicates == {}
-    assert extended_events == {}
-    assert extended_extras == {}
+    other = extended.experiment(replications=1, duration=1.0, warmup=0.0)
+    assert extended.dtype != model.dtype
+    assert other.run() == 0
+    assert other["worker__total"][0] == 1
 
 
-def test_component_callback_log_text_handle_uses_runtime_sidecar(monkeypatch):
-    monkeypatch.setenv("CIMBA_CACHE", "0")
-    log_flag = 0x00010000
-    cimba.logger_flags_off(log_flag)
-    message = sim.log_text("component runtime text sidecar")
+@pytest.mark.parametrize("serial", [False, True])
+def test_component_callbacks_use_native_text_handles(tmp_path, monkeypatch, serial):
+    if serial:
+        import multiprocessing
+
+        def no_fork(_method):
+            raise ValueError("fork unavailable")
+
+        monkeypatch.setattr(multiprocessing, "get_context", no_fork)
+
+    reports = (tmp_path / "process.txt", tmp_path / "collect.txt")
+    paths = tuple(sim.log_text(str(path)) for path in reports)
 
     class Worker(sim.Component):
         done: sim.Output
+        samples: sim.Dataset
 
         @sim.process
         def run(self, env):
-            sim.log_user(log_flag, message)
-            self.done = 1.0
-            sim.suspend()
+            self.samples.add(42.0)
+            self.done = self.samples.print_file(paths[0], append=0)
+
+        @sim.collect
+        def collect(self, env):
+            self.done += self.samples.print_file(paths[1], append=0)
 
     class Network(sim.Model):
         worker: Worker = Worker()
 
-    model = Network()
-    (process,) = model._processes
-    source = process.fn.__cimba_source__
-    assert "_CIMBA_RUNTIME_TEXT_HANDLE" in source
-    assert str(message) not in source
-    assert model._runtime_text_handles == [message]
-
-    experiment = model.experiment(
-        replications=1, duration=1.0, warmup=0.0, seed=9)
-    assert experiment.run() == 0
-    assert experiment["worker__done"][0] == 1.0
-    cimba.logger_flags_on(log_flag)
+    experiment = Network().experiment(duration=None, warmup=0, seed=9)
+    for _ in range(2):
+        assert experiment.run() == 0
+        assert experiment["worker__done"][0] == 2.0
+        for path in reports:
+            np.testing.assert_array_equal(np.loadtxt(path), 42.0)
 
 
 def test_component_process_dag_uses_lowered_source():
@@ -3815,8 +3792,7 @@ def test_component_ref_usage_errors_are_rejected():
 
 
 def test_component_function_indexes_a_collection_by_loop_variable():
-    # The index is bound inside the function, so it cannot be resolved at
-    # the call site: the whole flattened field is threaded in instead.
+    # Local and argument indices follow the same field access path.
     class Item(sim.Component):
         cost: sim.Param
 
@@ -4043,7 +4019,7 @@ def test_component_function_loop_index_restrictions_are_named():
         owner: Owner = Owner()
 
     with pytest.raises(ValueError,
-                       match="every instance of 'owner__parts' to declare"):
+                       match="not declared by every concrete component type"):
         Packed().experiment(owner__parts__w=[1.0, 2.0], duration=1.0)
 
     # Const values live in a side table, not a flattened env field
@@ -4072,8 +4048,9 @@ def test_component_function_loop_index_restrictions_are_named():
     class ConstModel(sim.Model):
         owner: ConstOwner = ConstOwner()
 
-    with pytest.raises(ValueError, match="only supported for Param, Output"):
-        ConstModel().experiment(duration=1.0)
+    experiment = ConstModel().experiment(duration=1.0, warmup=0.0)
+    assert experiment.run() == 0
+    assert experiment["owner__total"][0] == 3
 
     # mutation stays rejected whatever the index is
     class Mutator(sim.Component):

@@ -1,32 +1,23 @@
 # Build for the Cimba Python wrapper: consume the upstream Cimba C library
-# (vendored as a git submodule under subprojects/cimba), generate the cffi
-# glue module, and statically link libcimba into it.
+# (vendored as a git submodule under subprojects/cimba) and statically link it
+# into the private native runtime module.
 project(
     'cimba',
     'c',
-    'cython',
-    version: '0.6.1',
+    version: '0.5.10',
     meson_version: '>=1.1.0',
-    # Fast wheels by default. Use -Dcimba_debug_logs=true to build the bundled
-    # Cimba library with native INFO logging for tutorials/debugging.
+    # Fast wheels by default. Use -Dbuildtype=debugoptimized for native INFO logs.
     default_options: ['buildtype=release'],
 )
 
 py = import('python').find_installation(pure: false)
 cc = meson.get_compiler('c')
 
-if get_option('cimba_debug_logs') and get_option('buildtype') == 'release'
-    error(
-        'cimba_debug_logs requires -Dbuildtype=debugoptimized because '
-        + 'upstream Cimba release builds compile INFO logs out with -DNLOGINFO'
-    )
-endif
-
 cimba_default_options = [
     'default_library=static',
     'enable_docs=false',
     'warning_level=1',
-    'external_context_switch_wrapper=true',
+    'external_context_switch_wrapper=false',
     'enable_extras=false',
 ]
 
@@ -56,19 +47,23 @@ py.install_sources(
     'src/cimba/sim.py',
     'src/cimba/_bindings.py',
     'src/cimba/_callbacks.py',
+    'src/cimba/_capture.py',
     'src/cimba/_components.py',
     'src/cimba/_declarations.py',
+    'src/cimba/_entity_methods.py',
+    'src/cimba/_experiment.py',
+    'src/cimba/_functions.py',
     'src/cimba/_graph.py',
     'src/cimba/_intrinsics.py',
+    'src/cimba/_lowering.py',
     'src/cimba/_model.py',
-    'src/cimba/cimba.py',
-    'src/cimba/cmb_logger.py',
+    'src/cimba/_runtime.py',
+    'src/cimba/_struct.py',
+    'src/cimba/_trial_inputs.py',
     'src/cimba/py.typed',
     'src/cimba/__init__.pyi',
     'src/cimba/_cimba.pyi',
-    'src/cimba/_types.pyi',
-    'src/cimba/cimba.pyi',
-    'src/cimba/cmb_logger.pyi',
+    'src/cimba/_cimba_native.pyi',
     subdir: 'cimba',
 )
 
@@ -76,36 +71,7 @@ py.install_sources(
     'src/cimba/random/__init__.py',
     'src/cimba/random/__init__.pyi',
     'src/cimba/random/_compiled.py',
-    'src/cimba/random/_lowering.py',
     subdir: 'cimba/random',
-)
-
-py.install_sources(
-    'src/cimba/_dataset/__init__.py',
-    'src/cimba/_dataset/helpers.py',
-    'src/cimba/_dataset/methods.py',
-    subdir: 'cimba/_dataset',
-)
-
-py.install_sources(
-    'src/cimba/_timeseries/__init__.py',
-    'src/cimba/_timeseries/helpers.py',
-    'src/cimba/_timeseries/methods.py',
-    subdir: 'cimba/_timeseries',
-)
-
-py.install_sources(
-    'src/cimba/_history_capture/__init__.py',
-    'src/cimba/_history_capture/lowering.py',
-    'src/cimba/_history_capture/runtime.py',
-    subdir: 'cimba/_history_capture',
-)
-
-py.install_sources(
-    'src/cimba/store/__init__.py',
-    'src/cimba/store/helpers.py',
-    'src/cimba/store/methods.py',
-    subdir: 'cimba/store',
 )
 
 py.install_sources(
@@ -121,7 +87,7 @@ py.install_sources(
 
 cimba_native_ext = py.extension_module(
     '_cimba_native',
-    'src/cimba/_cimba_native.pyx',
+    'src/cimba/native/module.c',
     # nbshim.c re-exports the static-inline cimba functions that sim.py binds
     # as Numba external symbols (cpy_*).
     'src/cimba/native/nbshim.c',
@@ -133,11 +99,5 @@ cimba_native_ext = py.extension_module(
     subdir: 'cimba',
 )
 
-# Upstream adds its tutorials/benchmarks/tests to the default `all` target (one
-# links system HDF5). meson-python compiles only this alias instead -- see
-# tool.meson-python.args.compile in pyproject.toml.
+# Stable extension target for meson-python's editable rebuilds.
 alias_target('cimba_ext', cimba_native_ext)
-
-if get_option('enable_docs')
-    subdir('docs')
-endif

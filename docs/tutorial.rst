@@ -107,10 +107,11 @@ rate of 0.75 and service rate of 1.0 gives the 0.75 utilization we wanted for
 the first run.
 
 The ``self`` argument is the trial-local model record. It holds the parameter,
-output, state, and entity handles declared on ``MM1``. Process functions are
-plain Python functions, but the blocking ``sim.hold()`` call and entity
-methods such as ``self.queue.get()`` make them simulation processes. If the
-service process tries to get from an empty queue, it pauses. The dispatcher
+output, state, and entity handles declared on ``MM1``. Cimba compiles process
+functions with Numba before running trials. Their bodies use Python syntax
+supported by Numba, with blocking calls such as ``sim.hold()`` and
+``self.queue.get()``. If the service process tries to get from an empty queue,
+it pauses. The dispatcher
 then runs some other event, such as the arrival process waking up and putting
 a customer into the queue. When the service process resumes, it continues
 immediately after the same ``self.queue.get()`` call.
@@ -130,10 +131,10 @@ The collector runs after the trial finishes. ``self.queue.mean_level()`` uses
 the recording window controlled by the experiment's ``warmup`` and
 ``duration``.
 
-We also need an experiment to set it all up and run the simulation. Unlike a
-lower-level program, there is no manual object lifecycle code here: the model
+We also need an experiment to set it all up and run the simulation. The model
 declaration tells Cimba Python what each trial needs, and
-``model.experiment(...)`` generates the trial table.
+``model.experiment(...)`` generates the trial table and manages native objects
+throughout each trial.
 
 Let us try this:
 
@@ -155,8 +156,11 @@ Let us try this:
         print(f"Average queue length over the first 10 time units: {avg:.6f}")
 
 There is one utilization value and one replication, so this experiment has one
-trial. The seed makes the random stream reproducible. ``exp.run()`` executes the
-trial table and returns the number of failed trials. Outputs are available by
+trial. The seed makes the random stream reproducible. ``cimba.random`` draws
+belong inside compiled callbacks and the Numba helpers they call. For sampling
+in Python before or after a run, use ``numpy.random.default_rng(seed)``.
+``exp.run()`` executes the trial table and returns the number of failed trials.
+Outputs are available by
 name, so ``exp.results.avg_queue_length`` returns an array with one element per
 trial.
 
@@ -578,6 +582,72 @@ with ``sim.log_text()``:
 Use stdout reports for short single-trial runs. In parallel experiments, text
 from several trials may interleave; prefer scalar outputs for final analysis
 and file reports only when each run has an unambiguous destination.
+
+.. _mm1-reporting-figures:
+
+The same statistics are easier to explore graphically. The following figures
+and sample reports are preserved from the original M/M/1 reporting walkthrough,
+with utilization 0.75, a warmup of 1,000 time units, and a measurement window of
+one million time units. They come from an earlier run than the console output
+above, so their sample values differ slightly.
+
+.. figure:: static/mm1_reporting_histogram.svg
+   :alt: Duration-weighted histogram of the M/M/1 waiting-queue length.
+
+   Distribution of queue levels, weighted by the time spent at each level.
+
+Duration weighting matters here. A queue length held for ten simulated minutes
+should contribute ten times as much as one held for a single minute. Counting
+each recorded change equally would describe the observations at change events,
+rather than the fraction of time the queue spends at each level.
+
+A five-number summary gives another view of the distribution: its minimum,
+lower quartile, median, upper quartile, and maximum. The saved run's structured
+summary was:
+
+.. literalinclude:: static/mm1_reporting_five_number.txt
+   :language: none
+
+The median queue length was one and the upper quartile was three, while the
+maximum reached 35. That long tail is easy to miss if we look only at the mean.
+For a new run, print the native five-number summary from the collector with
+``self.queue.history().fivenum()``. The structured representation above is the
+saved example's display format.
+
+.. figure:: static/mm1_reporting_pacf.svg
+   :alt: Partial autocorrelation of the recorded M/M/1 queue-level observations.
+
+   Partial autocorrelation of the queue-level observations at successive lags.
+
+The correlogram shows dependence between observations at each lag after
+accounting for the intervening observations. Here, lags count recorded
+observations, not fixed intervals of simulated time. The histogram describes
+the distribution of queue levels; the correlogram adds information about their
+ordering. The :download:`full text report from this saved run
+<static/mm1_reporting_report.txt>` includes its summary, histogram, and
+partial autocorrelation values.
+
+For plots of a new run, use the captured history introduced above with
+Matplotlib (install the ``cimba[plot]`` extra). This example plots the fraction
+of measured time spent at each integer queue level for trial zero:
+
+.. code-block:: python
+
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    history = exp.history("queue", trial=0)
+    levels = history[:, 1]
+    durations = history[:, 2]
+    bins = np.arange(int(levels.max()) + 2) - 0.5
+
+    fig, ax = plt.subplots()
+    ax.hist(levels, bins=bins, weights=durations / durations.sum())
+    ax.set_xlabel("Waiting-queue length")
+    ax.set_ylabel("Fraction of measured time")
+    fig.tight_layout()
+    fig.savefig("queue_length_histogram.svg")
+    plt.close(fig)
 
 Use ``sim.Dataset`` when you need to record individual samples, such as each
 customer's time in system:
@@ -1507,8 +1577,8 @@ so the ride has happened and the visitor can choose a new destination:
         vip.rides += 1
         break
 
-Alias sampling probabilities
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Categorical routing probabilities
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Queueing networks often use a transition matrix: after each attraction, choose
 the next attraction according to row-specific probabilities. Cimba Python
@@ -2095,7 +2165,7 @@ small production system:
 
 The key lesson is the same as in every earlier chapter, now with a richer
 workflow: active entities are processes, passive constraints are model fields,
-randomness comes from ``cimba.sim``, and experiments are independent trial
+randomness comes from ``cimba.random``, and experiments are independent trial
 tables that can be swept and summarized from Python.
 
 This is where the tutorial stops, but not where the modeling style stops. The

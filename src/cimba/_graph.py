@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from types import FunctionType
 from typing import Any
 
+from ._entity_methods import LOWERED_ENTITY_METHODS
+
 
 @dataclass(frozen=True)
 class ProcessDAGNode:
@@ -222,13 +224,9 @@ _DIRECT_PROCESS_VERBS = {
 _STATE_KINDS = {"state", "fstate"}
 
 #: (declared field kind, ``env.<field>.<method>(...)`` method name) -> the
-#: (edge category, edge label) it infers, mirroring the verb names the old
-#: ``sim.put()``/``sim.store_put()``/``sim.pq_put()``/... free functions
-#: used, so existing graphs keep the same edge labels under the
-#: object-oriented sugar. Used directly against a process's *unlowered*
-#: source -- e.g. a plain helper function's own body, inlined via
-#: ``_handle_helper_call`` below, which never goes through
-#: model callback registration's entity-method lowering.
+#: (edge category, edge label) it infers. Matched against unlowered
+#: method calls (plain helper bodies inlined by ``_handle_helper_call``) and,
+#: through ``_ENTITY_HELPER_VERBS``, against their lowered helper calls.
 _ENTITY_METHOD_VERBS: dict[tuple[str, str], tuple[str, str]] = {
     ("queue", "put"): ("produce", "put"),
     ("queue", "get"): ("consume", "get"),
@@ -263,40 +261,14 @@ _ENTITY_METHOD_VERBS: dict[tuple[str, str], tuple[str, str]] = {
     ("event", "wait_event"): ("consume", "wait_event"),
 }
 
-#: declared field kind -> the label ``store/methods.py`` prefixes its
-#: lowered helper names with (``_cimba_entity_<label>_<method>``).
-_ENTITY_HELPER_LABELS = {
-    "queue": "queue",
-    "resource": "resource",
-    "pool": "pool",
-    "store": "store",
-    "pqueues": "pq",
-    "condition": "condition",
-    "event": "event",
-}
-
-#: (field kind, method name) -> the helper-name method segment
-#: ``store/methods.py`` actually uses when it differs from the method name
-#: itself (``Condition.wait_for``'s helper is ``condition_wait``;
-#: ``Event.wait_event()``'s helper is ``event_wait``).
-_ENTITY_HELPER_METHOD_OVERRIDES = {
-    ("condition", "wait_for"): "wait",
-    ("event", "wait_event"): "wait",
-}
-
 #: By the time a *registered* process/predicate/event/collect function
 #: reaches DAG inference, the ``env.<entity>.method(...)`` sugar in its own
-#: body has already been lowered (during model callback registration/
-#: ``_lower_component_process()``) into calls to these internal helpers
-#: (see ``store/methods.py``), which structurally mirror the old
-#: ``sim.put(entity, ...)``-style free functions: a plain call with the
-#: entity handle as the first argument. Helper name suffix (after
-#: ``_cimba_entity_``) -> (edge category, edge label).
-_ENTITY_HELPER_PREFIX = "_cimba_entity_"
-_ENTITY_HELPER_VERBS: dict[str, tuple[str, str]] = {
-    f"{_ENTITY_HELPER_LABELS[kind]}_"
-    f"{_ENTITY_HELPER_METHOD_OVERRIDES.get((kind, method), method)}": spec
-    for (kind, method), spec in _ENTITY_METHOD_VERBS.items()
+#: body has already been lowered into plain helper calls taking the entity
+#: handle as the first argument (see ``_entity_methods``). Lowered helper
+#: name -> (edge category, edge label).
+_ENTITY_HELPER_VERBS: dict[str, tuple[str, str] | None] = {
+    helper: _ENTITY_METHOD_VERBS.get(kind_method)
+    for helper, kind_method in LOWERED_ENTITY_METHODS.items()
 }
 
 
@@ -306,39 +278,20 @@ def infer_process_dag(
     entity_kinds: Mapping[str, str],
     process_fields: Iterable[str],
     spawnable_fields: Iterable[str],
-    spawnable_field_processes: Mapping[str, Iterable[str]] | None = None,
-    spawnable_index_processes: Mapping[
-        tuple[str, int], Iterable[str]] | None = None,
-    process_field_processes: Mapping[str, Iterable[str]] | None = None,
-    process_index_processes: Mapping[
-        tuple[str, int], Iterable[str]] | None = None,
-    event_callbacks: Iterable[tuple[str, Callable[..., Any]]] = (),
-    blocks: Iterable[ProcessDAGBlock] = (),
-    extra_nodes: Iterable[ProcessDAGNode] = (),
-    extra_edges: Iterable[ProcessDAGEdge] = (),
+    spawnable_field_processes: dict[str, set[str]],
+    spawnable_index_processes: dict[tuple[str, int], set[str]],
+    process_field_processes: dict[str, set[str]],
+    process_index_processes: dict[tuple[str, int], set[str]],
+    event_callbacks: Iterable[tuple[str, Callable[..., Any]]],
+    blocks: Iterable[ProcessDAGBlock],
+    extra_nodes: Iterable[ProcessDAGNode],
+    extra_edges: Iterable[ProcessDAGEdge],
 ) -> ProcessDAG:
-    """Infer a model-field-aware graph from class-declared process bodies."""
-    process_list = tuple(processes)
-    process_names = {p.name for p in process_list}
-    process_field_names = set(process_fields)
-    spawnable_field_names = set(spawnable_fields)
-    spawnable_processes = {
-        field: set(names)
-        for field, names in (spawnable_field_processes or {}).items()
-    }
-    spawnable_indexed_processes = {
-        key: set(names)
-        for key, names in (spawnable_index_processes or {}).items()
-    }
-    process_field_refs = {
-        field: set(names)
-        for field, names in (process_field_processes or {}).items()
-    }
-    process_index_refs = {
-        key: set(names)
-        for key, names in (process_index_processes or {}).items()
-    }
+    """Infer a model-field-aware graph from class-declared process bodies.
 
+    The ``*_processes`` maps name the processes whose handles (or spawn
+    descriptors) each Processes/Spawnable field, or field element, holds."""
+    process_list = tuple(processes)
     nodes = [
         ProcessDAGNode(
             name=p.name,
@@ -359,42 +312,26 @@ def infer_process_dag(
 
     context = _InferenceContext(
         entity_kinds=dict(entity_kinds),
-        process_names=process_names,
-        process_fields=process_field_names,
-        spawnable_fields=spawnable_field_names,
-        spawnable_field_processes=spawnable_processes,
-        spawnable_index_processes=spawnable_indexed_processes,
-        process_field_processes=process_field_refs,
-        process_index_processes=process_index_refs,
+        process_names={p.name for p in process_list},
+        process_fields=set(process_fields),
+        spawnable_fields=set(spawnable_fields),
+        spawnable_field_processes=spawnable_field_processes,
+        spawnable_index_processes=spawnable_index_processes,
+        process_field_processes=process_field_processes,
+        process_index_processes=process_index_processes,
     )
 
-    for process in process_list:
+    actors = [(_Ref("process", p.name), p.fn) for p in process_list]
+    actors += [(_Ref("event", name), fn) for name, fn in event_callbacks
+               if fn.__code__.co_argcount >= 1]
+    for actor, fn in actors:
         analyzer = _ProcessAnalyzer(
             context=context,
-            actor=_Ref("process", process.name),
-            fn_globals=process.fn.__globals__,
-            env_names={process.fn.__code__.co_varnames[0]},
+            actor=actor,
+            fn_globals=fn.__globals__,
+            env_names={fn.__code__.co_varnames[0]},
         )
-        analyzer.analyze_function(process.fn)
-        for edge in analyzer.edges:
-            if edge not in edges:
-                edges.append(edge)
-            for key in (edge.source, edge.target):
-                ref = _ref_from_key(key)
-                if (ref.kind != "process" and key not in resource_nodes
-                        and key not in known_node_keys):
-                    resource_nodes[key] = ProcessDAGNode(ref.name, ref.kind)
-
-    for event_name, event_fn in event_callbacks:
-        if event_fn.__code__.co_argcount < 1:
-            continue
-        analyzer = _ProcessAnalyzer(
-            context=context,
-            actor=_Ref("event", event_name),
-            fn_globals=event_fn.__globals__,
-            env_names={event_fn.__code__.co_varnames[0]},
-        )
-        analyzer.analyze_function(event_fn)
+        analyzer.analyze_function(fn)
         for edge in analyzer.edges:
             if edge not in edges:
                 edges.append(edge)
@@ -511,16 +448,15 @@ class _ProcessAnalyzer(ast.NodeVisitor):
         """Recognize a lowered ``env.<entity>.method(...)`` call (a
         ``_cimba_entity_<label>_<method>(entity, ...)`` helper invocation,
         as it appears in the already-lowered source of a *registered*
-        process/predicate/event/collect function) and infer the same edges
-        the matching legacy ``sim.put()``/``sim.acquire()``/... free
-        function used to. Returns whether the call was recognized (so
+        process/predicate/event/collect function) and infer the edges of
+        that entity method. Returns whether the call was recognized (so
         callers don't also try treating it as a helper-function call)."""
         func = node.func
         if not isinstance(func, ast.Name) or not node.args:
             return False
-        if not func.id.startswith(_ENTITY_HELPER_PREFIX):
+        if func.id not in _ENTITY_HELPER_VERBS:
             return False
-        spec = _ENTITY_HELPER_VERBS.get(func.id[len(_ENTITY_HELPER_PREFIX):])
+        spec = _ENTITY_HELPER_VERBS[func.id]
         if spec is None:
             return True
         category, label = spec
@@ -732,14 +668,15 @@ class _ProcessAnalyzer(ast.NodeVisitor):
             for elt in target.elts:
                 self._bind_refs(elt, refs)
 
-    def _add_edge(self, source: _Ref, target: _Ref,
-                  label: str | None = None) -> None:
+    def _add_edge(self, source: _Ref, target: _Ref, label: str) -> None:
         edge = ProcessDAGEdge(source.key, target.key, label)
         if edge not in self.edges:
             self.edges.append(edge)
 
 
-def _function_ast(fn: Callable[..., Any]) -> ast.FunctionDef | None:
+def _function_ast(
+    fn: Callable[..., Any],
+) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
     source = getattr(fn, "__cimba_source__", None)
     if source is None:
         try:
