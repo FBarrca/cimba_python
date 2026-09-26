@@ -12,7 +12,6 @@ EXPORTS
     cpy_history_capture_store_data
     cpy_logger_flags_on
     cpy_logger_flags_off
-    cmb_logger_flags_off
     cmb_event_queue_initialize
     cmb_event_queue_execute
     cmb_event_queue_terminate

@@ -30,7 +30,9 @@ __version__ = "0.5.10"
 
 def native_version() -> str:
     """Return the bundled Cimba engine version."""
-    return _ffi.string(_lib.cimba_version()).decode("utf-8")
+    version = _ffi.string(_lib.cimba_version())
+    assert isinstance(version, bytes)
+    return version.decode("utf-8")
 
 
 def logger_flags_on(flags: int) -> None:

@@ -140,7 +140,7 @@ def sieve(data: ArrayLike, length: int, *,
             return np.maximum(out, 0.0, out=out) if nonnegative else out
         return generate
 
-    phi, _sigma = yule_walker(resid, order=p, method="mle")
+    phi = yule_walker(resid, order=p, method="mle")[0]
     phi = np.asarray(phi, dtype=np.float64)
     # One-step-ahead residuals of the fitted AR as the innovation pool
     lagged = np.column_stack([resid[p - j - 1:n - j - 1] for j in range(p)])

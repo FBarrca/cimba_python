@@ -126,13 +126,18 @@ lowers paths like ``env.campus.zones[i].gates[j].queue`` to flattened fields
 and generated offset tables before compilation.
 
 Module layout: the verbs below alias the raw symbol bindings in
-``_bindings``; the cast helpers live in ``_intrinsics``; declaration markers
-live in ``_declarations``; shared callback declarations live in
-``_callbacks``; Component lowering lives in ``_components``;
-Model/Experiment and the trial codegen live in ``_model``.
+``_bindings`` (cast helpers in ``_intrinsics``). Declaration markers live in
+``_declarations`` and callback decorators in ``_callbacks``; ``_components``
+flattens component trees into the trial record, ``_lowering`` rewrites
+callbacks against it (method sugar in ``_entity_methods``, ``@sim.function``
+helpers in ``_functions``, history/dataset capture in ``_capture``).
+``_model`` registers and compiles a Model, ``_runtime`` holds the native
+trial lifecycle and callback compilation, ``_trial_inputs`` expands
+experiment arguments into per-trial records, and ``_experiment`` runs them
+and exposes the results.
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as _np
 
@@ -140,6 +145,7 @@ from numba import carray as _carray
 from numba import njit
 from numba import types as _nbtypes
 
+from . import LOGGER_ERROR, LOGGER_FATAL, LOGGER_INFO, LOGGER_WARNING
 from . import _bindings as _b
 from ._intrinsics import ptr_caster as _ptr_caster
 from ._intrinsics import record_addr as _record_addr
@@ -148,12 +154,17 @@ from ._callbacks import (SpawnableProcess, collect, event, function,
 from ._components import Component
 from ._declarations import (Condition, Const, Dataset, Env, Event, FloatState,
                             Handle, Output, Param, Pool, PQueues, Predicate,
-                            Processes, Queue, Ref, Refs, Resource, Spawnable,
-                            State, Store, Trace, capacity, count)
+                            Processes, Queue, Ref, Refs, Resource, State,
+                            Store, Trace, capacity, count)
+# Not exported: kept so legacy ``sim.Spawnable`` annotations reach their
+# migration error instead of an AttributeError.
+from ._declarations import Spawnable  # noqa: F401
 from ._graph import (ProcessDAG, ProcessDAGBlock, ProcessDAGEdge,
                      ProcessDAGNode)
-from ._model import (ComponentFieldSchema, Experiment, ExperimentResults,
-                     Model, Struct, trace_rng)
+from ._experiment import Experiment, ExperimentResults
+from ._model import ComponentFieldSchema, Model
+from ._struct import Struct
+from ._trial_inputs import trace_rng
 
 __all__ = [
     "Model", "Component", "ComponentFieldSchema", "Experiment",
@@ -187,12 +198,6 @@ INTERRUPTED = -2  #: interrupted with the generic signal
 STOPPED = -3      #: the awaited process was stopped
 CANCELLED = -4    #: a wait/request was cancelled
 TIMEOUT = -5      #: conventional signal for timer wakeups
-
-LOGGER_FATAL = 0x80000000
-LOGGER_ERROR = 0x40000000
-LOGGER_WARNING = 0x20000000
-LOGGER_INFO = 0x10000000
-
 
 def log_text(text: str) -> Handle:
     """Return a stable native string handle for process-body logging."""

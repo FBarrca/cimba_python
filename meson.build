@@ -47,15 +47,23 @@ py.install_sources(
     'src/cimba/sim.py',
     'src/cimba/_bindings.py',
     'src/cimba/_callbacks.py',
+    'src/cimba/_capture.py',
     'src/cimba/_components.py',
     'src/cimba/_declarations.py',
+    'src/cimba/_entity_methods.py',
+    'src/cimba/_experiment.py',
+    'src/cimba/_functions.py',
     'src/cimba/_graph.py',
     'src/cimba/_intrinsics.py',
-    'src/cimba/_methods.py',
+    'src/cimba/_lowering.py',
     'src/cimba/_model.py',
+    'src/cimba/_runtime.py',
+    'src/cimba/_struct.py',
+    'src/cimba/_trial_inputs.py',
     'src/cimba/py.typed',
     'src/cimba/__init__.pyi',
     'src/cimba/_cimba.pyi',
+    'src/cimba/_cimba_native.pyi',
     subdir: 'cimba',
 )
 
@@ -64,34 +72,6 @@ py.install_sources(
     'src/cimba/random/__init__.pyi',
     'src/cimba/random/_compiled.py',
     subdir: 'cimba/random',
-)
-
-py.install_sources(
-    'src/cimba/_dataset/__init__.py',
-    'src/cimba/_dataset/helpers.py',
-    'src/cimba/_dataset/methods.py',
-    subdir: 'cimba/_dataset',
-)
-
-py.install_sources(
-    'src/cimba/_timeseries/__init__.py',
-    'src/cimba/_timeseries/helpers.py',
-    'src/cimba/_timeseries/methods.py',
-    subdir: 'cimba/_timeseries',
-)
-
-py.install_sources(
-    'src/cimba/_history_capture/__init__.py',
-    'src/cimba/_history_capture/lowering.py',
-    'src/cimba/_history_capture/runtime.py',
-    subdir: 'cimba/_history_capture',
-)
-
-py.install_sources(
-    'src/cimba/store/__init__.py',
-    'src/cimba/store/helpers.py',
-    'src/cimba/store/methods.py',
-    subdir: 'cimba/store',
 )
 
 py.install_sources(

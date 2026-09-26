@@ -341,11 +341,18 @@ else:
     class _Decl:
         """Marker for env field declarations in Model subclasses."""
 
-    _DECL_NAMES = (
-        "Param Output State FloatState Queue Resource Pool Store Dataset Condition Predicate Event Processes PQueues Spawnable"
-    ).split()
+    #: marker class name -> declaration kind
+    _MARKER_KINDS = {
+        "Param": "param", "Output": "output", "State": "state",
+        "FloatState": "fstate", "Queue": "queue", "Resource": "resource",
+        "Pool": "pool", "Store": "store", "Dataset": "dataset",
+        "Condition": "condition", "Predicate": "predicate", "Event": "event",
+        "Processes": "processes", "PQueues": "pqueues",
+    }
+    # Spawnable declares nothing; it only exists to report its migration.
     globals().update(
-        {name: type(name, (_Decl,), {"__module__": __name__}) for name in _DECL_NAMES}
+        {name: type(name, (_Decl,), {"__module__": __name__})
+         for name in (*_MARKER_KINDS, "Spawnable")}
     )
 
     class Trace(_Decl):
@@ -409,13 +416,8 @@ else:
         """Declare the number of elements in a PQueues field."""
         return n
 
-    _DECL_KINDS = {
-        globals()[name]: _FIELD_KINDS[kind]
-        for name, kind in zip(
-            _DECL_NAMES[:-1],
-            "param output state fstate queue resource pool store dataset condition predicate event processes pqueues".split(),
-        )
-    }
+    _DECL_KINDS = {globals()[name]: _FIELD_KINDS[kind]
+                   for name, kind in _MARKER_KINDS.items()}
     _DECL_KINDS[Trace] = _FIELD_KINDS["trace"]
 
     _trace_data = ptr_caster(types.float64)
@@ -430,6 +432,15 @@ else:
             return readonly_array(carray(_trace_data(field[0]), field[1]))
 
         return view
+
+
+def _declared_kind(hint: Any) -> _FieldKind | None:
+    """The field kind a marker annotation declares, or None for any other
+    (possibly unhashable) annotation."""
+    try:
+        return _DECL_KINDS.get(hint)
+    except TypeError:
+        return None
 
 
 def class_type_hints(cls: type) -> dict[str, Any]:
@@ -479,7 +490,6 @@ def _field_declarations(
     *,
     allow_symbolic_pqueues: bool = False,
     allow_refs: bool = False,
-    generated_spawnables: Iterable[str] = (),
 ) -> _Declarations:
     """Collect direct env field declarations from a Model/Component class."""
     decls = _Declarations()
@@ -505,19 +515,17 @@ def _field_declarations(
             _check_name(fname, "const")
             decls.consts[fname] = hint.type
             continue
-        try:
-            kind = _DECL_KINDS.get(hint)
-        except TypeError:
-            kind = None
+        kind = _declared_kind(hint)
         if kind is None:
             continue
         default = getattr(cls, fname, _MISSING)
         if kind.capacitated:
-            if default is _MISSING:
-                default = None
-            if isinstance(default, _Capacity):
-                default = default.cap
-            decls.add(_FieldDecl(fname, kind, capacity=default))
+            capacity = default.cap if isinstance(default, _Capacity) else (
+                None if default is _MISSING else default)
+            if not (capacity is None or isinstance(capacity, (int, str))):
+                raise ValueError(f"capacity '{capacity}' is neither an int "
+                                 "nor a declared param")
+            decls.add(_FieldDecl(fname, kind, capacity=capacity))
         elif kind.name == "pqueues":
             if isinstance(default, int) and default >= 1:
                 decls.add(_FieldDecl(fname, kind, count=default))
@@ -543,12 +551,4 @@ def _field_declarations(
                     f"field '{fname}': only Queue/Pool/Store declarations "
                     "and Param declarations may carry a default")
             decls.add(_FieldDecl(fname, kind))
-    for fname in generated_spawnables:
-        existing = decls.fields.get(fname)
-        if existing is None:
-            decls.add(_FieldDecl(fname, _FIELD_KINDS["spawnable"]))
-        elif existing.kind.name != "spawnable":
-            raise ValueError(
-                f"spawnable process '{cls.__name__}.{fname}' conflicts "
-                f"with its {existing.kind.name} field declaration")
     return decls

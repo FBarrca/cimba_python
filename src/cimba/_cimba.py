@@ -1,6 +1,8 @@
 """Private CFFI access to the compiled model runtime."""
 
-from . import _cimba_native as _native
+# The extension is built outside the source tree; _cimba_native.pyi
+# stands in for it.
+from . import _cimba_native as _native  # pyright: ignore[reportMissingModuleSource]
 from cffi import FFI
 
 ffi = FFI()

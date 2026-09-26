@@ -346,7 +346,7 @@ def test_long_shaped_entity_names_fit_native_buffer():
 
 
 def test_native_names_are_unique_bounded_and_stable():
-    from cimba._model import _native_names
+    from cimba._runtime import _native_names
 
     short = "ok_queue"
     alpha = "warehouse_regional_backorder_queue_alpha"

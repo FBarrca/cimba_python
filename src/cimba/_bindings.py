@@ -7,15 +7,26 @@ extension into LLVM makes those symbols visible to the JIT linker; each
 They are callable only from nopython-compiled code.
 """
 
+from collections.abc import Callable
+from typing import Any
+
 import llvmlite.binding as _llvm
 from numba import types
 
-from . import _cimba_native
+# The extension is built outside the source tree; _cimba_native.pyi
+# stands in for it.
+from . import _cimba_native  # pyright: ignore[reportMissingModuleSource]
 from ._cimba import ffi as _ffi
 
 _llvm.load_library_permanently(_cimba_native.__file__)
 
-_extern = types.ExternalFunction
+
+
+def _extern(symbol: str, signature: Any) -> Callable[..., Any]:
+    """Declare one native symbol with its Numba signature."""
+    return types.ExternalFunction(symbol, signature)
+
+
 _intp = types.intp
 _void = types.void
 _i64 = types.int64

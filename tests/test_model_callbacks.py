@@ -1,6 +1,23 @@
 import pytest
+from numba import njit
 
 import cimba.sim as sim
+
+
+@njit
+def _stock(env, amount):
+    env.buffer.put(amount)
+    return env.buffer.level()
+
+
+@njit
+def _record(env, value):
+    env.samples.add(value)
+
+
+@njit
+def _stock_and_record(env):
+    _record(env, float(_stock(env, 2)))
 
 
 def test_model_callbacks_inherit_replace_remove_and_keep_declaration_order():
@@ -540,3 +557,29 @@ def test_removed_instance_callback_api_and_callback_free_direct_model():
         assert not hasattr(model, name)
     with pytest.raises(ValueError, match="model has no processes"):
         model.compile()
+
+
+def test_njit_helpers_called_with_env_get_the_same_method_sugar():
+    # Entity and dataset methods inside plain Numba helpers (and helpers
+    # they call) lower like the same calls written in a callback.
+    class HelperSugar(sim.Model):
+        buffer: sim.Queue
+        samples: sim.Dataset
+        level: sim.Output
+        mean: sim.Output
+
+        @sim.process
+        def producer(self):
+            for _ in range(3):
+                _stock_and_record(self)
+                sim.hold(1.0)
+
+        @sim.collect
+        def done(self):
+            self.level = self.buffer.level()
+            self.mean = self.samples.mean()
+
+    experiment = HelperSugar().experiment(duration=None, warmup=0, seed=1)
+    assert experiment.run() == 0
+    assert experiment["level"][0] == 6
+    assert experiment["mean"][0] == 4.0

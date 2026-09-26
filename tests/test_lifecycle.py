@@ -61,7 +61,7 @@ def test_compiled_lifecycle_uses_ownership_appropriate_cleanup(monkeypatch):
     def no_fork(_method):
         raise ValueError("inspect lifecycle callbacks in the parent process")
 
-    monkeypatch.setattr("cimba._model._LIFECYCLE_CALLBACKS", {})
+    monkeypatch.setattr("cimba._runtime._LIFECYCLE_CALLBACKS", {})
     monkeypatch.setattr(multiprocessing, "get_context", no_fork)
     model = LifecycleModel()
     model.experiment(replications=1, duration=1.0, warmup=0.0, seed=7)
@@ -76,7 +76,7 @@ def test_compiled_lifecycle_uses_ownership_appropriate_cleanup(monkeypatch):
         stop_trial,
         cleanup_processes,
         _collect,
-    ) = model._compiled["events"]
+    ) = model._compiled.lifecycle
 
     trial_init_ir = initialize_trial.inspect_llvm()
     entity_init_ir = initialize_entities.inspect_llvm()
