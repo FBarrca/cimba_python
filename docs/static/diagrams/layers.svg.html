@@ -1,0 +1,123 @@
+<div class="cdiag"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 496" role="img" aria-labelledby="t-layers d-layers">
+<title id="t-layers">Cimba Python system layers</title><desc id="d-layers">Five layers from user code to the native runtime. The input-modeling pillar, cimba.inputs and inputs.c, is highlighted in orange.</desc>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M 0 0 L 10 5 L 0 10 z"/></marker>
+<marker id="arrow-pillar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead pillar" d="M 0 0 L 10 5 L 0 10 z"/></marker>
+</defs>
+<rect class="band user" x="10" y="10" width="880" height="84" rx="8" ry="8"/>
+<text class="band-label" x="24" y="46">Your code</text>
+<text class="band-note" x="24" y="64">host Python</text>
+<a href="../concepts/models.html" aria-label="Model classes"><title>Model classes</title>
+<rect class="box user" x="180.0" y="23" width="165.0" height="58" rx="6" ry="6"/>
+<text class="title plain" x="262.5" y="49.0" text-anchor="middle">Model classes</text>
+<text class="sub" x="262.5" y="65.0" text-anchor="middle">fields · processes · hooks</text>
+</a>
+<a href="../concepts/models.html#where-values-come-from" aria-label="Configured objects"><title>Configured objects</title>
+<rect class="box user" x="360.0" y="23" width="165.0" height="58" rx="6" ry="6"/>
+<text class="title plain" x="442.5" y="49.0" text-anchor="middle">Configured objects</text>
+<text class="sub" x="442.5" y="65.0" text-anchor="middle">sweeps · sources · captures</text>
+</a>
+<a href="../concepts/experiments.html" aria-label="Experiment(...)"><title>Experiment(...)</title>
+<rect class="box user" x="540.0" y="23" width="165.0" height="58" rx="6" ry="6"/>
+<text class="title plain" x="622.5" y="49.0" text-anchor="middle">Experiment(...)</text>
+<text class="sub" x="622.5" y="65.0" text-anchor="middle">replications · window · seed</text>
+</a>
+<a href="inputs.html" aria-label="Observed data"><title>Observed data</title>
+<rect class="box user" x="720.0" y="23" width="165.0" height="58" rx="6" ry="6"/>
+<text class="title plain" x="802.5" y="49.0" text-anchor="middle">Observed data</text>
+<text class="sub" x="802.5" y="65.0" text-anchor="middle">logs · histories · panels</text>
+</a>
+<rect class="band " x="10" y="104" width="880" height="84" rx="8" ry="8"/>
+<text class="band-label" x="24" y="140">Public API</text>
+<text class="band-note" x="24" y="158">stable surface</text>
+<a href="packages.html#arch-pkg-cimba" aria-label="cimba"><title>cimba</title>
+<rect class="box " x="180.0" y="117" width="129.0" height="58" rx="6" ry="6"/>
+<text class="title" x="244.5" y="143.0" text-anchor="middle">cimba</text>
+<text class="sub" x="244.5" y="159.0" text-anchor="middle">the facade</text>
+</a>
+<a href="packages.html#arch-pkg-inputs" aria-label="cimba.inputs"><title>cimba.inputs</title>
+<rect class="box pillar" x="324.0" y="117" width="129.0" height="58" rx="6" ry="6"/>
+<text class="title pillar-text" x="388.5" y="143.0" text-anchor="middle">cimba.inputs</text>
+<text class="sub pillar-text" x="388.5" y="159.0" text-anchor="middle">sources · fit</text>
+</a>
+<a href="packages.html#arch-pkg-analysis" aria-label="cimba.analysis"><title>cimba.analysis</title>
+<rect class="box " x="468.0" y="117" width="129.0" height="58" rx="6" ry="6"/>
+<text class="title" x="532.5" y="143.0" text-anchor="middle">cimba.analysis</text>
+<text class="sub" x="532.5" y="159.0" text-anchor="middle">statistics · checks</text>
+</a>
+<a href="packages.html#arch-pkg-random" aria-label="cimba.random"><title>cimba.random</title>
+<rect class="box " x="612.0" y="117" width="129.0" height="58" rx="6" ry="6"/>
+<text class="title" x="676.5" y="143.0" text-anchor="middle">cimba.random</text>
+<text class="sub" x="676.5" y="159.0" text-anchor="middle">in-model draws</text>
+</a>
+<a href="packages.html#arch-pkg-diagrams" aria-label="cimba.diagrams"><title>cimba.diagrams</title>
+<rect class="box " x="756.0" y="117" width="129.0" height="58" rx="6" ry="6"/>
+<text class="title" x="820.5" y="143.0" text-anchor="middle">cimba.diagrams</text>
+<text class="sub" x="820.5" y="159.0" text-anchor="middle">structure</text>
+</a>
+<rect class="band " x="10" y="198" width="880" height="84" rx="8" ry="8"/>
+<text class="band-label" x="24" y="234">Model core</text>
+<text class="band-note" x="24" y="252">pure Python</text>
+<a href="packages.html#arch-pkg-modeling" aria-label="modeling"><title>modeling</title>
+<rect class="box " x="180.0" y="211" width="165.0" height="58" rx="6" ry="6"/>
+<text class="title" x="262.5" y="237.0" text-anchor="middle">modeling</text>
+<text class="sub" x="262.5" y="253.0" text-anchor="middle">the language</text>
+</a>
+<a href="packages.html#arch-pkg-schema" aria-label="schema"><title>schema</title>
+<rect class="box " x="360.0" y="211" width="165.0" height="58" rx="6" ry="6"/>
+<text class="title" x="442.5" y="237.0" text-anchor="middle">schema</text>
+<text class="sub" x="442.5" y="253.0" text-anchor="middle">ClassSchema · Assembly</text>
+</a>
+<a href="packages.html#arch-pkg-layout" aria-label="layout"><title>layout</title>
+<rect class="box " x="540.0" y="211" width="165.0" height="58" rx="6" ry="6"/>
+<text class="title" x="622.5" y="237.0" text-anchor="middle">layout</text>
+<text class="sub" x="622.5" y="253.0" text-anchor="middle">records · trial image</text>
+</a>
+<a href="packages.html#arch-pkg-results" aria-label="results"><title>results</title>
+<rect class="box " x="720.0" y="211" width="165.0" height="58" rx="6" ry="6"/>
+<text class="title" x="802.5" y="237.0" text-anchor="middle">results</text>
+<text class="sub" x="802.5" y="253.0" text-anchor="middle">immutable outcomes</text>
+</a>
+<rect class="band " x="10" y="292" width="880" height="84" rx="8" ry="8"/>
+<text class="band-label" x="24" y="328">Compile &amp; run</text>
+<text class="band-note" x="24" y="346">Numba · ctypes</text>
+<a href="packages.html#arch-pkg-compiler" aria-label="compiler"><title>compiler</title>
+<rect class="box " x="180.0" y="305" width="225.0" height="58" rx="6" ry="6"/>
+<text class="title" x="292.5" y="331.0" text-anchor="middle">compiler</text>
+<text class="sub" x="292.5" y="347.0" text-anchor="middle">views · handles · per-class njit</text>
+</a>
+<a href="packages.html#arch-pkg-experiments" aria-label="experiments"><title>experiments</title>
+<rect class="box " x="420.0" y="305" width="225.0" height="58" rx="6" ry="6"/>
+<text class="title" x="532.5" y="331.0" text-anchor="middle">experiments</text>
+<text class="sub" x="532.5" y="347.0" text-anchor="middle">design · rows · bind · run</text>
+</a>
+<a href="packages.html#arch-pkg-engine" aria-label="engine"><title>engine</title>
+<rect class="box " x="660.0" y="305" width="225.0" height="58" rx="6" ry="6"/>
+<text class="title" x="772.5" y="331.0" text-anchor="middle">engine</text>
+<text class="sub" x="772.5" y="347.0" text-anchor="middle">ctypes · ABI · symbols</text>
+</a>
+<rect class="band native" x="10" y="386" width="880" height="84" rx="8" ry="8"/>
+<text class="band-label" x="24" y="422">Native runtime</text>
+<text class="band-note" x="24" y="440">libcimba_py (C)</text>
+<a href="native.html#arch-native-trial" aria-label="trial.c"><title>trial.c</title>
+<rect class="box native" x="180.0" y="399" width="165.0" height="58" rx="6" ry="6"/>
+<text class="title" x="262.5" y="425.0" text-anchor="middle">trial.c</text>
+<text class="sub" x="262.5" y="441.0" text-anchor="middle">lifecycle · spawn · capture</text>
+</a>
+<a href="native.html#arch-native-inputs" aria-label="inputs.c"><title>inputs.c</title>
+<rect class="box pillar" x="360.0" y="399" width="165.0" height="58" rx="6" ry="6"/>
+<text class="title pillar-text" x="442.5" y="425.0" text-anchor="middle">inputs.c</text>
+<text class="sub pillar-text" x="442.5" y="441.0" text-anchor="middle">streams · series · exhaustion</text>
+</a>
+<a href="native.html#arch-native-verbs" aria-label="verbs.c · nbshim.c"><title>verbs.c · nbshim.c</title>
+<rect class="box native" x="540.0" y="399" width="165.0" height="58" rx="6" ry="6"/>
+<text class="title" x="622.5" y="425.0" text-anchor="middle">verbs.c · nbshim.c</text>
+<text class="sub" x="622.5" y="441.0" text-anchor="middle">entity &amp; process verbs</text>
+</a>
+<a href="native.html#arch-native-engine" aria-label="Cimba C engine"><title>Cimba C engine</title>
+<rect class="box native" x="720.0" y="399" width="165.0" height="58" rx="6" ry="6"/>
+<text class="title" x="802.5" y="425.0" text-anchor="middle">Cimba C engine</text>
+<text class="sub" x="802.5" y="441.0" text-anchor="middle">coroutines · events · entities</text>
+</a>
+<text class="band-note" x="880" y="488" text-anchor="end">Each layer builds on the layers below it. Click a box for details.</text>
+</svg></div>

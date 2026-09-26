@@ -1,0 +1,93 @@
+<div class="cdiag"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 452" role="img" aria-labelledby="t-pipeline d-pipeline">
+<title id="t-pipeline">From classes and objects to trials</title><desc id="d-pipeline">Three paths converge in experiments: model classes are compiled via schema and compiler; configured objects are laid out via schema and layout; observed data becomes sources whose rows are generated per replication.</desc>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M 0 0 L 10 5 L 0 10 z"/></marker>
+<marker id="arrow-pillar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead pillar" d="M 0 0 L 10 5 L 0 10 z"/></marker>
+</defs>
+<text class="band-label" x="15" y="22">Class path — compiled once per class</text>
+<text class="band-label" x="15" y="172">Instance path — laid out per experiment</text>
+<text class="band-label" x="15" y="322">Input path — rows per replication</text>
+<a href="../concepts/models.html" aria-label="Model classes"><title>Model classes</title>
+<rect class="box user" x="15" y="40" width="165" height="66" rx="6" ry="6"/>
+<text class="title plain" x="97.5" y="70.0" text-anchor="middle">Model classes</text>
+<text class="sub" x="97.5" y="86.0" text-anchor="middle">class Shop(cb.Model)</text>
+</a>
+<a href="packages.html#arch-pkg-schema" aria-label="schema"><title>schema</title>
+<rect class="box " x="190" y="40" width="165" height="66" rx="6" ry="6"/>
+<text class="title" x="272.5" y="70.0" text-anchor="middle">schema</text>
+<text class="sub" x="272.5" y="86.0" text-anchor="middle">ClassSchema.of(cls)</text>
+</a>
+<a href="packages.html#arch-pkg-compiler" aria-label="compiler"><title>compiler</title>
+<rect class="box " x="365" y="40" width="165" height="66" rx="6" ry="6"/>
+<text class="title" x="447.5" y="70.0" text-anchor="middle">compiler</text>
+<text class="sub" x="447.5" y="86.0" text-anchor="middle">views · handles · njit</text>
+</a>
+<a href="pipeline.html#compile-classes-bind-instances" aria-label="CompiledClass"><title>CompiledClass</title>
+<rect class="box " x="540" y="40" width="165" height="66" rx="6" ry="6"/>
+<text class="title" x="622.5" y="70.0" text-anchor="middle">CompiledClass</text>
+<text class="sub" x="622.5" y="86.0" text-anchor="middle">callbacks + dispatch table</text>
+</a>
+<a href="../concepts/models.html#where-values-come-from" aria-label="Configured objects"><title>Configured objects</title>
+<rect class="box user" x="15" y="190" width="165" height="66" rx="6" ry="6"/>
+<text class="title plain" x="97.5" y="220.0" text-anchor="middle">Configured objects</text>
+<text class="sub" x="97.5" y="236.0" text-anchor="middle">shop = Shop(); shop.x = …</text>
+</a>
+<a href="packages.html#arch-pkg-schema" aria-label="schema"><title>schema</title>
+<rect class="box " x="190" y="190" width="165" height="66" rx="6" ry="6"/>
+<text class="title" x="272.5" y="220.0" text-anchor="middle">schema</text>
+<text class="sub" x="272.5" y="236.0" text-anchor="middle">Assembly.of(root)</text>
+</a>
+<a href="packages.html#arch-pkg-layout" aria-label="layout"><title>layout</title>
+<rect class="box " x="365" y="190" width="165" height="66" rx="6" ry="6"/>
+<text class="title" x="447.5" y="220.0" text-anchor="middle">layout</text>
+<text class="sub" x="447.5" y="236.0" text-anchor="middle">TrialImageLayout</text>
+</a>
+<a href="packages.html#arch-pkg-experiments" aria-label="experiments"><title>experiments</title>
+<rect class="box " x="540" y="190" width="165" height="66" rx="6" ry="6"/>
+<text class="title" x="622.5" y="220.0" text-anchor="middle">experiments</text>
+<text class="sub" x="622.5" y="236.0" text-anchor="middle">design · seeds · bind · run</text>
+</a>
+<a href="native.html" aria-label="libcimba_py"><title>libcimba_py</title>
+<rect class="box native" x="715" y="190" width="165" height="66" rx="6" ry="6"/>
+<text class="title" x="797.5" y="220.0" text-anchor="middle">libcimba_py</text>
+<text class="sub" x="797.5" y="236.0" text-anchor="middle">trial blocks · all cores</text>
+</a>
+<a href="inputs.html" aria-label="Observed data"><title>Observed data</title>
+<rect class="box user" x="15" y="340" width="165" height="66" rx="6" ry="6"/>
+<text class="title plain" x="97.5" y="370.0" text-anchor="middle">Observed data</text>
+<text class="sub" x="97.5" y="386.0" text-anchor="middle">arrays · panels</text>
+</a>
+<a href="inputs.html" aria-label="cimba.inputs"><title>cimba.inputs</title>
+<rect class="box pillar" x="190" y="340" width="165" height="66" rx="6" ry="6"/>
+<text class="title pillar-text" x="272.5" y="370.0" text-anchor="middle">cimba.inputs</text>
+<text class="sub pillar-text" x="272.5" y="386.0" text-anchor="middle">sources: dist · trace · …</text>
+</a>
+<a href="inputs.html#where-values-come-from" aria-label="row generation"><title>row generation</title>
+<rect class="box pillar-soft" x="365" y="340" width="165" height="66" rx="6" ry="6"/>
+<text class="title" x="447.5" y="370.0" text-anchor="middle">row generation</text>
+<text class="sub" x="447.5" y="386.0" text-anchor="middle">vectorized, per replication</text>
+</a>
+<a href="../concepts/results.html" aria-label="results → analysis"><title>results → analysis</title>
+<rect class="box " x="715" y="340" width="165" height="66" rx="6" ry="6"/>
+<text class="title" x="797.5" y="370.0" text-anchor="middle">results → analysis</text>
+<text class="sub" x="797.5" y="386.0" text-anchor="middle">read through objects</text>
+</a>
+<path class="edge " d="M 180 73.0 L 188 73.0" marker-end="url(#arrow)"/>
+<path class="edge " d="M 355 73.0 L 363 73.0" marker-end="url(#arrow)"/>
+<path class="edge " d="M 530 73.0 L 538 73.0" marker-end="url(#arrow)"/>
+<path class="edge " d="M 180 223.0 L 188 223.0" marker-end="url(#arrow)"/>
+<path class="edge " d="M 355 223.0 L 363 223.0" marker-end="url(#arrow)"/>
+<path class="edge " d="M 530 223.0 L 538 223.0" marker-end="url(#arrow)"/>
+<path class="edge " d="M 705 223.0 L 713 223.0" marker-end="url(#arrow)"/>
+<path class="edge " d="M 622.5 106 L 622.5 188" marker-end="url(#arrow)"/>
+<text class="edge-label" x="630.5" y="152.0" text-anchor="start">callback addresses</text>
+<path class="edge dashed" d="M 272.5 106 L 395 188" marker-end="url(#arrow)"/>
+<text class="edge-label" x="324.5" y="146.0" text-anchor="start">RecordLayout</text>
+<path class="edge pillar" d="M 180 373.0 L 188 373.0" marker-end="url(#arrow-pillar)"/>
+<path class="edge pillar" d="M 355 373.0 L 363 373.0" marker-end="url(#arrow-pillar)"/>
+<path class="edge pillar" d="M 530 373.0 L 580 258" marker-end="url(#arrow-pillar)"/>
+<text class="edge-label pillar" x="588" y="362" text-anchor="start">rows (shared by all points)</text>
+<path class="edge " d="M 797.5 256 L 797.5 338" marker-end="url(#arrow)"/>
+<text class="edge-label" x="791.5" y="302.0" text-anchor="end">outputs · captures · cursors</text>
+<text class="band-note" x="885" y="444" text-anchor="end">Compiled code never sees instances or sources; structure and data never trigger recompilation.</text>
+</svg></div>

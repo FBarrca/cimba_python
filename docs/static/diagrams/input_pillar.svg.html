@@ -1,0 +1,84 @@
+<div class="cdiag"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 470" role="img" aria-labelledby="t-pillar d-pillar">
+<title id="t-pillar">The input-modeling pillar</title><desc id="d-pillar">Distribution, trace, bootstrap and fitted sources all feed the same input field. Distributions are drawn in the trial; traces are replayed; bootstrap and fitted rows are generated once per replication and shared by every design point. inputs.c gives each input its own random stream and applies its exhaustion policy.</desc>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M 0 0 L 10 5 L 0 10 z"/></marker>
+<marker id="arrow-pillar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead pillar" d="M 0 0 L 10 5 L 0 10 z"/></marker>
+</defs>
+<text class="band-label" x="15" y="24">Four interchangeable sources</text>
+<a href="../reference/inputs.html#distributions-inputs-dist" aria-label="inputs.dist.*"><title>inputs.dist.*</title>
+<rect class="box pillar-soft" x="15" y="40" width="250" height="76" rx="6" ry="6"/>
+<text class="title" x="140.0" y="68.0" text-anchor="middle">inputs.dist.*</text>
+<text class="sub" x="140.0" y="84.0" text-anchor="middle">distribution: drawn inside the trial,</text>
+<text class="sub" x="140.0" y="98.0" text-anchor="middle">in C, on the input&#x27;s own stream</text>
+</a>
+<a href="../reference/inputs.html#recorded-data" aria-label="inputs.trace(data)"><title>inputs.trace(data)</title>
+<rect class="box pillar-soft" x="15" y="135" width="250" height="76" rx="6" ry="6"/>
+<text class="title" x="140.0" y="163.0" text-anchor="middle">inputs.trace(data)</text>
+<text class="sub" x="140.0" y="179.0" text-anchor="middle">recorded: replayed exactly as recorded,</text>
+<text class="sub" x="140.0" y="193.0" text-anchor="middle">shared read-only by all trials</text>
+</a>
+<a href="../reference/inputs.html#bootstrap-resampling-inputs-bootstrap" aria-label="inputs.bootstrap.*"><title>inputs.bootstrap.*</title>
+<rect class="box pillar-soft" x="15" y="230" width="250" height="76" rx="6" ry="6"/>
+<text class="title" x="140.0" y="258.0" text-anchor="middle">inputs.bootstrap.*</text>
+<text class="sub" x="140.0" y="274.0" text-anchor="middle">resample: rows generated in Python</text>
+<text class="sub" x="140.0" y="288.0" text-anchor="middle">once per replication</text>
+</a>
+<a href="../reference/inputs.html#fitted-time-series-models-inputs-fitted" aria-label="inputs.fitted.*"><title>inputs.fitted.*</title>
+<rect class="box pillar-soft" x="15" y="325" width="250" height="76" rx="6" ry="6"/>
+<text class="title" x="140.0" y="353.0" text-anchor="middle">inputs.fitted.*</text>
+<text class="sub" x="140.0" y="369.0" text-anchor="middle">fitted model: rows generated in Python</text>
+<text class="sub" x="140.0" y="383.0" text-anchor="middle">once per replication</text>
+</a>
+<a href="inputs.html#where-values-come-from" aria-label="row buffers"><title>row buffers</title>
+<rect class="box " x="305" y="135" width="190" height="266" rx="6" ry="6"/>
+<text class="title" x="400.0" y="202.0" text-anchor="middle">row buffers</text>
+<text class="sub" x="400.0" y="218.0" text-anchor="middle">read-only memory</text>
+<text class="sub" x="400.0" y="232.0" text-anchor="middle"></text>
+<text class="sub" x="400.0" y="246.0" text-anchor="middle">one row per</text>
+<text class="sub" x="400.0" y="260.0" text-anchor="middle">(replication, source)</text>
+<text class="sub" x="400.0" y="274.0" text-anchor="middle"></text>
+<text class="sub" x="400.0" y="288.0" text-anchor="middle">shared by every</text>
+<text class="sub" x="400.0" y="302.0" text-anchor="middle">design point (CRN)</text>
+<text class="sub" x="400.0" y="316.0" text-anchor="middle"></text>
+<text class="sub" x="400.0" y="330.0" text-anchor="middle">regenerated 2× longer</text>
+<text class="sub" x="400.0" y="344.0" text-anchor="middle">on exhaustion</text>
+</a>
+<a href="native.html#arch-native-inputs" aria-label="inputs.c"><title>inputs.c</title>
+<rect class="box pillar" x="540" y="110" width="190" height="210" rx="6" ry="6"/>
+<text class="title pillar-text" x="635.0" y="156.0" text-anchor="middle">inputs.c</text>
+<text class="sub pillar-text" x="635.0" y="172.0" text-anchor="middle">one InputSlot per input field</text>
+<text class="sub pillar-text" x="635.0" y="186.0" text-anchor="middle">in the trial record</text>
+<text class="sub pillar-text" x="635.0" y="200.0" text-anchor="middle"></text>
+<text class="sub pillar-text" x="635.0" y="214.0" text-anchor="middle">kind · policy · parameters</text>
+<text class="sub pillar-text" x="635.0" y="228.0" text-anchor="middle">stream state · data · cursor</text>
+<text class="sub pillar-text" x="635.0" y="242.0" text-anchor="middle">series step · origin · history</text>
+<text class="sub pillar-text" x="635.0" y="256.0" text-anchor="middle"></text>
+<text class="sub pillar-text" x="635.0" y="270.0" text-anchor="middle">own random stream</text>
+<text class="sub pillar-text" x="635.0" y="284.0" text-anchor="middle">exhaustion policy</text>
+</a>
+<a href="../concepts/inputs.html#declaring-inputs" aria-label="model code"><title>model code</title>
+<rect class="box " x="770" y="150" width="118" height="130" rx="6" ry="6"/>
+<text class="title" x="829.0" y="184.0" text-anchor="middle">model code</text>
+<text class="sub" x="829.0" y="200.0" text-anchor="middle">x.next()</text>
+<text class="sub" x="829.0" y="214.0" text-anchor="middle">d.now()  d.at(t)</text>
+<text class="sub" x="829.0" y="228.0" text-anchor="middle"></text>
+<text class="sub" x="829.0" y="242.0" text-anchor="middle">identical for</text>
+<text class="sub" x="829.0" y="256.0" text-anchor="middle">every source</text>
+</a>
+<path class="edge pillar" d="M 265 78.0 L 538 150" marker-end="url(#arrow-pillar)"/>
+<text class="edge-label pillar" x="420" y="82" text-anchor="middle">parameters</text>
+<path class="edge pillar" d="M 265 173.0 L 303 173.0" marker-end="url(#arrow-pillar)"/>
+<path class="edge pillar" d="M 265 268.0 L 303 268.0" marker-end="url(#arrow-pillar)"/>
+<path class="edge pillar" d="M 265 363.0 L 303 363.0" marker-end="url(#arrow-pillar)"/>
+<path class="edge pillar" d="M 495 250 L 538 250" marker-end="url(#arrow-pillar)"/>
+<text class="edge-label pillar" x="517.5" y="242" text-anchor="middle">data*</text>
+<path class="edge " d="M 730 215 L 768 215" marker-end="url(#arrow)"/>
+<text class="edge-label" x="750.0" y="205" text-anchor="middle">1 C call</text>
+<a href="inputs.html#exhaustion-and-extension" aria-label="on exhaustion"><title>on exhaustion</title>
+<rect class="box " x="540" y="345" width="190" height="56" rx="6" ry="6"/>
+<text class="title plain" x="635.0" y="370.0" text-anchor="middle">on exhaustion</text>
+<text class="sub" x="635.0" y="386.0" text-anchor="middle">fail · wrap · end_trial · extend</text>
+</a>
+<path class="edge dashed" d="M 635.0 320 L 635.0 343" marker-end="url(#arrow)"/>
+<text class="band-note" x="888" y="460" text-anchor="end">Swap or sweep sources without touching the model or recompiling. Click a box for details.</text>
+</svg></div>
