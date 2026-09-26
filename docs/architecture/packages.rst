@@ -209,7 +209,19 @@ per-trial default random stream. On the host they raise.
 ``cimba.diagrams``: structure diagrams
 --------------------------------------
 
-``mermaid(model)`` renders an ``Assembly`` as a Mermaid flowchart.
+Draws configured models without compiling them. It builds a non-strict
+``Assembly`` (unbound sources are allowed), then:
+
+* ``structure(model)`` turns the instance tree into a graph of ownership and
+  references;
+* ``process_graph(model)`` (``processes.py``) parses each process, event and
+  hook with ``ast`` and resolves attribute chains against the configured
+  objects. It follows children, references, list items, aliases, helper
+  functions and the keyword arguments of ``cb.spawn``, which bind a spawned
+  class's references and inputs.
+
+Both produce a renderer-neutral ``Graph`` (``graph.py``) that emits Mermaid
+or Graphviz DOT. The package depends only on ``modeling`` and ``schema``.
 
 The dependency graph
 --------------------

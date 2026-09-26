@@ -33,6 +33,24 @@ one you are in explains almost every rule in the library.
      - wall-clock time.
      - simulated time, advanced by the event loop.
 
+.. mermaid::
+
+   flowchart LR
+     subgraph host["Host world (Python)"]
+       direction TB
+       A["declare classes"] --> B["configure objects<br/>sweeps · sources · captures"]
+       B --> C["Experiment(...)"]
+       R["Results"] --> S["cimba.analysis"]
+     end
+     subgraph trial["Trial world (native)"]
+       direction TB
+       T1["trial (0, 0)"]
+       T2["trial (0, 1)"]
+       T3["trial (p, r) …"]
+     end
+     C -- "compile classes<br/>lay out blocks" --> trial
+     trial -- "outputs · inputs · captures" --> R
+
 You **configure** in the host world and **simulate** in the trial world. The
 bridge between them is the experiment: it snapshots your configured objects,
 compiles the classes, lays out one block of memory per trial, and hands the

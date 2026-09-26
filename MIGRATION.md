@@ -41,7 +41,7 @@ print(results[model].demand.source)
 print(results[model].demand.consumed)
 ```
 
-Configure parameters, sources, and captures through their objects. `cb.sweep` creates independent axes; `cb.sweeps` links axes. `Experiment` accepts run settings only. Replace `exp.trials`, `exp["name"]`, flattened component names, and result namespaces with the immutable object-indexed `Results`. Outputs have `(design points, replications)` samples. `results.failed` and `results.failure_reasons` identify failed trials; `experiment.only(trials=[i])` reruns a trial. Use `analysis.summary`, `analysis.compare`, `analysis.check_input`, and `inputs.fit` for post-run and input-model analysis. Reports belong in Python after the run; `cb.log` handles compiled trial logging.
+Configure parameters, sources, and captures through their objects. `cb.sweep` creates independent axes; `cb.sweeps` links axes. `Experiment` accepts run settings only. Replace `exp.trials`, `exp["name"]`, flattened component names, and result namespaces with the immutable object-indexed `Results`. Outputs have `(design points, replications)` samples. `results.failed` and `results.failure_reasons` identify failed trials; `experiment.only(trials=[i])` reruns a trial. Use `analysis.summary`, `analysis.compare`, `analysis.check_input`, and `inputs.fit` for post-run and input-model analysis. Replace `model.process_dag()` with `cimba.diagrams.process_graph(model)`; it renders with the same `to_mermaid()`/`to_dot()` methods and also draws spawned models and inputs. `cimba.diagrams.structure(model)` draws the object tree. Reports belong in Python after the run; `cb.log` handles compiled trial logging.
 
 ## Runtime and package changes
 

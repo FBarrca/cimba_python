@@ -55,3 +55,10 @@
 .cdiag a:focus .box { stroke: #2980b9; stroke-width: 2.6; }
 .cdiag-caption { font-size: 90%; color: #52606d; margin-top: -0.8em; margin-bottom: 1.5em; }
 .cdiag-legend { display: inline-block; width: 12px; height: 12px; border: 2px solid #e8871e; background: #fff1e0; border-radius: 3px; vertical-align: -2px; margin-right: 4px; }
+
+/* ---- Mermaid diagrams: natural size, scroll when wide ---- */
+.mermaid-container > pre > svg, pre.mermaid > svg {
+    height: auto !important;
+    max-height: 1100px;
+}
+.mermaid-container { overflow-x: auto; }

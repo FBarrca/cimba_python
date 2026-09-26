@@ -47,6 +47,9 @@ This table covers the most common changes:
      - ``results[model].x`` (immutable, object-indexed)
    * - in-trial reports
      - ``cimba.analysis`` after the run; ``cb.log`` for tracing
+   * - ``model.process_dag()`` with ``to_mermaid()``/``to_dot()``
+     - ``cimba.diagrams.process_graph(model)`` (same renderers, plus
+       spawned models and inputs); ``cimba.diagrams.structure(model)``
 
 Every tutorial script uses the 0.7 API. :doc:`tutorial/index` is a good way to
 relearn the library quickly.

@@ -4,6 +4,8 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT))                    # tutorial models for diagrams
+sys.path.insert(0, str(ROOT / "docs" / "ext"))
 
 project = "cimba"
 with (ROOT / "pyproject.toml").open("rb") as f:
@@ -15,7 +17,14 @@ extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.autosummary",
     "sphinx.ext.napoleon",
+    "sphinxcontrib.mermaid",
+    "cimba_diagrams",
 ]
+
+mermaid_light_theme = "neutral"
+mermaid_version = "11.12.1"
+mermaid_include_elk = True       # ELK lays out grouped process graphs far better
+mermaid_height = "auto"
 
 autosummary_generate = True
 autodoc_typehints = "description"

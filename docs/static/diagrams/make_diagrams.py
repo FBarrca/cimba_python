@@ -64,7 +64,7 @@ def layers():
             ("cimba.inputs", ["sources · fit"], "packages.html#arch-pkg-inputs", False),
             ("cimba.analysis", ["statistics · checks"], "packages.html#arch-pkg-analysis", False),
             ("cimba.random", ["in-model draws"], "packages.html#arch-pkg-random", False),
-            ("cimba.diagrams", ["structure"], "packages.html#arch-pkg-diagrams", False),
+            ("cimba.diagrams", ["structure · processes"], "packages.html#arch-pkg-diagrams", False),
         ]),
         ("Model core", "pure Python", "", [
             ("modeling", ["the language"], "packages.html#arch-pkg-modeling", False),
@@ -192,6 +192,42 @@ def pillar():
                "and applies its exhaustion policy.")
 
 
-for name, text in (("layers", layers()), ("pipeline", pipeline()), ("input_pillar", pillar())):
+# ---------------------------------------------------------------- timeline
+def timeline():
+    W, H = 900, 250
+    x0, y, h = 40, 70, 46
+    phases = [
+        ("warm-up", "processes run · statistics not kept", 170, "#eef2f7", "#9aa5b1"),
+        ("measurement (duration)", "time-weighted statistics recorded · datasets cleared at start", 360, "#e3f0fb", "#2980b9"),
+        ("cool-down", "work in flight finishes · datasets still record", 170, "#f5f7fa", "#9aa5b1"),
+        ("drain", "static processes stopped · events run out", 90, "#ffffff", "#b8c2cc"),
+    ]
+    out = ['<text class="band-label" x="40" y="24">One trial</text>']
+    x = x0
+    marks = [x0]
+    for title, note, w, fill, stroke in phases:
+        dash = ' stroke-dasharray="4 3"' if title == "drain" else ""
+        out.append(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="4" ry="4" style="fill:{fill};stroke:{stroke};stroke-width:1.4"{dash}/>')
+        out.append(f'<text class="title plain" x="{x + w / 2}" y="{y + 20}" text-anchor="middle">{escape(title)}</text>')
+        lines = [note] if w > 300 else note.split(" · ")
+        for i, line in enumerate(lines):
+            out.append(f'<text class="sub" x="{x + w / 2}" y="{y + h + 18 + i * 14}" text-anchor="middle">{escape(line)}</text>')
+        x += w
+        marks.append(x)
+    labels = ["t = 0", "warmup", "warmup + duration", "+ cooldown", ""]
+    for mx, label in zip(marks, labels):
+        out.append(f'<line x1="{mx}" y1="{y - 12}" x2="{mx}" y2="{y + h}" style="stroke:#52606d;stroke-width:1"/>')
+        if label:
+            out.append(f'<text class="edge-label" x="{mx}" y="{y - 18}" text-anchor="middle">{escape(label)}</text>')
+    out.append(box(x + 18, y, 110, h, "on_end", ["hooks, bottom-up"], "", None))
+    out.append(arrow([(x, y + h / 2), (x + 16, y + h / 2)]))
+    out.append(f'<text class="sub" x="{x0}" y="{y + h + 64}">on_start hooks run and processes start at t = 0. '
+               'Window.until_idle() has no warm-up or cool-down: it records from 0 until no events remain.</text>')
+    return svg(W, H - 40, "\n".join(out), ("timeline", "The measurement window of a trial"),
+               "A trial runs a warm-up, a measurement window, a cool-down and a drain phase, then on_end hooks.")
+
+
+for name, text in (("layers", layers()), ("pipeline", pipeline()), ("input_pillar", pillar()),
+                   ("timeline", timeline())):
     (OUT / f"{name}.svg.html").write_text(text)
     print(name, len(text))

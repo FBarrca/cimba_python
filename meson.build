@@ -90,7 +90,10 @@ py.install_sources('src/cimba/compiler/__init__.py',
                    'src/cimba/compiler/spawning.py', subdir: 'cimba/compiler')
 py.install_sources('src/cimba/results/__init__.py', subdir: 'cimba/results')
 py.install_sources('src/cimba/analysis/__init__.py', subdir: 'cimba/analysis')
-py.install_sources('src/cimba/diagrams/__init__.py', subdir: 'cimba/diagrams')
+py.install_sources('src/cimba/diagrams/__init__.py',
+                   'src/cimba/diagrams/graph.py',
+                   'src/cimba/diagrams/processes.py',
+                   subdir: 'cimba/diagrams')
 
 # The only native artifact has no Python headers or interpreter linkage.
 cimba_native_lib = shared_library(

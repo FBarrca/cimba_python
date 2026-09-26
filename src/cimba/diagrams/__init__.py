@@ -1,4 +1,11 @@
-"""Mermaid diagrams of a configured model's static object graph."""
+"""Diagrams of configured models: structure and process interactions.
+
+``structure(model)`` draws the object tree: which model owns which, and which
+references which. ``process_graph(model)`` infers how processes interact with
+entities, inputs and spawned models from their source. Both return a
+:class:`Graph` that renders to Mermaid (``to_mermaid``) or Graphviz DOT
+(``to_dot``). Nothing is compiled or run.
+"""
 
 from __future__ import annotations
 
@@ -7,30 +14,35 @@ from typing import get_origin
 from cimba.modeling import Model, Ref
 from cimba.schema import Assembly
 
+from .graph import Edge, Graph, Group, Node
+from .processes import process_graph
 
-def mermaid(model: Model) -> str:
-    assembly = Assembly.of(model)
-    identifiers = {instance.model: f"n{index}"
-                   for index, instance in enumerate(assembly.instances)}
-    lines = ["flowchart TD"]
+
+def structure(model: Model) -> Graph:
+    """The configured object tree: solid edges own, dotted edges reference."""
+    assembly = Assembly.of(model, strict=False)
+    nodes = tuple(Node(instance.label, f"{instance.label}: {instance.schema.cls.__name__}",
+                       "instance") for instance in assembly.instances)
+    label = {instance.model: instance.label for instance in assembly.instances}
+    edges = []
     for instance in assembly.instances:
-        label = instance.label.replace('"', "&quot;")
-        lines.append(f'  {identifiers[instance.model]}["{label}: '
-                     f'{instance.schema.cls.__name__}"]')
-    for instance in assembly.instances:
-        source = identifiers[instance.model]
         for field in instance.schema.fields:
             value = instance.values[field.name]
             if field.kind in {"child", "ref"} and value is not None:
-                style = "-->" if field.kind == "child" else "-.->"
-                lines.append(f"  {source} {style}|{field.name}| {identifiers[value]}")
+                style = "solid" if field.kind == "child" else "dotted"
+                edges.append(Edge(instance.label, label[value], field.name, style))
             elif field.kind == "collection":
-                style = "-.->" if get_origin(field.value_type) is Ref else "-->"
+                style = "dotted" if get_origin(field.value_type) is Ref else "solid"
                 for index, member in enumerate(value or ()):
                     if member is not None:
-                        lines.append(f"  {source} {style}|{field.name}[{index}]| "
-                                     f"{identifiers[member]}")
-    return "\n".join(lines)
+                        edges.append(Edge(instance.label, label[member],
+                                          f"{field.name}[{index}]", style))
+    return Graph(nodes, tuple(edges))
 
 
-__all__ = ["mermaid"]
+def mermaid(model: Model) -> str:
+    """Mermaid flowchart text of :func:`structure` (kept for convenience)."""
+    return structure(model).to_mermaid()
+
+
+__all__ = ["Edge", "Graph", "Group", "Node", "mermaid", "process_graph", "structure"]

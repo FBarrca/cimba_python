@@ -7,8 +7,8 @@ A production line is a chain of stations. Parts arrive, wait, get processed,
 and move on. Throughput is limited by the slowest station, the
 **bottleneck**, and finding it is the first question anyone asks. This chapter
 builds a three-station line where individual parts flow between stations,
-then uses captured data, a structure diagram and a crossed sweep to find the
-bottleneck and fix it.
+then uses captured data, diagrams and a crossed sweep to find the bottleneck
+and fix it.
 
 The full script is ``tutorial/tut_5_1.py``.
 
@@ -87,35 +87,36 @@ Seeing the structure
 --------------------
 
 When a model has more than a couple of parts, a picture helps.
-:func:`cimba.diagrams.mermaid` draws the configured object graph as a
-`Mermaid <https://mermaid.js.org/>`_ flowchart:
+``cimba.diagrams`` draws two, straight from the configured model, without
+compiling or running it:
 
 .. code-block:: python
 
-   from cimba.diagrams import mermaid
-   print(mermaid(AssemblyLine()))
+   from cimba import diagrams
 
-.. code-block:: text
+   line = AssemblyLine()
+   print(diagrams.structure(line).to_mermaid())       # who owns and references whom
+   print(diagrams.process_graph(line).to_mermaid())   # how processes interact
 
-   flowchart TD
-     n0["assemblyline: AssemblyLine"]
-     n1["assemblyline.finished_parts: FinishedParts"]
-     n2["assemblyline.station_1: Station"]
-     n3["assemblyline.station_2: Station"]
-     n4["assemblyline.station_3: Station"]
-     n0 -->|finished_parts| n1
-     n0 -->|station_1| n2
-     n0 -->|station_2| n3
-     n0 -->|station_3| n4
-     n1 -.->|line| n0
-     n2 -.->|downstream| n3
-     n3 -.->|downstream| n4
-     n4 -.->|finished| n1
-
-Solid arrows are ownership (children); dotted arrows are references. The
+The **structure** shows ownership (solid) and references (dotted). The
 labels, ``assemblyline.station_2`` and so on, are the **canonical paths**
-Cimba uses in error messages and provenance. Paste the text into any Mermaid
-viewer, or GitHub Markdown, to render it.
+Cimba uses in error messages and provenance:
+
+.. cimba-diagram:: tutorial.tut_5_1:AssemblyLine
+   :kind: structure
+   :direction: LR
+
+The **process graph** follows a part through the line. Arrivals spawn it and
+put it in station 1's inbox. Each server gets it, acquires its resource,
+reads a processing time and puts the part downstream, until the finishing
+process records the cycle time:
+
+.. cimba-diagram:: tutorial.tut_5_1:AssemblyLine
+   :direction: LR
+
+Both return a :class:`cimba.diagrams.Graph` that renders to Mermaid or
+Graphviz DOT. The script saves both as ``.mmd`` files next to its plots. See
+:doc:`../guides/diagrams` for everything they can show.
 
 Reading the results
 -------------------
@@ -208,8 +209,8 @@ What you learned
 * ``Ref[M] | None`` expresses optional links; undeclared attributes stay in
   Python.
 * Captured datasets and containers give per-trial raw data for plots.
-* :func:`cimba.diagrams.mermaid` shows the configured structure and its
-  canonical paths.
+* ``cimba.diagrams.structure`` and ``process_graph`` draw the configured
+  structure and the process interactions.
 * Independent sweeps cross into a full factorial design, and sweeping input
   *sources* is as easy as sweeping parameters.
 

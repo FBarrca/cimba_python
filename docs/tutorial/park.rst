@@ -29,7 +29,13 @@ The scenario, from the C library's tutorial 3:
   - **jockeying**: switching to a shorter line after waiting a while;
   - **reneging**: giving up and walking away after waiting too long.
 
-The full script is ``tutorial/tut_3_1.py``.
+The full script is ``tutorial/tut_3_1.py``. Here is its process graph. The
+park spawns visitors; each visitor may join, and leave, any of the eleven ride
+lines and records its day in the park's datasets. Each line feeds its ride
+servers.
+
+.. cimba-diagram:: tutorial.tut_3_1:Park
+   :direction: LR
 
 .. contents:: In this chapter
    :local:
