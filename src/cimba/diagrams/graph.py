@@ -59,6 +59,14 @@ def _mermaid_text(text: str) -> str:
     return text.replace('"', "&quot;")
 
 
+def _mermaid_edge_label(text: str) -> str:
+    # Brackets, parentheses, braces, pipes and angle brackets break an unquoted
+    # edge label, e.g. the list-item labels of structure() ("stations[1]").
+    if any(ch in text for ch in '()[]{}|<>"'):
+        return f'|"{_mermaid_text(text)}"|'
+    return f"|{text}|"
+
+
 def _dot_text(text: str) -> str:
     return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
@@ -126,7 +134,7 @@ class Graph:
                      if node.group not in grouped)
         for edge in self.edges:
             arrow = "-.->" if edge.style == "dotted" else "-->"
-            label = f"|{_mermaid_text(edge.label)}|" if edge.label else ""
+            label = _mermaid_edge_label(edge.label) if edge.label else ""
             lines.append(f"  {ids[edge.source]} {arrow}{label} {ids[edge.target]}")
         return "\n".join(lines)
 

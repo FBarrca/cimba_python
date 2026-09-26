@@ -120,15 +120,8 @@ class Visitor(cb.Model):
             if at == IDX_EXIT:
                 break
 
-            chosen = np.int64(0)
-            shortest = 1_000_000
-            for index in range(len(self.park.ride_queues)):
-                ride = self.park.ride_queues[index]
-                if ride.attraction == at:
-                    length = ride.line.length()
-                    if length < shortest:
-                        chosen = np.int64(index)
-                        shortest = length
+            chosen = self.park.shortest_line(at)
+            shortest = self.park.ride_queues[chosen].line.length()
             if shortest > self.patience * BALKING_THRESHOLD:
                 self.park.balks += 1
                 continue
@@ -141,15 +134,8 @@ class Visitor(cb.Model):
             while True:
                 signal = cb.suspend()
                 if signal == TIMER_JOCKEYING:
-                    replacement = chosen
-                    replacement_length = shortest
-                    for index in range(len(self.park.ride_queues)):
-                        ride = self.park.ride_queues[index]
-                        if ride.attraction == at:
-                            length = ride.line.length()
-                            if length < replacement_length:
-                                replacement = np.int64(index)
-                                replacement_length = length
+                    replacement = self.park.shortest_line(at)
+                    replacement_length = self.park.ride_queues[replacement].line.length()
                     if replacement != chosen and (
                         replacement_length < line.position(ticket)
                     ):
@@ -260,6 +246,20 @@ class Park(cb.Model):
             for attraction in range(1, NUM_ATTRACTIONS + 1)
             for _ in range(int(NUM_QUEUES[attraction]))
         ]
+
+    @cb.function
+    def shortest_line(self, attraction: int) -> int:
+        """Index of the shortest line serving ``attraction``."""
+        chosen = 0
+        shortest = 1_000_000
+        for index in range(len(self.ride_queues)):
+            ride = self.ride_queues[index]
+            if ride.attraction == attraction:
+                length = ride.line.length()
+                if length < shortest:
+                    chosen = index
+                    shortest = length
+        return chosen
 
     @cb.process
     def arrivals(self):

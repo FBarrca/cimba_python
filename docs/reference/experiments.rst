@@ -9,8 +9,10 @@ Sweeps
 .. function:: sweep(*values)
 
    Create an independent design axis. Assign it to a ``Param`` field, a
-   distribution parameter, or an ``Input``/``Series`` field (as a sweep of
-   sources). Independent sweeps cross.
+   distribution parameter, an ``Input``/``Series`` field (as a sweep of
+   sources), or a ``Ref`` field (as a sweep of models in the tree).
+   Independent sweeps cross. ``Results.levels`` returns the swept values,
+   including the model objects of a reference sweep.
 
    The returned object has ``values`` and one method:
 

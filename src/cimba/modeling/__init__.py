@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from itertools import count
-from typing import Any, Generic, TypeVar, get_args, get_origin, get_type_hints
+from types import UnionType
+from typing import Any, Generic, TypeVar, Union, get_args, get_origin, get_type_hints
 
 T = TypeVar("T")
 M = TypeVar("M", bound="Model")
@@ -243,6 +244,19 @@ predicate = _role("predicate")
 event = _role("event")
 
 
+def function(method):
+    """Make a method callable from compiled model code, with dynamic dispatch.
+
+    Parameters and the return value must be annotated with ``float``, ``int``,
+    ``bool`` or a model class (``None`` for no return value). Subclasses may
+    override it with the same signature; calls through a base-typed reference
+    or list run the implementation of the model's actual class. On the host
+    the method stays an ordinary Python method.
+    """
+    method.cimba_role = "function"
+    return method
+
+
 def hold(duration: float) -> int:
     raise NotInCompiledCode("hold() is available only in compiled model code")
 
@@ -306,14 +320,25 @@ class Model(metaclass=ModelMeta):
             except (NameError, AttributeError):
                 annotations.update(getattr(cls, "__annotations__", {}))
         declaration = annotations.get(name)
+        optional = False
+        if get_origin(declaration) in (UnionType, Union):
+            members = [m for m in get_args(declaration) if m is not type(None)]
+            if len(members) == 1:
+                optional = len(members) != len(get_args(declaration))
+                declaration = members[0]
         origin = get_origin(declaration) or declaration
         if origin is Param:
             pass
+        elif origin is Ref and isinstance(value, Sweep):
+            allowed = [x for x in value.values if not (optional and x is None)]
+            if not all(isinstance(x, Model) for x in allowed):
+                raise TypeError(f"{type(self).__name__}.{name} sweep must contain models"
+                                + (" or None" if optional else ""))
         elif origin in (Input, Series):
             if not isinstance(value, (Source, Sweep)):
                 raise TypeError(f"{type(self).__name__}.{name} expects an input source or sweep")
             if isinstance(value, Sweep) and not all(isinstance(x, Source) for x in value.values):
                 raise TypeError(f"{type(self).__name__}.{name} sweep must contain sources")
         elif isinstance(value, Sweep):
-            raise TypeError(f"{type(self).__name__}.{name} is not a Param or input")
+            raise TypeError(f"{type(self).__name__}.{name} is not a Param, Ref or input")
         object.__setattr__(self, name, value)

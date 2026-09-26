@@ -16,9 +16,10 @@ Model
    annotations and behavior with decorated methods. Constructing an instance
    has no side effects: nothing is compiled or run until an experiment runs.
 
-   Assigning attributes is validated: a :class:`Sweep <sweep>` is accepted
-   only by ``Param``, ``Input`` and ``Series`` fields, and ``Input``/``Series``
-   fields accept only sources or sweeps of sources.
+   Assigning attributes is validated: a :func:`sweep` is accepted only by
+   ``Param``, ``Input``, ``Series`` and ``Ref`` fields. ``Input``/``Series``
+   fields accept only sources or sweeps of sources; a ``Ref`` sweep must
+   contain models (and ``None`` if the reference is optional).
 
    .. method:: describe()
 
@@ -46,7 +47,8 @@ Field types
 
    A reference to another model instance of class ``M`` (or a subclass).
    Write ``cb.Ref[M] | None`` for an optional reference. Forward references
-   by string are allowed: ``cb.Ref["Harbor"]``.
+   by string are allowed: ``cb.Ref["Harbor"]``. It may be assigned a
+   :func:`sweep` of models in the tree, one per design point.
 
 .. class:: Input[T]
 
@@ -226,6 +228,17 @@ Decorators
 .. decorator:: event
 
    A method run at a time set with :func:`schedule`. It must not block.
+
+.. decorator:: function
+
+   A method callable from compiled code as ``model.name(args)``. Every
+   parameter is annotated ``float``, ``int``, ``bool`` or a model class, and
+   the return type is one of those or ``None``. Scalar parameters may have
+   defaults; arguments are positional. Subclasses may override it with the
+   same signature (and the decorator). Calls dispatch on the model's actual
+   class, so a base-typed reference or list item runs its subclass's
+   override. Functions may block. On the host it is an ordinary method. The
+   name must not be a field name or a name reserved by :class:`Model`.
 
 Verbs
 -----

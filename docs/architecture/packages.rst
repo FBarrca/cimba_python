@@ -90,8 +90,9 @@ Two frozen descriptions, built from Python objects by reflection:
 ``ClassSchema.of(cls)``
    Per class, and cached: every field with its kind, value type, default,
    series step and origin, and optionality, plus processes (with copies and
-   priority), hooks, predicates and events, gathered through the class
-   hierarchy.
+   priority), hooks, predicates, events and functions (with their annotated
+   signatures), gathered through the class hierarchy. ``slots`` fixes the
+   dispatch-table order so subclasses stay compatible with their bases.
 
 ``Assembly.of(root)``
    Per experiment: a snapshot of the configured tree. It holds every static
@@ -135,6 +136,11 @@ Compiles each model **class** once and never looks at instances or sources.
   ``Series.now`` and ``Resource.acquire``, and implement the verbs. Each maps
   to one external C call. Misuse (a ``Store[Part]`` given a ``Ship``) is a
   typing error at compile time.
+* **Functions** (``functions.py``): ``@function`` support. It compiles each
+  class's implementations behind a fixed C calling convention derived from
+  the annotations, and lowers ``view.f(args)`` to an indirect call through
+  the record's dispatch table. Calls are typed under a private key, so a
+  function named like an entity method (``get``, ``level``) can't shadow it.
 * **Spawning** (``spawning.py``): typing and lowering for
   ``cb.spawn(ModelClass, ...)``, which checks keyword fields against the
   schema at compile time.

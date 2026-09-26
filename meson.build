@@ -87,7 +87,8 @@ py.install_sources('src/cimba/compiler/__init__.py',
                    'src/cimba/compiler/classes.py',
                    'src/cimba/compiler/numba_compat.py',
                    'src/cimba/compiler/views.py',
-                   'src/cimba/compiler/spawning.py', subdir: 'cimba/compiler')
+                   'src/cimba/compiler/spawning.py',
+                   'src/cimba/compiler/functions.py', subdir: 'cimba/compiler')
 py.install_sources('src/cimba/results/__init__.py', subdir: 'cimba/results')
 py.install_sources('src/cimba/analysis/__init__.py', subdir: 'cimba/analysis')
 py.install_sources('src/cimba/diagrams/__init__.py',

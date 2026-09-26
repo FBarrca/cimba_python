@@ -49,12 +49,18 @@ Sweeps
 * a distribution parameter:
   ``inputs.dist.exponential(mean=cb.sweep(1.0, 2.0))``;
 * an ``Input`` or ``Series`` field, as a sweep of **sources**:
-  ``model.demand = cb.sweep(trace_source, bootstrap_source)``.
+  ``model.demand = cb.sweep(trace_source, bootstrap_source)``;
+* a ``Ref`` field, as a sweep of **models in the tree**:
+  ``store.policy = cb.sweep(*study.candidates)``. This is how you compare
+  model classes, such as policies written as polymorphic ``@cb.function``
+  methods, in one experiment (see :doc:`../guides/policies`).
 
-Assigning a sweep anywhere else (``State``, constants, entity capacities) is
-a ``TypeError`` at that line. Those define the model's *structure*, which is
-fixed for an experiment. To compare structural variants, build one model per
-variant and run each with the same seed (see :doc:`../guides/comparing`).
+Assigning a sweep anywhere else (``State``, constants, children, entity
+capacities) is a ``TypeError`` at that line. Those define the model's
+*structure*, which is fixed for an experiment. To compare structural
+variants, either put every variant in the tree and sweep a reference to it,
+or build one model per variant and run each with the same seed (see
+:doc:`../guides/comparing`).
 
 **Crossing.** Independent sweeps combine as a full factorial. Two sweeps of 3
 and 4 values give 12 design points. Points are ordered like nested loops, the

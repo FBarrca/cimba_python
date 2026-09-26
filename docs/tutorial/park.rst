@@ -87,7 +87,7 @@ itself:
 
 .. literalinclude:: ../../tutorial/tut_3_1.py
    :pyobject: Visitor.visit
-   :lines: 70-75
+   :lines: 56-61
    :dedent: 4
 
 ``cb.release(model)`` stops the model's processes. When a process releases its
@@ -132,7 +132,7 @@ alarms on its own process and goes to sleep:
 
 .. literalinclude:: ../../tutorial/tut_3_1.py
    :pyobject: Visitor.visit
-   :lines: 36-68
+   :lines: 23-54
    :dedent: 4
 
 ``me.timer_set(delay, signal)`` arranges for the process to be woken with
@@ -159,6 +159,25 @@ pending alarms and resumes it when the ride is over:
 This pattern of *enqueue, arm timers, suspend, and let whoever finishes first
 decide* is how you model patience, timeouts and service-level deadlines in
 Cimba.
+
+Sharing logic with a function
+-----------------------------
+
+The visitor needs the shortest line serving an attraction twice: once to
+join a line and again, when the jockeying timer fires, to look for a better
+one. That search belongs to the park, so it's written once, as a
+``@cb.function`` on ``Park``:
+
+.. literalinclude:: ../../tutorial/tut_3_1.py
+   :pyobject: Park.shortest_line
+   :dedent: 4
+
+The visitor calls it through its reference, ``self.park.shortest_line(at)``,
+exactly as you would call a method in Python. A ``@cb.function`` is compiled
+with its class and can be called from processes, hooks, events, predicates
+and other functions. It can even block. Its parameters and return value are
+annotated (``int``, ``float``, ``bool`` or a model class). As you'll see in
+:doc:`../guides/policies`, that is also what lets a subclass override it.
 
 Several servers per line
 ------------------------
@@ -231,6 +250,7 @@ What you learned
   and ``cancel`` let items leave a line.
 * ``timer_set``, ``suspend``, ``resume`` and ``timers_clear`` express
   patience and deadlines.
+* ``@cb.function`` shares logic between processes; it's called like a method.
 * ``@cb.process(copies=n)`` runs several identical processes; subclasses can
   override processes; ``list[Base]`` holds mixed subclasses.
 * The cooldown lets in-flight work finish after the measurement window.

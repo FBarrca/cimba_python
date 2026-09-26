@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import get_origin
 
-from cimba.modeling import Model, Ref
+from cimba.modeling import Model, Ref, Sweep
 from cimba.schema import Assembly
 
 from .graph import Edge, Graph, Group, Node
@@ -28,7 +28,12 @@ def structure(model: Model) -> Graph:
     for instance in assembly.instances:
         for field in instance.schema.fields:
             value = instance.values[field.name]
-            if field.kind in {"child", "ref"} and value is not None:
+            if field.kind == "ref" and isinstance(value, Sweep):
+                for choice in value.values:
+                    if choice is not None:
+                        edges.append(Edge(instance.label, label[choice],
+                                          f"{field.name} (sweep)", "dotted"))
+            elif field.kind in {"child", "ref"} and value is not None:
                 style = "solid" if field.kind == "child" else "dotted"
                 edges.append(Edge(instance.label, label[value], field.name, style))
             elif field.kind == "collection":

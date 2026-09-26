@@ -17,6 +17,9 @@ The file names intentionally match the upstream C tutorial sequence:
   process-graph outputs.
 - `multi_echelon_inventory.py` drives a six-node network with a joint
   stationary bootstrap of demand and an independent lead-time bootstrap.
+- `policy_comparison.py` compares three inventory policies written as
+  polymorphic `@cb.function` overrides, in one experiment, by sweeping the
+  store's `policy` reference.
 
 Run from the repository root, for example:
 
