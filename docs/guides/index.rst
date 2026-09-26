@@ -13,6 +13,8 @@ Short, focused recipes. Each one assumes you know the basics from the
      - Choose, fit and check an input model before trusting it.
    * - :doc:`comparing`
      - Compare scenarios and input models with paired statistics.
+   * - :doc:`diagrams`
+     - Draw a model's structure and its process interactions.
    * - :doc:`captures`
      - Keep raw histories and plot them.
    * - :doc:`debugging`
@@ -28,6 +30,7 @@ Short, focused recipes. Each one assumes you know the basics from the
    recorded_data
    input_models
    comparing
+   diagrams
    captures
    debugging
    custom_sources

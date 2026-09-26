@@ -137,6 +137,32 @@ Where the paths meet: inside ``run()``
      copy outputs, cursors, captures, statuses out of the blocks
    assemble immutable Results (joined across chunks)
 
+The same flow as a sequence diagram:
+
+.. mermaid::
+
+   sequenceDiagram
+     participant U as your code
+     participant E as experiments
+     participant C as compiler
+     participant I as cimba.inputs
+     participant N as libcimba_py
+     U->>E: Experiment(model, ...).run()
+     E->>C: ensure(ClassSchema) per class
+     C-->>E: CompiledClass (cached)
+     loop each chunk of replications
+       E->>I: generate(rngs, length) per row source
+       I-->>E: rows, one per replication
+       E->>E: allocate and bind trial blocks
+       E->>N: cpy_run(blocks, workers), GIL released
+       N-->>E: statuses, outputs, cursors, captures
+       opt a trial exhausted an extendable input
+         E->>I: generate(rngs, 2 × length)
+         E->>N: rerun that trial
+       end
+     end
+     E-->>U: Results
+
 A few properties fall out of this design:
 
 * **Workers never touch Python.** Everything a trial needs is in its block

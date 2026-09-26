@@ -20,7 +20,14 @@ every mechanism in it shows up in serious models:
 * A **cat** naps, wakes at random and chases a random rodent, **interrupting**
   whatever it was doing.
 
-The complete script is ``tutorial/tut_2_1.py``.
+The complete script is ``tutorial/tut_2_1.py``. Drawn with
+:func:`cimba.diagrams.process_graph`, the model is seven foraging processes,
+one per rodent, all acquiring, preempting and releasing one shared pile of
+cheese. The cat's interrupts go through process handles, which the static
+diagram can't follow.
+
+.. cimba-diagram:: tutorial.tut_2_1:CheeseGame
+   :direction: LR
 
 .. contents:: In this chapter
    :local:

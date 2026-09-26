@@ -29,17 +29,14 @@ are. The full script is ``tutorial/tut_4_1.py``.
 Designing the model tree
 ------------------------
 
-Start with the parts and how they relate, not the code:
+Start with the parts and how they relate, not the code. The harbor owns three
+parts, and ships are spawned into it during the trial:
 
-.. code-block:: text
+.. cimba-diagram:: tutorial.tut_4_1:Harbor
+   :kind: structure
+   :direction: LR
 
-   Harbor (root: parameters, outputs)
-   ├── sea: SeaConditions        weather and tide processes
-   ├── facilities: HarborFacilities   tugs, berths, radio, harbormaster
-   └── traffic: ShipTraffic      arrivals, departures, time-in-harbor data
-          ⋯ spawns Ship models during the trial
-
-Each part is a model class. The root owns the three parts as **children** and
+Solid arrows mean *owns*; dotted arrows are references. Each part is a model class. The root owns the three parts as **children** and
 builds them in its constructor:
 
 .. literalinclude:: ../../tutorial/tut_4_1.py
@@ -140,6 +137,17 @@ Once cleared, the ship grabs what it needs in order, and releases in order:
 Every duration comes from an input on ``ShipTraffic``. The ship reaches them
 through its reference: ``self.harbor.traffic.unload_large.next()``. Inputs are
 fields like any other, so they can live wherever they belong conceptually.
+
+The whole picture
+-----------------
+
+With all the processes written, :func:`cimba.diagrams.process_graph` shows
+how they meet. Each ship's single ``voyage`` process touches every facility,
+every traffic input and both datasets. Weather and tide run on their own and
+talk to the ships only through the harbormaster condition.
+
+.. cimba-diagram:: tutorial.tut_4_1:Harbor
+   :direction: LR
 
 Ships as values in a store
 --------------------------

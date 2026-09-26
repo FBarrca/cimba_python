@@ -50,6 +50,14 @@ In Cimba Python, each of those becomes one line or one method of a
    :caption: tutorial/tut_1_1.py
    :linenos:
 
+Before reading it line by line, here is the model as
+:func:`cimba.diagrams.process_graph` draws it straight from this code:
+inputs feed processes, the arrival process puts into the queue, and the
+service process gets from it.
+
+.. cimba-diagram:: tutorial.tut_1_1:MM1
+   :direction: LR
+
 Let's go through it.
 
 **Inputs** (lines 2–3). ``interarrival`` and ``service_time`` are the two
@@ -131,16 +139,8 @@ How a trial runs, and how it stops
 Both processes loop forever, so what stops the simulation? The
 **measurement window** does. Every trial follows the same timeline:
 
-.. code-block:: text
-
-   t = 0                 warmup           warmup + duration          + cooldown
-   │  on_start hooks       │                       │                       │
-   │  processes start      │  statistics recorded  │                       │ processes
-   │ ─── warm-up ───────── │ ─── measurement ───── │ ─── cool-down ─────── │ stopped
-   │  (stats not kept)     │                       │ (stats frozen)        │
-                                                                           ▼
-                                                        remaining events drain,
-                                                        then on_end hooks run
+.. raw:: html
+   :file: ../static/diagrams/timeline.svg.html
 
 1. Entities are created and every ``@cb.on_start`` hook runs.
 2. All ``@cb.process`` methods start at time 0.

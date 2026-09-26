@@ -6,7 +6,7 @@ import numpy as np
 
 import cimba as cb
 from cimba import inputs
-from cimba.diagrams import mermaid
+from cimba.diagrams import process_graph, structure
 
 
 RANDOM_SEED = 45
@@ -179,7 +179,9 @@ def main() -> None:
         raise RuntimeError(f"{results.failed.sum()} assembly trials failed")
     print_results(model, results)
     PLOT_DIR.mkdir(parents=True, exist_ok=True)
-    (PLOT_DIR / "process_graph.mmd").write_text(mermaid(model) + "\n")
+    (PLOT_DIR / "structure.mmd").write_text(structure(model).to_mermaid() + "\n")
+    (PLOT_DIR / "process_graph.mmd").write_text(
+        process_graph(model).to_mermaid("LR") + "\n")
 
 
 if __name__ == "__main__":

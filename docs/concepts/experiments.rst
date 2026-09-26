@@ -88,6 +88,9 @@ The measurement window
 
 :class:`~cimba.Window` sets how long each trial runs and when it measures:
 
+.. raw:: html
+   :file: ../static/diagrams/timeline.svg.html
+
 .. code-block:: python
 
    cb.Window(warmup=100.0, duration=1_000.0, cooldown=50.0)

@@ -93,8 +93,74 @@ cimba.diagrams
 
 .. module:: cimba.diagrams
 
+Draw configured models. Nothing is compiled or run, and input sources need
+not be bound yet. See :doc:`../guides/diagrams`.
+
+.. function:: structure(model)
+
+   The object tree: one ``"instance"`` node per static model instance
+   (labelled ``path: Class``), solid edges to children and list items, dotted
+   edges for references. Returns a :class:`Graph`.
+
+.. function:: process_graph(model, *, state=False, hooks=False)
+
+   Interactions inferred from the source of every process and event,
+   resolved against the configured objects. Nodes: processes, entities,
+   inputs (with their source), events, and ``new X`` nodes for spawned model
+   classes, grouped by model instance and by spawned class. Edges are
+   labelled with the operation (``put``, ``get``, ``acquire``, ``release``,
+   ``preempt``, ``enqueue``, ``cancel``, ``wait``, ``signal``, ``record``,
+   ``next``, ``now``, ``at``, ``spawn``, ``schedule``, and ``write`` with
+   ``state=True``) and point the way things flow. ``hooks=True`` adds
+   ``on_start``/``on_end`` hooks as actors. Returns a :class:`Graph`.
+
 .. function:: mermaid(model)
 
-   A Mermaid ``flowchart`` of the configured model tree: one node per static
-   instance labelled ``path: Class``, solid edges for children, dotted edges
-   for references.
+   Shortcut for ``structure(model).to_mermaid()``.
+
+.. class:: Graph
+
+   .. attribute:: nodes
+
+      Tuple of :class:`Node`.
+
+   .. attribute:: edges
+
+      Tuple of :class:`Edge`.
+
+   .. attribute:: groups
+
+      Tuple of :class:`Group`.
+
+   .. method:: node(key)
+
+      The node with that key.
+
+   .. method:: to_mermaid(direction="TD")
+
+      Mermaid ``flowchart`` text (``TD``, ``LR``, …); groups become
+      subgraphs.
+
+   .. method:: to_dot(rankdir="TB")
+
+      Graphviz DOT text; groups become clusters (dashed for spawned classes).
+
+   .. method:: topological_order()
+
+      Node keys in flow order; ``ValueError`` if the graph has a cycle.
+
+.. class:: Node
+
+   ``key`` (a canonical path such as ``harbor.facilities.tugs`` or
+   ``Ship.voyage``), ``label``, ``kind`` (``instance``, ``process``,
+   ``hook``, ``event``, ``entity``, ``input``, ``state`` or ``model``) and
+   ``group``.
+
+.. class:: Edge
+
+   ``source``, ``target``, ``label`` and ``style`` (``"solid"`` or
+   ``"dotted"``).
+
+.. class:: Group
+
+   ``key``, ``label`` and ``kind`` (``"model"`` or ``"spawned"``).

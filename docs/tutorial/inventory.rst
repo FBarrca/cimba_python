@@ -99,6 +99,15 @@ time 1. The customer-service process holds for a day and then reads
    :pyobject: StockingFacility.serve_customer
    :dedent: 4
 
+Here is the whole model as :func:`cimba.diagrams.process_graph` sees it,
+before any data is bound (hence ``demand · no source``). Each stocking
+facility's ``place_order`` spawns an ``Order`` and puts it into its
+upstream's ``orders`` store. ``fulfill_orders`` gets orders and spawns
+``Shipment`` models, which read the lead-time input and hand themselves back
+to the network:
+
+.. cimba-diagram:: tutorial.multi_echelon_inventory:MultiEchelonInventory
+
 Look at what this code does **not** contain: no array, no day counter, no
 check for the end of the data. It asks for today's demand and gets it.
 

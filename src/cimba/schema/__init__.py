@@ -131,7 +131,12 @@ class Assembly:
     by_object: MappingProxyType
 
     @classmethod
-    def of(cls, root: Model) -> "Assembly":
+    def of(cls, root: Model, *, strict: bool = True) -> "Assembly":
+        """Snapshot the configured tree rooted at ``root``.
+
+        With ``strict=False`` missing sources, parameters, initial states and
+        required references are tolerated (used to draw unfinished models).
+        """
         if not isinstance(root, Model):
             raise ModelDefinitionError("experiment root must be a Model")
         instances: list[Instance] = []
@@ -157,7 +162,11 @@ class Assembly:
                     if not isinstance(value, entity_type):
                         raise ModelDefinitionError(
                             f"{label}.{field.name}: expected {entity_type.__name__}")
-                if field.kind in {"input", "series"}:
+                if field.kind in {"input", "series"} and not strict and (
+                    value is None or type(value) is Series
+                ):
+                    pass
+                elif field.kind in {"input", "series"}:
                     if type(value) is Series:
                         raise ModelDefinitionError(f"{label}.{field.name}: input source missing")
                     if not isinstance(value, (Source, Sweep)):
@@ -167,9 +176,9 @@ class Assembly:
                         raise ModelDefinitionError(f"{label}.{field.name}: invalid source")
                     if field.kind == "series" and field.step is None:
                         raise ModelDefinitionError(f"{label}.{field.name}: Series step missing")
-                elif field.kind == "param" and value is None:
+                elif field.kind == "param" and value is None and strict:
                     raise ModelDefinitionError(f"{label}.{field.name}: parameter missing")
-                elif field.kind == "state" and value is None:
+                elif field.kind == "state" and value is None and strict:
                     raise ModelDefinitionError(f"{label}.{field.name}: initial state missing")
                 elif field.kind == "child":
                     if not isinstance(value, field.value_type):
@@ -208,7 +217,7 @@ class Assembly:
             for field in instance.schema.fields:
                 if field.kind == "ref":
                     target = instance.values[field.name]
-                    if target is None and not field.optional:
+                    if target is None and not field.optional and strict:
                         raise ModelDefinitionError(
                             f"{instance.label}.{field.name}: reference missing")
                     if target is not None and not isinstance(target, field.value_type):

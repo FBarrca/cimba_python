@@ -81,6 +81,21 @@ The callback:
 * frees spawned models, input histories, captures, process and entity
   tables, and the random stream.
 
+.. mermaid::
+
+   stateDiagram-v2
+     direction LR
+     [*] --> PENDING
+     PENDING --> RUNNING: cpy_run
+     RUNNING --> OK: event loop done, on_end ran
+     RUNNING --> FAILED: engine error or input "fail"
+     RUNNING --> EXHAUSTED: input "extend" ran out
+     RUNNING --> ENDED: input "end_trial" ran out
+     EXHAUSTED --> RUNNING: host regenerates rows 2×, reruns
+     OK --> [*]
+     FAILED --> [*]
+     ENDED --> [*]
+
 Every native object is created and destroyed exactly once per trial, even on
 abandonment, so a worker thread can run thousands of trials, some of them
 failing, without leaking.

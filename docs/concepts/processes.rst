@@ -38,6 +38,34 @@ with its own stack, living in simulated time.
   inside a loop, a branch or a helper function the process calls. The
   process resumes exactly where it stopped, with its local variables intact.
 
+What blocking looks like
+------------------------
+
+Here is how the first events of the M/M/1 model from :doc:`../tutorial/mm1`
+unfold. Only one process runs at a time. A blocking call hands control back to
+the event loop, which wakes whichever process is due next:
+
+.. mermaid::
+
+   sequenceDiagram
+     participant L as event loop
+     participant A as arrival
+     participant S as service
+     participant Q as queue
+     L->>A: t = 0: start
+     A->>L: hold(gap₁)
+     L->>S: t = 0: start
+     S->>Q: get(1)
+     Note over S,Q: queue empty, so service blocks
+     L->>A: t = t₁: wake
+     A->>Q: put(1)
+     Q-->>S: a customer is available: service resumes
+     A->>L: hold(gap₂)
+     S->>L: hold(service₁)
+     L->>S: t = t₁ + service₁: wake
+     S->>Q: get(1)
+     Note over S,Q: blocks again unless another customer arrived
+
 Blocking calls and signals
 --------------------------
 
