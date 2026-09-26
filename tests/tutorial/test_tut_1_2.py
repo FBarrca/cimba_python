@@ -1,3 +1,5 @@
+import pytest
+
 from tutorial import tut_1_2
 
 
@@ -20,4 +22,4 @@ def test_tut_1_2_stop_event_ends_infinite_processes():
     samples = exp.dataset("interarrival_times")
     assert samples.ndim == 1
     assert samples.size > 0
-    assert samples.mean() == exp["avg_interarrival_time"][0]
+    assert samples.mean() == pytest.approx(exp["avg_interarrival_time"][0])

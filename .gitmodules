@@ -1,4 +1,4 @@
 [submodule "subprojects/cimba"]
 	path = subprojects/cimba
 	url = https://github.com/FBarrca/cimba.git
-	branch = codex/rc2-apple-silicon
+	branch = apple-silicon-3.0.1

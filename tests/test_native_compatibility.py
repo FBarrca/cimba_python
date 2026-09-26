@@ -8,8 +8,9 @@ import cimba
 from cimba import _bindings, _cimba_native
 
 
-def test_native_runtime_is_rc2():
-    assert cimba.native_version() == "3.0.0-RC2"
+def test_native_runtime_version():
+    # Upstream's v3.0.1 release still reports 3.0.0 from its meson project version.
+    assert cimba.native_version() == "3.0.0"
 
 
 def test_all_numba_bindings_resolve_in_native_library():

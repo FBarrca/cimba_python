@@ -76,7 +76,7 @@ Verify that Python can import the package:
 
 If all goes well, this prints a version such as::
 
-    3.0.0-RC2
+    3.0.0
 
 Run the test suite with:
 
