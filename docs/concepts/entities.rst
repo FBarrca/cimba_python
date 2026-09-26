@@ -50,8 +50,9 @@ blocking until that many are there. Amounts are integers.
    * - ``max_level()``
      - Maximum level over the measurement window.
 
-A container starts empty. To give it an initial level, ``put`` it in an
-``@cb.on_start`` hook.
+A container starts empty, or with ``Container(initial=n)`` units in every
+trial. For a level that depends on parameters, ``put`` it in an
+``@cb.on_start`` hook instead.
 
 Store and PriorityStore
 -----------------------

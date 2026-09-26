@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 from typing import Any
 
-ABI_VERSION = 1
+ABI_VERSION = 2
 POINTER = np.uintp
 
 INPUT_SLOT = np.dtype([
@@ -46,7 +46,7 @@ TRIAL_HEADER = np.dtype([
 ENTITY_DESCRIPTOR = np.dtype([
     ("record_offset", np.uint64), ("field_offset", np.uint64),
     ("kind", np.uint32), ("reserved", np.uint32),
-    ("capacity", np.uint64), ("name", "S32"),
+    ("capacity", np.uint64), ("initial", np.uint64), ("name", "S32"),
 ], align=True)
 
 CAPTURE_SERIES = np.dtype([

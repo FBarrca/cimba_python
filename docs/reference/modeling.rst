@@ -86,9 +86,10 @@ Entities
 
 Entity methods are *compiled*, except ``capture()`` and the constructors.
 
-.. class:: Container()
+.. class:: Container(initial=0)
 
-   A counted level with integer amounts. Starts empty.
+   A counted level with integer amounts. Each trial starts with ``initial``
+   units (a nonnegative integer).
 
    .. method:: put(amount)
    .. method:: get(amount)

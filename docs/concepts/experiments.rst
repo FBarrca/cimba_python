@@ -112,7 +112,8 @@ The measurement window
      - Processes keep running and datasets keep recording, but time-weighted
        statistics are frozen. Use it to let in-flight work finish.
    * - after
-     - The static model's processes are stopped, remaining events drain,
+     - All processes, including those of spawned models, are stopped;
+       remaining scheduled events drain,
        and the ``on_end`` hooks run.
 
 ``until_idle()`` runs until the event queue is empty, recording from time

@@ -163,15 +163,8 @@ and sharp. ``seeding="independent"`` remains available.
 Current limitations
 -------------------
 
-Known gaps in 0.7.0 that the documentation works around:
+Known gaps that the documentation works around:
 
-* An input with ``on_exhausted="end_trial"`` stops its trial, but the trial
-  is reported as failed and its outputs are ``nan``.
-* ``cb.Container(initial=...)`` is accepted but ignored. Put initial stock
-  in an ``@cb.on_start`` hook.
-* The window stops the static model's processes but not those of spawned
-  models. A spawned process that never finishes or blocks keeps the trial
-  running.
 * Undecorated model methods can't be called from compiled code. Use
   module-level ``numba.njit`` helpers that take the model view.
 * The compile cache lives in memory, so each new Python process compiles its

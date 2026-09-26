@@ -202,9 +202,9 @@ happens when model code asks for more is set per source with
      - Start again from the first value.
    * - ``"end_trial"``
      - (opt in)
-     - Stop the trial when the input runs out. In 0.7.0 such a trial is
-       reported in ``results.failed`` with the exhaustion reason and its
-       outputs are ``nan``, so check ``failure_reasons`` if you use it.
+     - End the trial when the input runs out, exactly like ``cb.end_trial()``:
+       the event loop stops, ``on_end`` hooks run and the trial succeeds.
+       ``consumed`` tells you how far it got.
    * - ``"extend"``
      - bootstrap and fitted sources
      - Transparently regenerate a longer row and rerun the trial (below).

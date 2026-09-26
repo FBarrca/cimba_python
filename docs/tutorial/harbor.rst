@@ -173,10 +173,10 @@ Running and reading the results
 
    $ uv run python tutorial/tut_4_1.py
    cimba 3.0.0: 20 harbor trials in 2.24 s
-   n_small: 3278.750
-   n_large: 1092.400
+   n_small: 3273.900
+   n_large: 1089.450
    avg_time_small: 10.861
-   avg_time_large: 17.148
+   avg_time_large: 17.139
    tug_util: 0.876
    berth_small_util: 3.810
    berth_large_util: 1.827
@@ -211,7 +211,7 @@ swept inside one experiment:
 
    (0.15, 0.25, 0.35)
    [15.17 17.13 26.46]
-   Comparison(a=0, b=2, n=20, difference=11.29, lower=10.28, upper=12.31)
+   Comparison(a=0, b=2, n=20, difference=11.30, lower=10.28, upper=12.31)
 
 Going from 15% to 35% large ships adds 11.3 hours (95% CI 10.3–12.3) to each
 large ship's stay.

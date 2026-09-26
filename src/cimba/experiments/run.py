@@ -189,8 +189,10 @@ class Experiment:
                 label = f"{instance.label}.{field.name}"
                 if field.kind == "entity":
                     entity = instance.values[field.name]
+                    initial = 0
                     if field.value_type is Container:
                         kind, capacity = 1, 1_000_000_000
+                        initial = entity.initial
                     elif field.value_type is Resource:
                         kind, capacity = 2, entity.capacity
                     elif field.value_type is Dataset:
@@ -205,7 +207,7 @@ class Experiment:
                         raise ExperimentConfigError(f"{label}: native handle not implemented")
                     entities.append((placement.offset, offset, kind,
                                      int(entity.captured),
-                                     capacity, _native_name(label)))
+                                     capacity, initial, _native_name(label)))
                 elif field.kind in {"input", "series"}:
                     inputs.append((placement.offset, offset,
                                    label.encode("utf-8")[:95]))

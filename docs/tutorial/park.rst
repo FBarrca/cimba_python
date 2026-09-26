@@ -94,13 +94,12 @@ itself:
 own model, as here, that process ends at the call. Memory is reclaimed when
 the trial ends.
 
-.. warning::
+.. note::
 
-   The measurement window stops the *static* model's processes at the end of
-   the cooldown, but it does not stop the processes of spawned models. A
-   spawned model whose process loops forever (``while True: cb.hold(1.0)``)
-   keeps the trial alive indefinitely. Make sure every spawned process
-   finishes, blocks with nothing left to wake it, or is released.
+   At the end of the cooldown the window stops every process, including
+   those of spawned models, so a spawned process that loops forever can't
+   keep a trial alive. With ``Window.until_idle()`` there is no such stop:
+   make sure spawned processes finish or block.
 
 Lines you can leave: priority stores
 ------------------------------------

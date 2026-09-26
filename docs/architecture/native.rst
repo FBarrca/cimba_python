@@ -49,11 +49,13 @@ git submodule and linked statically. It provides:
    hooks and inputs, each with record offsets) from the block header;
 2. initializes the event queue and the engine's random stream from the
    trial seed;
-3. creates every entity and writes its handle into the owning record;
+3. creates every entity (putting a container's ``initial`` units in) and
+   writes its handle into the owning record;
 4. runs the ``on_start`` hooks, then creates and starts every process copy
    with its callback, record pointer and priority;
 5. schedules the window events: start recording at ``warmup``, stop
-   recording at ``warmup + duration``, stop processes after the cooldown
+   recording at ``warmup + duration``, stop every process, static and
+   spawned, after the cooldown
    (or starts recording immediately for run-until-idle);
 6. executes the event loop until it is empty;
 7. runs the ``on_end`` hooks, of static models first, then of spawned
@@ -76,7 +78,7 @@ fails or is exhausted, an invalid schedule), the engine unwinds and calls it.
 The callback:
 
 * inspects the input slots to classify the outcome: *exhausted* (rerun with
-  a longer row), *ended*, or *failed*, and writes a reason such as
+  a longer row) or *failed*, and writes a reason such as
   ``"network.facilities[2].demand exhausted after 359 values"``;
 * frees spawned models, input histories, captures, process and entity
   tables, and the random stream.
@@ -87,14 +89,12 @@ The callback:
      direction LR
      [*] --> PENDING
      PENDING --> RUNNING: cpy_run
-     RUNNING --> OK: event loop done, on_end ran
+     RUNNING --> OK: event loop done (or end_trial), on_end ran
      RUNNING --> FAILED: engine error or input "fail"
      RUNNING --> EXHAUSTED: input "extend" ran out
-     RUNNING --> ENDED: input "end_trial" ran out
      EXHAUSTED --> RUNNING: host regenerates rows 2×, reruns
      OK --> [*]
      FAILED --> [*]
-     ENDED --> [*]
 
 Every native object is created and destroyed exactly once per trial, even on
 abandonment, so a worker thread can run thousands of trials, some of them

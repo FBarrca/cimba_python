@@ -154,7 +154,7 @@ The trial lifecycle
    ─────────── event loop ───────────
      t = warmup                    open the window: reset entity statistics, clear datasets
      t = warmup + duration         close the window: stop time-weighted recording
-     t = warmup + duration + cooldown   stop the static model's processes
+     t = warmup + duration + cooldown   stop all processes (static and spawned)
      … remaining events drain …
    ──────────────────────────────────
    on_end hooks (bottom-up, then live dynamic models)
@@ -278,11 +278,11 @@ Dynamic models: spawn and release
 releases its own model) and marks the model released. Its memory is
 reclaimed when the trial ends.
 
-.. warning::
+.. note::
 
-   The window stops the static model's processes, not those of spawned
-   models. A spawned process that loops forever keeps the trial running.
-   Release such models, or let their processes finish or block.
+   At the end of the cooldown the window stops every process, spawned ones
+   included. Under ``Window.until_idle()`` nothing is stopped, so spawned
+   processes must finish or block for the trial to end.
 
 Logging from compiled code
 --------------------------

@@ -297,6 +297,22 @@ static void stop_processes(void *subject, void *object)
     for (uint64_t i = 0; i < resources->process_count; ++i)
         if (cmb_process_status(resources->processes[i]) == CMB_PROCESS_RUNNING)
             cmb_process_stop(resources->processes[i], NULL);
+    /* Spawned models end with the window too: cancel starts that are still
+     * pending and stop running processes, so a spawned process that never
+     * finishes cannot keep the trial alive. */
+    for (spawned_model *node = resources->spawned; node != NULL;
+         node = node->next) {
+        if (node->released) continue;
+        for (uint64_t i = 0; i < node->process_count; ++i) {
+            if (node->start_events[i] &&
+                cmb_event_is_scheduled(node->start_events[i]))
+                cmb_event_cancel(node->start_events[i]);
+            struct cmb_process *process = node->processes[i];
+            if (process != NULL &&
+                cmb_process_status(process) == CMB_PROCESS_RUNNING)
+                cmb_process_stop(process, NULL);
+        }
+    }
 }
 
 void cpy_capture_release(cpy_capture_series *capture, uint64_t entity_count)
@@ -379,6 +395,10 @@ static void run_trial(void *block)
         if (item->kind == CPY_ENTITY_CONTAINER) {
             struct cmb_buffer *container = cmb_buffer_create();
             cmb_buffer_initialize(container, item->name, item->capacity);
+            if (item->initial) {
+                uint64_t amount = item->initial;
+                cmb_buffer_put(container, &amount);
+            }
             entity = container;
         } else if (item->kind == CPY_ENTITY_RESOURCE) {
             struct cmb_resourcepool *resource = cmb_resourcepool_create();

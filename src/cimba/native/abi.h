@@ -10,7 +10,7 @@
 #define CPY_EXPORT __attribute__((visibility("default")))
 #endif
 
-enum { CPY_ABI_VERSION = 1 };
+enum { CPY_ABI_VERSION = 2 };
 enum { CPY_INPUT_DISTRIBUTION = 1, CPY_INPUT_ROWS = 2 };
 enum { CPY_POLICY_FAIL = 1, CPY_POLICY_WRAP = 2,
        CPY_POLICY_END_TRIAL = 3, CPY_POLICY_EXTEND = 4 };
@@ -67,6 +67,7 @@ typedef struct cpy_entity_descriptor {
     uint32_t kind;
     uint32_t reserved;
     uint64_t capacity;
+    uint64_t initial;          /* initial level of a Container */
     char name[32];
 } cpy_entity_descriptor;
 

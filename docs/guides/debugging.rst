@@ -92,9 +92,9 @@ Typical causes
      - Unsupported code in a compiled method. See
        :doc:`../concepts/compiled_code`.
    * - The run never finishes
-     - A spawned model's process loops forever (the window doesn't stop
-       spawned processes), or ``Window.until_idle()`` on a model that always
-       has future events.
+     - ``Window.until_idle()`` on a model that always has future events
+       (including a spawned process that loops forever). Use a finite
+       duration.
    * - Outputs are all ``nan``
      - The ``on_end`` hook didn't set them, or every trial failed.
 
