@@ -63,9 +63,10 @@ Glossary
       compiled code like a method. Subclasses may override it; the model's
       actual class decides which implementation runs.
 
-   Reference sweep
-      A sweep of a ``Ref`` field over models in the tree, running each
-      choice as its own design point. Used to compare policies.
+   Model sweep
+      A sweep of a child model field over several model objects. Each option
+      gets its own model tree, and each design point's trials contain only
+      its option. Used to compare policies.
 
    Event
       A ``@cb.event`` method run once at a time scheduled with
@@ -111,7 +112,7 @@ Glossary
    Sweep
       A design axis created with ``cb.sweep`` (independent) or ``cb.sweeps``
       (linked), assigned to a ``Param``, a distribution parameter, an input
-      or a ``Ref``.
+      or a child model.
 
    Design point
       One combination of sweep values.

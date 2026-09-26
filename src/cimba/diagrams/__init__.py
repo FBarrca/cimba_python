@@ -28,11 +28,10 @@ def structure(model: Model) -> Graph:
     for instance in assembly.instances:
         for field in instance.schema.fields:
             value = instance.values[field.name]
-            if field.kind == "ref" and isinstance(value, Sweep):
-                for choice in value.values:
-                    if choice is not None:
-                        edges.append(Edge(instance.label, label[choice],
-                                          f"{field.name} (sweep)", "dotted"))
+            if field.kind == "child" and isinstance(value, Sweep):
+                for index, option in enumerate(value.values):
+                    edges.append(Edge(instance.label, label[option],
+                                      f"{field.name} (option {index})"))
             elif field.kind in {"child", "ref"} and value is not None:
                 style = "solid" if field.kind == "child" else "dotted"
                 edges.append(Edge(instance.label, label[value], field.name, style))

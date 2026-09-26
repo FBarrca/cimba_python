@@ -11,8 +11,8 @@ expresses this with two features working together:
 
 * **polymorphic functions:** the decision is a ``@cb.function`` on a policy
   model, and each policy class overrides it;
-* **reference sweeps:** the process reaches its policy through a ``cb.Ref``,
-  and sweeping that reference runs every candidate as its own design point.
+* **model sweeps:** the policy is a child model, and sweeping that child runs
+  every policy as its own design point, in one experiment.
 
 The complete example is ``tutorial/policy_comparison.py``.
 
@@ -34,79 +34,109 @@ signature**, and can have its own parameters:
 .. literalinclude:: ../../tutorial/policy_comparison.py
    :pyobject: FixedQuantity
 
+A policy can also have its own processes. This one reviews on a weekly
+clock and orders only when a review is due:
+
+.. literalinclude:: ../../tutorial/policy_comparison.py
+   :pyobject: PeriodicReview
+
 The process that doesn't change
 -------------------------------
 
-The store holds a ``cb.Ref[Policy]``, any subclass will do, and asks it
-what to order. It never mentions a concrete policy:
+The store holds its policy as a **child model**, ``policy: Policy``, so any
+subclass fits, and it asks the policy what to order. It never mentions a
+concrete policy:
 
 .. literalinclude:: ../../tutorial/policy_comparison.py
    :pyobject: Store.trade
    :dedent: 4
    :emphasize-lines: 12
 
-Calls through a reference or a list use the implementation of the model's
-**actual** class, even though the store's code only knows ``Policy``. This
-is dynamic dispatch, as in ordinary Python. It's implemented with a per-class
-function table, so the store is compiled once and never recompiled when the
-policy changes.
+Calls through a child, a reference or a list use the implementation of the
+model's **actual** class, even though the store's code only knows
+``Policy``. This is dynamic dispatch, as in ordinary Python. It's implemented
+with a per-class function table, so the store is compiled once and never
+recompiled when the policy changes.
 
 One experiment, every policy
 ----------------------------
 
-A reference is just a pointer, and a pointer is data. So you can sweep it,
-as long as every candidate is part of the model tree. Here a small ``Study``
-model owns the candidates and the store:
+Sweep the child. Pass the policy objects to ``cb.sweep``, as separate
+arguments or as one list:
 
 .. literalinclude:: ../../tutorial/policy_comparison.py
-   :pyobject: Study
-
-.. literalinclude:: ../../tutorial/policy_comparison.py
-   :pyobject: swept_study
-   :emphasize-lines: 4
+   :pyobject: policy_study
 
 .. literalinclude:: ../../tutorial/policy_comparison.py
    :pyobject: compare_policies
 
-.. cimba-diagram:: tutorial.policy_comparison:swept_study
+A swept child model gives **one model tree per option**. The trials of a
+design point contain the store and *only* that point's policy. The other
+policies don't exist there at all, so their processes (like
+``PeriodicReview``'s clock) and hooks never run anywhere but in their own
+design point.
+
+.. cimba-diagram:: tutorial.policy_comparison:policy_study
    :kind: structure
    :direction: LR
 
-The dotted ``policy (sweep)`` edges show the three pointers the store can
-take, one per design point.
+In diagrams, the options appear as ``policy (option i)`` edges to
+``store.policy#i``. Inside a trial, each option is simply ``store.policy``.
 
 .. code-block:: console
 
    $ uv run python tutorial/policy_comparison.py
    policy          fill rate  mean stock  orders/wk
-   OrderUpTo           0.985        42.7       6.99
-   MinMax              0.898        41.9       0.85
-   FixedQuantity       0.914        41.1       0.96
-   fill rate, MinMax - OrderUpTo: -0.0878 (95% CI -0.0922 .. -0.0834)
-   fill rate, FixedQuantity - OrderUpTo: -0.0715 (95% CI -0.0759 .. -0.0670)
+   OrderUpTo           0.983        42.7       6.98
+   MinMax              0.897        42.1       0.85
+   FixedQuantity       0.913        40.9       0.96
+   PeriodicReview      0.932        52.4       1.00
+   fill rate, MinMax - OrderUpTo: -0.0864 (95% CI -0.0915 .. -0.0814)
+   fill rate, FixedQuantity - OrderUpTo: -0.0699 (95% CI -0.0742 .. -0.0656)
+   fill rate, PeriodicReview - OrderUpTo: -0.0513 (95% CI -0.0550 .. -0.0476)
 
-``results.levels(choice)`` returns the policy objects, one per design point.
-Ordering every day keeps the fill rate at 98.5%, but it costs seven orders a
-week. The two reorder-point policies order less than once a week and hold
-about the same stock, but lose 7–9 points of fill rate. Because all three
-design points see the **same demand and lead times** (common random numbers,
-with one stream per input), ``compare`` gives tight, paired intervals.
+``results.levels(store.policy)`` returns the policy objects, one per design
+point. Ordering every day keeps the fill rate at 98.3%, but it costs seven
+orders a week. The two reorder-point policies order less than once a week at
+about the same stock, but lose 7–9 points of fill rate. The weekly review
+orders exactly once a week and sits in between, at the price of more stock.
+Because all four design points see the **same demand and lead times**
+(common random numbers, with one stream per input), ``compare`` gives tight,
+paired intervals.
+
+Reading results per policy
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Results for the store cover every design point. Results for a policy object
+cover only the design points where it was selected. Elsewhere its outputs
+are ``nan``, because it wasn't there:
+
+.. code-block:: python
+
+   weekly = results.levels(store.policy)[3]
+   results[weekly].some_output          # values in row 3, nan in rows 0-2
 
 Tuning within a policy
 ----------------------
 
-Policy parameters are ordinary ``Param`` fields, so they sweep too. To tune
-one policy, sweep its parameter. To tune while comparing, create one
-candidate per setting:
+Policy parameters are ordinary ``Param`` fields, so they sweep too, and
+sweeps inside an option cross with the model sweep:
 
 .. code-block:: python
 
-   study.candidates = [OrderUpTo(), MinMax(), MinMax()]
-   study.candidates[2].minimum = 60.0              # a second MinMax setting
-   study.store.policy = cb.sweep(*study.candidates)
+   daily, weekly = OrderUpTo(), PeriodicReview()
+   weekly.level = cb.sweep(110.0, 130.0, 150.0)
+   store = Store(cb.sweep(daily, weekly))       # 2 x 3 = 6 design points
 
-Or cross a policy sweep with any other sweep, for example of the demand
-source, to see whether the ranking holds under a different input model.
+Sweeps cross, so ``OrderUpTo`` also runs once per ``level`` value even
+though that parameter doesn't affect it. Those three design points repeat
+the same trials. When that matters, use separate options instead:
+
+.. code-block:: python
+
+   lean, generous = MinMax(), MinMax()
+   generous.minimum = 60.0
+   store = Store(cb.sweep(OrderUpTo(), lean, generous))
 
 Rules for ``@cb.function``
 --------------------------
@@ -127,14 +157,17 @@ Rules for ``@cb.function``
   runs as a normal method, which is handy for unit-testing policy logic.
 * Names reserved by ``cimba.Model`` (such as ``describe``) can't be used.
 
-Rules for reference sweeps
+Rules for sweeping a model
 --------------------------
 
-* Only ``cb.Ref`` fields can be swept this way, and every choice must be a
-  model **in the tree**, owned somewhere (here by ``Study.candidates``). An
-  optional reference (``cb.Ref[M] | None``) may include ``None``.
-* Candidates that aren't selected still exist in the trial. If they have
-  processes, those processes run too. Keep policy models passive (functions
-  and parameters) or make their processes check whether they're in use.
-* Linked sweeps (``cb.sweeps``) switch several references together, for
-  example the same policy class for every store in a network.
+* Sweep a **child** field (``policy: Policy``) with model objects of that
+  type. Each option gets its own model tree, and each trial contains only its
+  design point's option.
+* Options must not be used anywhere else in the tree; a reference into an
+  option from outside would dangle in the other trees. An option may
+  reference the rest of the model, for example a policy with a
+  ``store: cb.Ref["Store"]`` back-reference.
+* Classes are compiled once, however many options and design points there
+  are. ``results.meta.variants`` reports how many model trees were run.
+* The model sweep crosses with every other sweep, including sweeps of
+  parameters inside the options.

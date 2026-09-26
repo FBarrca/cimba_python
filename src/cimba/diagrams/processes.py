@@ -265,8 +265,8 @@ class _Visitor(ast.NodeVisitor):
                 return {_Ref("state", owner, name)}
             return set()
         value = analysis.assembly.by_object[owner].values[name]
-        if field.kind == "ref" and isinstance(value, Sweep):
-            return {_Ref("model", choice) for choice in value.values if choice is not None}
+        if field.kind == "child" and isinstance(value, Sweep):
+            return {_Ref("model", option) for option in value.values}
         if field.kind in {"child", "ref"}:
             return {_Ref("model", value)} if value is not None else set()
         if field.kind == "collection":
