@@ -257,8 +257,13 @@ double cpy_input_next(cpy_input_slot *slot)
         slot->cursor++;
         return value;
     }
+    if (slot->policy == CPY_POLICY_END_TRIAL) {
+        /* Like cb.end_trial(): stop the event loop and end the caller; the
+         * on_end hooks still run and the trial succeeds. */
+        cpy_end_trial();
+        return NAN;
+    }
     slot->status = slot->policy == CPY_POLICY_EXTEND ? CPY_INPUT_EXHAUSTED :
-                   slot->policy == CPY_POLICY_END_TRIAL ? CPY_INPUT_ENDED :
                    CPY_INPUT_FAILED;
     return NAN;
 }
@@ -290,8 +295,11 @@ double cpy_series_at(cpy_input_slot *slot, double time)
                 slot->cursor = (uint64_t)bucket + 1;
             return slot->data[bucket % (int64_t)slot->length];
         }
+        if (slot->policy == CPY_POLICY_END_TRIAL) {
+            cpy_end_trial();
+            return NAN;
+        }
         slot->status = slot->policy == CPY_POLICY_EXTEND ? CPY_INPUT_EXHAUSTED :
-                       slot->policy == CPY_POLICY_END_TRIAL ? CPY_INPUT_ENDED :
                        CPY_INPUT_FAILED;
         return NAN;
     }

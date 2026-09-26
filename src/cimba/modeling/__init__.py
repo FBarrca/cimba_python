@@ -81,9 +81,13 @@ class Entity:
 
 
 class Container(Entity):
-    def __init__(self, initial: float = 0.0):
+    """A counted level. ``initial`` units are present when each trial starts."""
+
+    def __init__(self, initial: int = 0):
+        if isinstance(initial, bool) or int(initial) != initial or initial < 0:
+            raise ValueError("Container.initial must be a nonnegative integer")
         super().__init__()
-        self.initial = float(initial)
+        self.initial = int(initial)
 
     def put(self, amount: float) -> None:
         raise NotInCompiledCode("Container.put() requires compiled model code")

@@ -76,7 +76,7 @@ model's record:
        uint32_t kind;             /* 1 distribution, 2 rows                    */
        uint32_t policy;           /* fail, wrap, end_trial, extend             */
        uint32_t distribution;     /* which distribution, for kind 1            */
-       uint32_t status;           /* ok, failed, ended, exhausted              */
+       uint32_t status;           /* ok, failed, exhausted                     */
        double   parameters[4];    /* distribution parameters                   */
        uint64_t stream_state[4];  /* this input's own random stream            */
        const double *data;        /* row / trace / categorical tables          */
@@ -150,8 +150,8 @@ When a row slot runs past its end, its policy decides:
      - Set status *failed*. The trial is abandoned and the reason names the
        input and the number of values consumed.
    * - ``end_trial``
-     - Set status *ended*. The trial is abandoned with the reason recorded;
-       in 0.7.0 it is reported as failed.
+     - Call ``cpy_end_trial()``: clear the event queue and end the calling
+       process. The ``on_end`` hooks run and the trial succeeds.
    * - ``extend``
      - Set status *exhausted*. The trial is abandoned with status
        ``EXHAUSTED``, to be rerun.

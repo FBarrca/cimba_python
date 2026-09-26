@@ -62,9 +62,8 @@ leak into the study.
      - The recording is a representative cycle (a typical week) and
        repeating it is acceptable.
    * - ``"end_trial"``
-     - The trial should simply stop when the data ends. In 0.7.0 such
-       trials are reported as failed with the exhaustion reason, so treat
-       their outputs accordingly.
+     - The trial should simply stop when the data ends: the ``on_end`` hooks
+       run and the trial succeeds, as with ``cb.end_trial()``.
 
 For a ``Series`` fed by a ``"fail"`` trace, Cimba checks the length against
 the window when you create the ``Experiment`` and tells you how many rows are

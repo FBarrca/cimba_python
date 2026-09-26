@@ -200,7 +200,7 @@ def timeline():
         ("warm-up", "processes run · statistics not kept", 170, "#eef2f7", "#9aa5b1"),
         ("measurement (duration)", "time-weighted statistics recorded · datasets cleared at start", 360, "#e3f0fb", "#2980b9"),
         ("cool-down", "work in flight finishes · datasets still record", 170, "#f5f7fa", "#9aa5b1"),
-        ("drain", "static processes stopped · events run out", 90, "#ffffff", "#b8c2cc"),
+        ("drain", "all processes stopped · events run out", 90, "#ffffff", "#b8c2cc"),
     ]
     out = ['<text class="band-label" x="40" y="24">One trial</text>']
     x = x0
