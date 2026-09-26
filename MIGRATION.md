@@ -18,7 +18,7 @@ Version 0.7 replaces the Python modeling core. The Cimba engine submodule is unc
 | Exhaustion tripwire output | Explicit `on_exhausted`: trace `fail`, `wrap`, or `end_trial`; resamples extend by default |
 | Traces used as fixed lookup tables | Plain constants or `Param[T]` on each model instance |
 
-Class declarations now use typed `Param[T]`, `State[T]`, and `Output[T]`. Give state its initial value on the class or instance. Plain annotated attributes are constants. Use `Ref[ModelType]` and typed lists for links. Use `Container` for a counted level, `Store[T]` or `PriorityStore[T]` for values and model handles, and `Resource(capacity=n)` for capacity. The old opaque integer store, `f2i`/`i2f`, pools, and address-holder fields are gone. Predicates and events are decorated methods referenced directly. Replace `@collect` with `@on_end`, an initialization process with `@on_start`, and `@function` with an ordinary method.
+Class declarations now use typed `Param[T]`, `State[T]`, and `Output[T]`. Give state its initial value on the class or instance. Plain annotated attributes are constants. Use `Ref[ModelType]` and typed lists for links. Use `Container` for a counted level, `Store[T]` or `PriorityStore[T]` for values and model handles, and `Resource(capacity=n)` for capacity. The old opaque integer store, `f2i`/`i2f`, pools, and address-holder fields are gone. Predicates and events are decorated methods referenced directly. Replace `@collect` with `@on_end`, an initialization process with `@on_start`, and `@function` with a module-level `numba.njit` function that takes the model view as its first argument (undecorated model methods are not callable from compiled code).
 
 ## Experiments and results
 

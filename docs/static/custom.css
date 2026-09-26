@@ -15,3 +15,43 @@
     color: #2980b9 !important;
     font-weight: bold;
 }
+
+/* ---- Architecture diagrams (inline SVG) ---- */
+.cdiag {
+    margin: 1.2em 0 1.6em;
+    overflow-x: auto;
+}
+.cdiag svg {
+    width: 100%;
+    max-width: 900px;
+    height: auto;
+    display: block;
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+.cdiag .band { fill: #f7f9fb; stroke: #e3e8ee; }
+.cdiag .band.native { fill: #eef2f7; }
+.cdiag .band-label { font-size: 12px; font-weight: 700; fill: #52606d; letter-spacing: .04em; text-transform: uppercase; }
+.cdiag .band-note { font-size: 11px; fill: #7b8794; }
+.cdiag .box { fill: #ffffff; stroke: #9aa5b1; stroke-width: 1.2; rx: 6; }
+.cdiag .box.user { fill: #f1f5f9; stroke: #b8c2cc; stroke-dasharray: 4 3; }
+.cdiag .box.native { fill: #f8fafc; stroke: #7b8794; }
+.cdiag .box.pillar { fill: #fff1e0; stroke: #e8871e; stroke-width: 2; }
+.cdiag .box.pillar-soft { fill: #fff8ef; stroke: #f0b26a; stroke-width: 1.4; }
+.cdiag .title { font-size: 13.5px; font-weight: 700; fill: #1f2933; font-family: SFMono-Regular, Menlo, Consolas, monospace; }
+.cdiag .title.plain { font-family: inherit; }
+.cdiag .sub { font-size: 11px; fill: #52606d; }
+.cdiag .pillar-text { fill: #8a4b00; }
+.cdiag .edge { stroke: #7b8794; stroke-width: 1.5; fill: none; }
+.cdiag .edge.pillar { stroke: #e8871e; stroke-width: 2; }
+.cdiag .edge.dashed { stroke-dasharray: 5 4; }
+.cdiag .edge-label { font-size: 11px; fill: #52606d; font-style: italic; }
+.cdiag .edge-label.pillar { fill: #b35c00; }
+.cdiag .arrowhead { fill: #7b8794; }
+.cdiag .arrowhead.pillar { fill: #e8871e; }
+.cdiag a { cursor: pointer; }
+.cdiag a:hover .box { stroke: #2980b9; stroke-width: 2.2; }
+.cdiag a:hover .box.pillar { stroke: #b35c00; stroke-width: 2.6; }
+.cdiag a:focus { outline: none; }
+.cdiag a:focus .box { stroke: #2980b9; stroke-width: 2.6; }
+.cdiag-caption { font-size: 90%; color: #52606d; margin-top: -0.8em; margin-bottom: 1.5em; }
+.cdiag-legend { display: inline-block; width: 12px; height: 12px; border: 2px solid #e8871e; background: #fff1e0; border-radius: 3px; vertical-align: -2px; margin-right: 4px; }
