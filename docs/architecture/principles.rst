@@ -48,7 +48,8 @@ Invariants
        scheduling, memory chunking and input extension.
    * - Structural immutability
      - The instance tree, fields and input declarations are fixed for an
-       experiment. Experiments vary values and sources only.
+       experiment. Experiments vary values, sources and reference targets
+       only.
    * - Window semantics
      - Time-weighted statistics cover the measurement window. Datasets are
        cleared when it opens.
@@ -153,6 +154,20 @@ Results format
 Arrays are the natural shape for ``(points, replications)`` data and add no
 dependency; ``to_table()`` feeds pandas when wanted.
 
+Functions dispatch on the model's class
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Per-class function tables** (chosen) versus static calls by declared type.
+Models are built by composition *and* inheritance: a store holds a
+``Ref[Policy]``, a line holds ``list[Station]``. For polymorphic behavior to
+work there, ``@cb.function`` calls go through the dispatch table the record
+already points to. Each class fills its slots with its own implementations,
+and subclasses keep their bases' slot positions. The price is one indirect
+call and annotated signatures, since a call through a pointer needs a fixed
+machine signature. In return, the caller still depends only on the base
+class, and swapping a policy (even by sweeping a reference) never
+recompiles anything.
+
 Common random numbers by default
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -165,7 +180,5 @@ Current limitations
 
 Known gaps that the documentation works around:
 
-* Undecorated model methods can't be called from compiled code. Use
-  module-level ``numba.njit`` helpers that take the model view.
 * The compile cache lives in memory, so each new Python process compiles its
   classes once.

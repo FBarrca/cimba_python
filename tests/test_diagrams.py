@@ -207,3 +207,55 @@ def test_tutorial_process_graphs(module, factory, expected):
     assert expected in {(e.source, e.label, e.target) for e in graph.edges}
     graph.to_mermaid()
     graph.to_dot()
+
+
+class Router(cb.Model):
+    hub: cb.Ref["Hub"]
+
+    @cb.function
+    def route(self, item: int) -> None:
+        pass
+
+
+class LeftRouter(Router):
+    @cb.function
+    def route(self, item: int) -> None:
+        self.hub.left.put(item)
+
+
+class RightRouter(Router):
+    @cb.function
+    def route(self, item: int) -> None:
+        self.hub.right.put(item)
+
+
+class Hub(cb.Model):
+    left: cb.Store[int]
+    right: cb.Store[int]
+    routers: list[Router]
+    router: cb.Ref[Router]
+
+    def __init__(self):
+        self.routers = [LeftRouter(), RightRouter()]
+        for router in self.routers:
+            router.hub = self
+        self.router = cb.sweep(*self.routers)  # pyright: ignore[reportAttributeAccessIssue]
+
+    @cb.process
+    def feed(self):
+        self.router.route(1)
+
+
+def test_process_graph_follows_polymorphic_functions_through_swept_refs():
+    edges = {(e.source, e.label, e.target) for e in process_graph(Hub()).edges}
+    assert ("hub.feed", "put", "hub.left") in edges
+    assert ("hub.feed", "put", "hub.right") in edges
+
+
+def test_mermaid_quotes_edge_labels_with_parentheses():
+    text = structure(Hub()).to_mermaid()
+    assert '-.->|"router (sweep)"|' in text
+
+
+def test_mermaid_quotes_list_item_edge_labels():
+    assert '-->|"stations[1]"|' in structure(Line()).to_mermaid()

@@ -58,6 +58,15 @@ Glossary
       A ``@cb.predicate`` method returning a bool, used with
       ``Condition.wait_until``.
 
+   Function
+      A ``@cb.function`` method with annotated parameters, callable from
+      compiled code like a method. Subclasses may override it; the model's
+      actual class decides which implementation runs.
+
+   Reference sweep
+      A sweep of a ``Ref`` field over models in the tree, running each
+      choice as its own design point. Used to compare policies.
+
    Event
       A ``@cb.event`` method run once at a time scheduled with
       ``cb.schedule``.
@@ -101,8 +110,8 @@ Glossary
 
    Sweep
       A design axis created with ``cb.sweep`` (independent) or ``cb.sweeps``
-      (linked), assigned to a ``Param``, a distribution parameter or an
-      input.
+      (linked), assigned to a ``Param``, a distribution parameter, an input
+      or a ``Ref``.
 
    Design point
       One combination of sweep values.

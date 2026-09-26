@@ -265,6 +265,8 @@ class _Visitor(ast.NodeVisitor):
                 return {_Ref("state", owner, name)}
             return set()
         value = analysis.assembly.by_object[owner].values[name]
+        if field.kind == "ref" and isinstance(value, Sweep):
+            return {_Ref("model", choice) for choice in value.values if choice is not None}
         if field.kind in {"child", "ref"}:
             return {_Ref("model", value)} if value is not None else set()
         if field.kind == "collection":
@@ -385,6 +387,19 @@ class _Visitor(ast.NodeVisitor):
             return
         if isinstance(func, ast.Attribute):
             for ref in self.resolve(func.value):
+                if ref.kind == "model" and func.attr in analysis.schema(ref.owner).functions:
+                    # Follow the call into the implementation of this model's
+                    # actual class, so polymorphic policies draw what they do.
+                    cls = (ref.owner.cls if isinstance(ref.owner, _Spawned)
+                           else type(ref.owner))
+                    method = getattr(cls, func.attr)
+                    parameters = method.__code__.co_varnames[1:method.__code__.co_argcount]
+                    bound = {name: self.resolve(argument)
+                             for name, argument in zip(parameters, node.args)}
+                    bound = {k: v for k, v in bound.items() if v}
+                    bound[_first_param(method)] = {ref}
+                    _Visitor(analysis, self.actor, ref.owner, self.active).run(method, bound)
+                    continue
                 if ref.kind == "input" and func.attr in _INPUT_METHODS:
                     analysis.edge(analysis.node(ref), self.actor, func.attr)
                 elif ref.kind == "entity":

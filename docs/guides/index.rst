@@ -13,6 +13,9 @@ Short, focused recipes. Each one assumes you know the basics from the
      - Choose, fit and check an input model before trusting it.
    * - :doc:`comparing`
      - Compare scenarios and input models with paired statistics.
+   * - :doc:`policies`
+     - Swap decision logic with polymorphic ``@cb.function`` methods and
+       compare policies in one experiment.
    * - :doc:`diagrams`
      - Draw a model's structure and its process interactions.
    * - :doc:`captures`
@@ -30,6 +33,7 @@ Short, focused recipes. Each one assumes you know the basics from the
    recorded_data
    input_models
    comparing
+   policies
    diagrams
    captures
    debugging

@@ -38,8 +38,8 @@ This table covers the most common changes:
    * - ``Predicate``/``Event``/``Processes`` fields with ``field=``
      - decorated methods referenced directly: ``wait_until(self.ready)``
    * - ``@collect``, an initialization process, ``@function``
-     - ``@cb.on_end``, ``@cb.on_start``, a module-level ``numba.njit``
-       helper taking the model view
+     - ``@cb.on_end``, ``@cb.on_start``, ``@cb.function`` (now with
+       annotated parameters and dynamic dispatch)
    * - ``model.experiment(**params)``, flattened names, ``{i: v}`` dicts
      - configure objects, then ``cb.Experiment(model, replications=,
        window=, seed=)``

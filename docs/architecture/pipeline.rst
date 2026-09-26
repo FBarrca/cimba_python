@@ -34,7 +34,7 @@ The class path
       Record for class StockingFacility
       ┌───────────────────────────────────────────────┐
       │ class_descriptor*   → dispatch table (events, │  first member of every record
-      │                        predicates)            │
+      │                        predicates, functions) │
       │ network*            Ref["MultiEchelon…"]      │  pointer
       │ node                int64                     │  Param
       │ upstream*           Ref | None                │  pointer (may be 0)
@@ -59,8 +59,13 @@ The class path
    library. Because these are real types, misuse is a compile-time error.
 
 4. **Compile.** ``compiler.ensure(schema)`` compiles each process, hook,
-   predicate and event with ``numba.njit`` for the record type, wraps each in
-   a C-callable ``cfunc``, and builds the class's dispatch table. The result,
+   predicate, event and function with ``numba.njit`` for the record type,
+   wraps each in a C-callable ``cfunc``, and builds the class's dispatch
+   table. Table slots follow ``ClassSchema.slots``: a subclass keeps its
+   bases' slots in the same positions and appends its own. A call
+   ``view.f(x)`` compiles to "load the table pointer from the record, load
+   slot *k*, call". The *record's* class picks the implementation, which is
+   how overrides reach callers that only know the base class. The result,
    a ``CompiledClass``, is cached for the life of the process. Errors are
    rethrown as ``ModelCompileError`` with ``file:line``.
 

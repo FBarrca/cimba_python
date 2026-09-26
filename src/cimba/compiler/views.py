@@ -93,6 +93,8 @@ def collection_length(collection):
 
 
 _view_fields: dict[tuple[types.Record, str], tuple[types.Type, int, int | None]] = {}
+# Installed by compiler.functions: (typing context, record, attr) -> type | None
+function_resolver = None
 
 
 class EventHandleType(types.Type):
@@ -159,7 +161,13 @@ class ModelViewAttributes(AttributeTemplate):
 
     def generic_resolve(self, record, attr):
         entry = _view_fields.get((record, attr))
-        return entry[0] if entry is not None else None
+        if entry is not None:
+            return entry[0]
+        # ``@function`` methods: resolved here because this template runs
+        # before Numba's own record-field lookup (see compiler.functions).
+        if function_resolver is not None:
+            return function_resolver(self.context, record, attr)
+        return None
 
 
 @lru_cache(maxsize=512)
@@ -238,8 +246,9 @@ def register_views(schema: ClassSchema) -> None:
                 return view._getvalue()
 
         register_lowering(parent_type, field.name, view_type, offset, length_offset)
-    for index, name in enumerate(schema.events + schema.predicates):
-        view_type = (EVENT_HANDLE if index < len(schema.events)
+    for name in schema.events + schema.predicates:
+        index = schema.slots.index(name)
+        view_type = (EVENT_HANDLE if name in schema.events
                      else PREDICATE_HANDLE)
         key = (parent_type, name)
         if key in _view_fields:

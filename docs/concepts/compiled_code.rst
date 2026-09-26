@@ -23,8 +23,8 @@ for that model instance, not the Python object. Through it you can:
 * pass predicates and events (``wait_until(self.is_ready)``,
   ``cb.schedule(self.fire, 2.0)``).
 
-Host-only attributes (unannotated ones like ``self.name``) and ordinary
-methods of the class are **not** visible.
+Host-only attributes (unannotated ones like ``self.name``) and undecorated
+methods of the class are **not** visible; ``@cb.function`` methods are.
 
 What you can use
 ----------------
@@ -40,27 +40,34 @@ What you can use
   the compiled code when the class is first compiled.
 * The Cimba verbs (``cb.hold``, ``cb.now``, ``cb.spawn``, …),
   :mod:`cimba.random`, entity methods and input reads.
-* **Helper functions** compiled with ``numba.njit``, including helpers that
-  take a model view as an argument:
+* **Model functions**: methods decorated with ``@cb.function``, called
+  like methods (``self.reorder(level)``, ``self.policy.quantity(x)``). They
+  are compiled with their class, can be overridden by subclasses (the
+  model's actual class decides which one runs), and can block. Parameters and
+  the return value must be annotated:
 
 .. code-block:: python
 
-   import numba
-
-   @numba.njit
-   def reorder_quantity(facility):          # `facility` is a model view
-       return max(0.0, facility.base_stock - facility.on_hand)
-
    class Facility(cb.Model):
-       ...
+       base_stock: cb.Param[float] = 100.0
+       on_hand: cb.State[float] = 0.0
+
+       @cb.function
+       def reorder_quantity(self) -> float:
+           return max(0.0, self.base_stock - self.on_hand)
+
        @cb.process
        def replenish(self):
            while True:
                cb.hold(1.0)
-               quantity = reorder_quantity(self)
+               quantity = self.reorder_quantity()
 
-Helpers may call blocking verbs too. Processes are stackful, so a
-``cb.hold`` inside a helper suspends the calling process.
+* **Plain helper functions** compiled with ``numba.njit`` at module level,
+  for logic that doesn't belong to a model (they may take a model view as an
+  argument).
+
+Functions and helpers may call blocking verbs too. Processes are stackful, so
+a ``cb.hold`` inside one suspends the calling process.
 
 What you can't use
 ------------------
@@ -68,8 +75,8 @@ What you can't use
 * Arbitrary Python objects, dicts of objects, classes, ``try``/``except``,
   generators, f-strings or string building. ``cb.log`` messages must be
   string literals.
-* Undecorated methods of your model (``self.helper()``). Use a module-level
-  ``@numba.njit`` function that takes ``self`` as its argument, as above.
+* Undecorated methods of your model (``self.helper()``). Decorate them with
+  ``@cb.function``; the compile error tells you so.
 * Host-side libraries (pandas, SciPy, your database client).
 * Changing a global after the first run and expecting the model to see it.
   Globals are compiled in; pass changing values as ``Param`` fields.
@@ -98,9 +105,9 @@ file, line, class and method:
 
    cimba.compiler.classes.ModelCompileError: models.py:42: Box.fill: 'helper'
 
-The underlying Numba message follows. Common causes are calling an
-undecorated method, using an unsupported Python feature, and type
-unification. Fix the method and run again. Nothing is cached for a class that
+The underlying Numba message follows. Common causes are calling a method
+that isn't a ``@cb.function``, passing the wrong number or type of arguments
+to one, using an unsupported Python feature, and type unification. Fix the method and run again. Nothing is cached for a class that
 failed to compile.
 
 Calling verbs outside a trial

@@ -19,6 +19,7 @@ from cimba.schema import ClassSchema
 from . import handles  # register record handle operations
 from . import spawning  # register dynamic Model class typing and spawn lowering
 from .views import register_views
+from .functions import compile_function
 
 
 class ModelCompileError(RuntimeError):
@@ -51,6 +52,7 @@ class CompiledClass:
     events: dict[str, Any]
     predicates: dict[str, Any]
     dispatch: np.ndarray
+    functions: dict[str, Any]
     dynamic_processes: np.ndarray
     dynamic_starts: np.ndarray
     dynamic_ends: np.ndarray
@@ -73,9 +75,10 @@ def ensure(schema: ClassSchema) -> CompiledClass:
     ends = {}
     events = {}
     predicates = {}
-    dispatch = np.zeros(len(schema.events) + len(schema.predicates),
-                        dtype=np.uintp)
-    for index, name in enumerate(schema.events):
+    functions = {}
+    dispatch = np.zeros(max(1, len(schema.slots)), dtype=np.uintp)
+    for name in schema.events:
+        index = schema.slots.index(name)
         method = getattr(schema.cls, name)
         try:
             compiled = type_cast(Any, njit(types.void(record_type))(method))
@@ -89,7 +92,8 @@ def ensure(schema: ClassSchema) -> CompiledClass:
             dispatch[index] = type_cast(Any, callback).address
         except Exception as exc:
             raise _compile_error(schema.cls, method, exc) from exc
-    for index, name in enumerate(schema.predicates, start=len(schema.events)):
+    for name in schema.predicates:
+        index = schema.slots.index(name)
         method = getattr(schema.cls, name)
         try:
             compiled = type_cast(Any, njit(types.boolean(record_type))(method))
@@ -101,6 +105,13 @@ def ensure(schema: ClassSchema) -> CompiledClass:
 
             predicates[name] = callback
             dispatch[index] = type_cast(Any, callback).address
+        except Exception as exc:
+            raise _compile_error(schema.cls, method, exc) from exc
+    for name in schema.functions:
+        method = getattr(schema.cls, name)
+        try:
+            functions[name] = compile_function(schema, name, record_type, cast)
+            dispatch[schema.slots.index(name)] = type_cast(Any, functions[name]).address
         except Exception as exc:
             raise _compile_error(schema.cls, method, exc) from exc
     for name, _, _ in schema.processes:
@@ -152,7 +163,7 @@ def ensure(schema: ClassSchema) -> CompiledClass:
                   dynamic_inputs):
         table.flags.writeable = False
     return CompiledClass(schema, layout, processes, starts, ends,
-                         events, predicates, dispatch, dynamic_processes,
+                         events, predicates, dispatch, functions, dynamic_processes,
                          dynamic_starts, dynamic_ends, dynamic_inputs)
 
 

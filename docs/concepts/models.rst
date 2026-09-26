@@ -63,7 +63,7 @@ The kinds of field
    * - ``x: cb.Ref[OtherModel]``
      - reference
      - A pointer to another model somewhere in the tree. Add ``| None`` to
-       make it optional.
+       make it optional. It can be swept over models in the tree.
    * - ``x: list[cb.Ref[OtherModel]]``
      - collection of references
      - A list of pointers, not ownership. Items may be ``None``.
@@ -96,7 +96,7 @@ defined. Create one yourself only when you need to configure it, for example
 to ``capture()`` it.
 
 Assignments are checked on the spot. Assigning a sweep to anything but a
-``Param`` or an input is a ``TypeError`` at that line, and so is assigning
+``Param``, an input or a ``Ref`` is a ``TypeError`` at that line, and so is assigning
 something that isn't a source to an ``Input``. Missing values (a ``Param``
 with no value, an input with no source, a required ``Ref`` that is ``None``,
 a reference to a model outside the tree) are reported when you create the
@@ -150,6 +150,50 @@ Each class is compiled once, no matter how many instances exist or how the
 tree is wired. Changing structure, parameter values or input sources never
 triggers recompilation.
 
+Functions and polymorphism
+--------------------------
+
+Behavior that several processes share, or that should differ between
+subclasses, goes in a ``@cb.function``:
+
+.. code-block:: python
+
+   class Router(cb.Model):
+       @cb.function
+       def lane(self, size: float) -> int:
+           return 0
+
+   class SizeRouter(Router):
+       threshold: cb.Param[float] = 5.0
+
+       @cb.function
+       def lane(self, size: float) -> int:
+           return 1 if size > self.threshold else 0
+
+   class Dock(cb.Model):
+       router: cb.Ref[Router]          # any subclass
+
+       @cb.process
+       def sort(self):
+           ...
+           lane = self.router.lane(parcel_size)
+
+* Call it like a method, from processes, hooks, events, predicates or other
+  functions: on ``self``, through a reference, on a list item, or on a model
+  taken from a store.
+* The **actual class of the model** decides which implementation runs, even
+  when the caller sees only the base class. That's ordinary Python
+  semantics, compiled to a per-class function table.
+* Parameters and the return value are annotated with ``float``, ``int``,
+  ``bool`` or a model class (``None`` for no return value). An override must
+  keep the signature and also be decorated.
+* On the host it stays a normal method, so policy logic is easy to
+  unit-test.
+
+Because a ``Ref`` is only a pointer, it can be **swept** over candidate
+models that are in the tree. That runs each alternative as its own design
+point, with common random numbers. See :doc:`../guides/policies`.
+
 Static and dynamic instances
 ----------------------------
 
@@ -160,8 +204,8 @@ exist for the whole trial.
 ``cb.spawn(ModelClass, field=value, ...)``, like customers, orders, parts and
 ships, and removed with ``cb.release(model)``. They use the same model classes
 with one restriction: a dynamic model holds values (``Param``, ``State``,
-``Output``, constants), references, inputs, processes and hooks, but no
-entities or children. Give it a ``Ref`` to a static model that owns the
+``Output``, constants), references, inputs, processes, hooks and functions,
+but no entities or children. Give it a ``Ref`` to a static model that owns the
 shared queues and resources. See :doc:`processes` for the lifecycle.
 
 Inspecting a configured model

@@ -89,8 +89,8 @@ Typical causes
        to a model outside the tree, or a model used twice. The message names
        the path.
    * - ``ModelCompileError`` from ``run()``
-     - Unsupported code in a compiled method. See
-       :doc:`../concepts/compiled_code`.
+     - Unsupported code in a compiled method, or a call to a method that
+       isn't a ``@cb.function``. See :doc:`../concepts/compiled_code`.
    * - The run never finishes
      - ``Window.until_idle()`` on a model that always has future events
        (including a spawned process that loops forever). Use a finite
