@@ -90,7 +90,7 @@ class Delivery(cb.Model):
 
 
 class Store(cb.Model):
-    policy: Policy                    # any Policy subclass
+    policy: Policy
     demand: cb.Input[float] = inputs.dist.gamma(shape=2.0, scale=6.0)
     lead_time: cb.Input[float] = inputs.dist.uniform(low=2.0, high=5.0)
     on_hand: cb.State[float] = 80.0
@@ -129,13 +129,12 @@ class Store(cb.Model):
         self.orders_per_week = 7.0 * self.daily_orders.sample_mean()
 
 
-    def __init__(self, policy):
-        self.policy = policy                  # a Policy, or a sweep of policies
-
-
 def policy_study() -> Store:
     """A store whose policy is swept: one design point per policy."""
-    return Store(cb.sweep(OrderUpTo(), MinMax(), FixedQuantity(), PeriodicReview()))
+    store = Store()
+    store.policy = cb.sweep(  # pyright: ignore[reportAttributeAccessIssue]
+        OrderUpTo(), MinMax(), FixedQuantity(), PeriodicReview())
+    return store
 
 
 def compare_policies(*, replications: int = 50, seed: int = 11):

@@ -126,7 +126,8 @@ sweeps inside an option cross with the model sweep:
 
    daily, weekly = OrderUpTo(), PeriodicReview()
    weekly.level = cb.sweep(110.0, 130.0, 150.0)
-   store = Store(cb.sweep(daily, weekly))       # 2 x 3 = 6 design points
+   store = Store()
+   store.policy = cb.sweep(daily, weekly)       # 2 x 3 = 6 design points
 
 Sweeps cross, so ``OrderUpTo`` also runs once per ``level`` value even
 though that parameter doesn't affect it. Those three design points repeat
@@ -136,7 +137,8 @@ the same trials. When that matters, use separate options instead:
 
    lean, generous = MinMax(), MinMax()
    generous.minimum = 60.0
-   store = Store(cb.sweep(OrderUpTo(), lean, generous))
+   store = Store()
+   store.policy = cb.sweep(OrderUpTo(), lean, generous)
 
 Rules for ``@cb.function``
 --------------------------
