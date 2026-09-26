@@ -10,7 +10,7 @@ from .modeling import (
 from .experiments import Experiment, Window
 from .results import Results, Samples, Signal
 
-__version__ = "0.7.0"
+__version__ = "0.7.1"
 
 __all__ = [
     "Model", "Param", "State", "Output", "Input", "Series", "Ref",

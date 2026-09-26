@@ -1,3 +1,52 @@
+# Cimba Python 0.7.1
+
+Released 2026-09-26.
+
+The first published 0.7 release. Version 0.7 replaces the Python modeling
+core; the Cimba engine is unchanged. Existing 0.6 models need migrating: see
+[MIGRATION.md](MIGRATION.md).
+
+## The 0.7 modeling core
+
+- One `cb.Model` class for static and spawned instances, with typed `Param`,
+  `State`, `Output`, `Input`, `Series`, `Ref`, child and list fields, and
+  native entities (`Container`, `Store`, `PriorityStore`, `Resource`,
+  `Condition`, `Dataset`).
+- Processes, hooks, predicates and events are decorated methods, compiled once
+  per class with Numba. Rewiring, resizing, sweeping or rebinding inputs never
+  recompiles.
+- Inputs are configured, not coded: `inputs.dist`, `inputs.trace`,
+  `inputs.bootstrap` and `inputs.fitted` sources, each with its own random
+  stream per trial, recorded provenance, and explicit exhaustion policies
+  (`fail`, `wrap`, `end_trial`, `extend`).
+- `cb.Experiment` with `cb.sweep`, `cb.sweeps` and `Window`, common random
+  numbers by default, and `Results` read through the model objects
+  themselves. `cimba.analysis` provides summaries, paired comparisons and
+  input checks.
+
+## New since the 0.7 rework
+
+- `@cb.function`: annotated methods callable from compiled code, with dynamic
+  dispatch on the model's actual class, so subclasses can override them.
+  Functions can call each other, recurse, spawn models and block.
+- Model sweeps: sweep a child model field over model objects
+  (`store.policy = cb.sweep(OrderUpTo(), MinMax())`). Each option runs on its
+  own model tree, so an unselected option's processes never run, and every
+  option sees the same random numbers. `results.meta.variants` reports the
+  number of trees run.
+- `cb.sweep` accepts a single list.
+- `cimba.diagrams`: `structure()` and `process_graph()` diagrams, rendered as
+  Mermaid or Graphviz DOT.
+- Rewritten documentation: a guided tutorial, concept pages, how-to guides,
+  reference and an architecture section with diagrams.
+
+## Fixes
+
+- The `end_trial` exhaustion policy now ends the trial instead of failing it.
+- `Container(initial=...)` sets the starting level.
+- Processes spawned during a trial are stopped at the end of the window, and
+  their pending starts are cancelled.
+
 # Cimba Python 0.6.1
 
 Released 2026-09-06.

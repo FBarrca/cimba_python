@@ -2,7 +2,7 @@
 project(
     'cimba',
     'c',
-    version: '0.7.0',
+    version: '0.7.1',
     meson_version: '>=1.1.0',
     # Fast wheels by default. Use -Dbuildtype=debugoptimized for native INFO logs.
     default_options: ['buildtype=release'],
