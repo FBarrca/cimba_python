@@ -19,7 +19,7 @@ extensions = [
 
 autosummary_generate = True
 autodoc_typehints = "description"
-autodoc_mock_imports = ["cimba._cimba", "numba", "llvmlite"]
+autodoc_mock_imports = ["numba", "llvmlite"]
 
 html_theme = "sphinx_rtd_theme"
 html_theme_options = {

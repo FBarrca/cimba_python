@@ -1,10 +1,8 @@
-# Build for the Cimba Python wrapper: consume the upstream Cimba C library
-# (vendored as a git submodule under subprojects/cimba) and statically link it
-# into the private native runtime module.
+# Build the Python-independent runtime against the unchanged Cimba submodule.
 project(
     'cimba',
     'c',
-    version: '0.5.10',
+    version: '0.7.0',
     meson_version: '>=1.1.0',
     # Fast wheels by default. Use -Dbuildtype=debugoptimized for native INFO logs.
     default_options: ['buildtype=release'],
@@ -43,61 +41,71 @@ windows_module_defs = files('src/cimba/native/cimba.def')[0]
 
 py.install_sources(
     'src/cimba/__init__.py',
-    'src/cimba/_cimba.py',
     'src/cimba/sim.py',
-    'src/cimba/_bindings.py',
-    'src/cimba/_callbacks.py',
-    'src/cimba/_capture.py',
-    'src/cimba/_components.py',
-    'src/cimba/_declarations.py',
-    'src/cimba/_entity_methods.py',
-    'src/cimba/_experiment.py',
-    'src/cimba/_functions.py',
-    'src/cimba/_graph.py',
-    'src/cimba/_intrinsics.py',
-    'src/cimba/_lowering.py',
-    'src/cimba/_model.py',
-    'src/cimba/_runtime.py',
-    'src/cimba/_struct.py',
-    'src/cimba/_trial_inputs.py',
     'src/cimba/py.typed',
-    'src/cimba/__init__.pyi',
-    'src/cimba/_cimba.pyi',
-    'src/cimba/_cimba_native.pyi',
     subdir: 'cimba',
 )
 
 py.install_sources(
     'src/cimba/random/__init__.py',
     'src/cimba/random/__init__.pyi',
-    'src/cimba/random/_compiled.py',
+    'src/cimba/random/compiled.py',
     subdir: 'cimba/random',
 )
 
 py.install_sources(
     'src/cimba/bootstrap/__init__.py',
-    'src/cimba/bootstrap/_common.py',
-    'src/cimba/bootstrap/_decompose.py',
-    'src/cimba/bootstrap/blocks.py',
-    'src/cimba/bootstrap/demand.py',
-    'src/cimba/bootstrap/model.py',
-    'src/cimba/bootstrap/panel.py',
     subdir: 'cimba/bootstrap',
 )
 
-cimba_native_ext = py.extension_module(
-    '_cimba_native',
-    'src/cimba/native/module.c',
-    # nbshim.c re-exports the static-inline cimba functions that sim.py binds
-    # as Numba external symbols (cpy_*).
+py.install_sources(
+    'src/cimba/inputs/__init__.py',
+    'src/cimba/inputs/sources.py',
+    'src/cimba/inputs/dist.py',
+    'src/cimba/inputs/bootstrap.py',
+    'src/cimba/inputs/decompose.py',
+    'src/cimba/inputs/fitted.py',
+    'src/cimba/inputs/fit.py',
+    subdir: 'cimba/inputs',
+)
+
+py.install_sources('src/cimba/modeling/__init__.py', subdir: 'cimba/modeling')
+py.install_sources('src/cimba/schema/__init__.py', subdir: 'cimba/schema')
+py.install_sources('src/cimba/layout/__init__.py', subdir: 'cimba/layout')
+py.install_sources('src/cimba/engine/__init__.py', 'src/cimba/engine/abi.py',
+                   subdir: 'cimba/engine')
+py.install_sources('src/cimba/experiments/__init__.py',
+                   'src/cimba/experiments/design.py',
+                   'src/cimba/experiments/run.py',
+                   subdir: 'cimba/experiments')
+py.install_sources('src/cimba/engine/library.py', 'src/cimba/engine/symbols.py',
+                   'src/cimba/engine/runtime.py',
+                   'src/cimba/engine/random_symbols.py',
+                   subdir: 'cimba/engine')
+py.install_sources('src/cimba/compiler/__init__.py',
+                   'src/cimba/compiler/handles.py',
+                   'src/cimba/compiler/classes.py',
+                   'src/cimba/compiler/numba_compat.py',
+                   'src/cimba/compiler/views.py',
+                   'src/cimba/compiler/spawning.py', subdir: 'cimba/compiler')
+py.install_sources('src/cimba/results/__init__.py', subdir: 'cimba/results')
+py.install_sources('src/cimba/analysis/__init__.py', subdir: 'cimba/analysis')
+py.install_sources('src/cimba/diagrams/__init__.py', subdir: 'cimba/diagrams')
+
+# The only native artifact has no Python headers or interpreter linkage.
+cimba_native_lib = shared_library(
+    'cimba_py',
     'src/cimba/native/nbshim.c',
+    'src/cimba/native/inputs.c',
+    'src/cimba/native/trial.c',
+    'src/cimba/native/verbs.c',
     include_directories: [inc_api, inc_int, 'src/cimba/native'],
     dependencies: native_dependencies,
     link_whole: cimba_lib,
     vs_module_defs: windows_module_defs,
     install: true,
-    subdir: 'cimba',
+    install_dir: py.get_install_dir() / 'cimba',
 )
 
-# Stable extension target for meson-python's editable rebuilds.
-alias_target('cimba_ext', cimba_native_ext)
+# Stable target for meson-python's editable rebuilds.
+alias_target('cimba_ext', [cimba_native_lib])

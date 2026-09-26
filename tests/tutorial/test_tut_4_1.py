@@ -1,24 +1,16 @@
-from tutorial import tut_4_1
+import cimba as cb
+from tutorial.tut_4_1 import Harbor
 
 
-def test_tut_4_1_harbor_ship_waits_for_environment_and_resources():
-    exp = tut_4_1.harbor.experiment(
-        mean_wind=5.0,
-        reference_depth=15.0,
-        arrival_rate=1.0,
-        percent_large=0.0,
-        num_tugs=4.0,
-        num_berths_small=2.0,
-        num_berths_large=1.0,
-        unload_avg_small=2.0,
-        unload_avg_large=3.0,
-        replications=1,
-        warmup=0.0,
-        duration=48.0,
-        seed=41,
-    )
-
-    assert exp.run() == 0
-    assert exp["n_small"][0] > 0
-    assert exp["avg_time_small"][0] > 0.0
-    assert exp["tug_util"][0] > 0.0
+def test_ships_wait_for_weather_and_harbor_resources():
+    harbor = Harbor(mean_wind=5, reference_depth=15, arrival_rate=1,
+                    percent_large=0, num_tugs=4, num_berths_small=2,
+                    num_berths_large=1, unload_avg_small=2,
+                    unload_avg_large=3)
+    results = cb.Experiment(
+        harbor, window=cb.Window(duration=48), seed=41,
+    ).run()
+    assert not results.failed.any()
+    assert results[harbor].n_small[0, 0] > 0
+    assert results[harbor].avg_time_small[0, 0] > 0
+    assert results[harbor].tug_util[0, 0] > 0

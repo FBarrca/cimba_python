@@ -4,9 +4,8 @@ import cimba
 
 
 def main() -> None:
-    print(f"Hello world, I am Cimba {cimba.native_version()}.")
+    print(f"Hello world, I am Cimba {cimba.engine_version()}.")
 
 
 if __name__ == "__main__":
     main()
-

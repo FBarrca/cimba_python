@@ -1,303 +1,218 @@
-"""
-Harbor simulation - tutorial 4.1 (subprojects/cimba/tutorial/tut_4_1.c)
-through the Python bindings.
-
-Ships arrive at a harbor and wait offshore until the harbormaster clears
-them to dock: the water must be deep enough, the wind calm enough, and a
-berth of the right size plus enough tugboats available. The environment
-is driven by a weather process (Rayleigh wind, smoothed) and a tide
-process (astronomical + weather-driven components) that signals the
-harbormaster every hour. Docked ships dismiss the tugs, unload, then call
-the tugs back to depart. Every movement first claims the radio channel.
-
-Translation notes (C -> cimba.sim):
-
-* The harbor is grouped into components: SeaConditions owns weather/tide
-  state and processes, HarborFacilities owns tugs/berths/radio/condition,
-  and ShipTraffic owns arrivals, dynamic ships, departures, and datasets.
-* Ships are dynamic processes, as in C: arrivals sim.spawn()s one per
-  arrival through the component-owned ``@sim.process(spawnable=True)`` `ship` method and
-  initializes its Ship fields before it starts running (C's
-  ship_initialize). The per-ship attributes are sim.Struct fields in the
-  process allocation -- the Python form of the C tutorial deriving struct
-  ship from cmb_process -- and the process sees them through its
-  annotated `shp: Ship` parameter.
-* A departing ship records its time in system, hands its own process
-  handle to the departures process through the `departed` store, and
-  returns; the departures process sim.despawn()s it, corresponding to
-  the C davyjones/departed-ships recycling path. Spawned leftovers are
-  stopped and reclaimed automatically at the end of the trial.
-* The C version registers the tug/berth pools as resource guards of the
-  harbormaster condition, so releases re-test waiting predicates
-  automatically. Here, ships signal the harbormaster explicitly after
-  releasing resources.
-* Each ship reads its per-ship limits through the Ship struct, just as
-  the C predicate reads struct ship. Python predicates do not receive the
-  waiting process as an argument, so wait_for() uses a simple
-  harbormaster wake-up predicate and the ship rechecks its own docking
-  test in a loop, catching the same race as the C code (another ship
-  grabbing the tugs between wakeup and resumption).
-* Dataset reports and histograms are exposed as dataset methods; time-series
-  histories are exposed the same way through <entity>.history() (e.g.
-  env.queue.history().mean()), and entity reports still use the
-  sim.*_report() helpers. This runnable script keeps the console report
-  compact over replicated trials; the docs tutorial shows the fuller
-  single-trial report style.
-
-Usage: uv run python tutorial/tut_4_1.py
-"""
-
-from __future__ import annotations
+"""Tutorial 4.1: weather-gated harbor with dynamic ships and resources."""
 
 import time
 
 import numpy as np
 
-import cimba as cp
-import cimba.random as random
-import cimba.sim as sim
+import cimba as cb
+from cimba import inputs
 
-# Ship classes (SMALL, LARGE), as hard-coded in the C tutorial
-SMALL = 0
-LARGE = 1
+
+SMALL, LARGE = 0, 1
 TUGS_NEEDED = (1, 3)
-MAX_WIND = (10.0, 12.0)      # m/s
-MIN_DEPTH = (8.0, 13.0)      # m
-
+MAX_WIND = (10.0, 12.0)
+MIN_DEPTH = (8.0, 13.0)
 HOURS_PER_YEAR = 24.0 * 7 * 52
 
 
-class Ship(sim.Struct):
-    """Per-ship fields, as in the C tutorial's struct ship."""
-    size: int
-    tugs_needed: int
-    max_wind: float
-    min_depth: float
-    arrival: float
+class Ship(cb.Model):
+    harbor: cb.Ref["Harbor"]
+    size: cb.State[int]
+    tugs_needed: cb.State[int]
+    max_wind: cb.State[float]
+    min_depth: cb.State[float]
+    arrival: cb.State[float]
 
-
-class SeaConditions(sim.Component):
-    wind_mag: sim.FloatState         # m/s
-    wind_dir: sim.FloatState         # compass degrees
-    water_depth: sim.FloatState      # m
-
-    # Priority 1: each hour, the wind updates before the tide reads it
-    @sim.process(priority=1)
-    def weather(self, env: Harbor):
-        while True:
-            # Wind magnitude in m/s, smoothed over the previous hour
-            wmag = random.rayleigh(env.mean_wind)
-            self.wind_mag = 0.5 * wmag + 0.5 * self.wind_mag
-            # Wind direction in compass degrees, dominant from the southwest
-            self.wind_dir = random.pert(0.0, 225.0, 360.0)
-            sim.hold(1.0)
-
-    @sim.process
-    def tide(self, env: Harbor):
-        pi = np.pi
-        while True:
-            # A simple tide model with astronomical and weather-driven tides
-            t = sim.now()
-            da = (env.reference_depth
-                  + 1.0 * np.sin(2.0 * pi * t / 12.4)
-                  + 0.5 * np.sin(2.0 * pi * t / 24.0)
-                  + 0.25 * np.sin(2.0 * pi * t / (0.5 * 29.5 * 24)))
-            # Wind speed as a proxy for air pressure, assuming a west coast
-            dw = (0.5 * self.wind_mag
-                  - 0.5 * self.wind_mag
-                  * np.sin(self.wind_dir * pi / 180.0))
-            self.water_depth = da + dw
-            # Request the harbormaster to read the tide dial
-            env.facilities.harbormaster.signal()
-            sim.hold(1.0)
-
-
-class HarborFacilities(sim.Component):
-    tugs: sim.Pool = sim.capacity("num_tugs")
-    berths_small: sim.Pool = sim.capacity("num_berths_small")
-    berths_large: sim.Pool = sim.capacity("num_berths_large")
-    comms: sim.Resource              # the radio channel
-    harbormaster: sim.Condition      # gates docking
-
-
-class ShipTraffic(sim.Component):
-    departed: sim.Store              # finished ships to reclaim
-    time_small: sim.Dataset          # time in system
-    time_large: sim.Dataset
-
-    @sim.process
-    def arrivals(self, env: Harbor):
-        mean_interarr = 1.0 / env.arrival_rate
-        while True:
-            sim.hold(random.exponential(mean_interarr))
-            h = sim.spawn(self.ship, env, 0)
-            shp = Ship(h)
-            shp.size = random.bernoulli(env.percent_large)
-            shp.tugs_needed = TUGS_NEEDED[shp.size]
-            shp.max_wind = MAX_WIND[shp.size]
-            shp.min_depth = MIN_DEPTH[shp.size]
-            shp.arrival = sim.now()
-
-    @sim.process(spawnable=True)
-    def ship(self, env: Harbor, shp: Ship):
-        me = sim.current()
-        if shp.size == LARGE:
-            berths = env.facilities.berths_large
+    @cb.process
+    def voyage(self):
+        sea = self.harbor.sea
+        facilities = self.harbor.facilities
+        if self.size == LARGE:
+            berths = facilities.berths_large
         else:
-            berths = env.facilities.berths_small
+            berths = facilities.berths_small
 
-        # Wait for suitable conditions to dock. The loop catches spurious
-        # wakeups, such as several ships waiting for the tide and one of
-        # them grabbing the tugs before we can react.
         while True:
-            ready = (
-                env.sea.water_depth >= shp.min_depth
-                and env.sea.wind_mag <= shp.max_wind
-                and env.facilities.tugs.available() >= shp.tugs_needed
-                and berths.available() >= 1
-            )
+            ready = (sea.water_depth >= self.min_depth and
+                     sea.wind_mag <= self.max_wind and
+                     facilities.tugs.available() >= self.tugs_needed and
+                     berths.available() >= 1)
             if ready:
                 break
-            env.facilities.harbormaster.wait_for(env.harbormaster_called)
+            facilities.harbormaster.wait_until(self.harbor.should_call_harbormaster)
 
-        # Cleared to dock: grab a berth and the tugs
         berths.acquire(1)
-        env.facilities.tugs.acquire(shp.tugs_needed)
+        facilities.tugs.acquire(self.tugs_needed)
+        facilities.comms.acquire()
+        cb.hold(self.harbor.traffic.radio_delay.next())
+        facilities.comms.release()
+        cb.hold(self.harbor.traffic.movement.next())
+        facilities.tugs.release(self.tugs_needed)
+        facilities.harbormaster.signal()
 
-        # Announce our intention to move
-        env.facilities.comms.acquire()
-        sim.hold(random.gamma(5.0, 0.01))
-        env.facilities.comms.release()
-
-        # It takes a while to move into position
-        sim.hold(random.pert(0.4, 0.5, 0.8))
-
-        # Safely at the quay, dismiss the tugs and unload
-        env.facilities.tugs.release(shp.tugs_needed)
-        env.facilities.harbormaster.signal()
-        if shp.size == LARGE:
-            unload_avg = env.unload_avg_large
+        if self.size == LARGE:
+            cb.hold(self.harbor.traffic.unload_large.next())
         else:
-            unload_avg = env.unload_avg_small
-        sim.hold(random.pert(0.75 * unload_avg, unload_avg, 2.0 * unload_avg))
+            cb.hold(self.harbor.traffic.unload_small.next())
 
-        # Need the tugs again to get out of here
-        env.facilities.tugs.acquire(shp.tugs_needed)
-        env.facilities.comms.acquire()
-        sim.hold(random.gamma(5.0, 0.01))
-        env.facilities.comms.release()
-
-        # Gently move out again, assisted by tugs
-        sim.hold(random.pert(0.4, 0.5, 0.8))
-
-        # Cleared the berth, done with the tugs
+        facilities.tugs.acquire(self.tugs_needed)
+        facilities.comms.acquire()
+        cb.hold(self.harbor.traffic.radio_delay.next())
+        facilities.comms.release()
+        cb.hold(self.harbor.traffic.movement.next())
         berths.release(1)
-        env.facilities.tugs.release(shp.tugs_needed)
-        env.facilities.harbormaster.signal()
-
-        # Datasets are reset when the measurement window opens, which
-        # replaces the C version's explicit warmup-time check.
-        if shp.size == LARGE:
-            self.time_large.add(sim.now() - shp.arrival)
+        facilities.tugs.release(self.tugs_needed)
+        facilities.harbormaster.signal()
+        if self.size == LARGE:
+            self.harbor.traffic.time_large.record(cb.now() - self.arrival)
         else:
-            self.time_small.add(sim.now() - shp.arrival)
-        self.departed.put(me)
+            self.harbor.traffic.time_small.record(cb.now() - self.arrival)
+        self.harbor.traffic.departed.put(self)
 
-    @sim.process
-    def departures(self, env: Harbor):
+
+class SeaConditions(cb.Model):
+    harbor: cb.Ref["Harbor"]
+    wind_source: cb.Input[float] = inputs.dist.rayleigh(scale=5.0)
+    direction_source: cb.Input[float] = inputs.dist.pert(
+        low=0.0, mode=225.0, high=360.0)
+    wind_mag: cb.State[float] = 0.0
+    wind_dir: cb.State[float] = 0.0
+    water_depth: cb.State[float] = 0.0
+
+    def __init__(self, harbor, mean_wind):
+        self.harbor = harbor
+        self.wind_source = inputs.dist.rayleigh(scale=mean_wind)
+
+    @cb.process(priority=1)
+    def weather(self):
         while True:
-            sim.despawn(self.departed.take())
+            self.wind_mag = 0.5 * self.wind_source.next() + 0.5 * self.wind_mag
+            self.wind_dir = self.direction_source.next()
+            cb.hold(1.0)
+
+    @cb.process
+    def tide(self):
+        while True:
+            t = cb.now()
+            pi = np.pi
+            astronomical = (self.harbor.reference_depth +
+                            np.sin(2.0 * pi * t / 12.4) +
+                            0.5 * np.sin(2.0 * pi * t / 24.0) +
+                            0.25 * np.sin(2.0 * pi * t / (0.5 * 29.5 * 24)))
+            wind_effect = (0.5 * self.wind_mag - 0.5 * self.wind_mag *
+                           np.sin(self.wind_dir * pi / 180.0))
+            self.water_depth = astronomical + wind_effect
+            self.harbor.facilities.harbormaster.signal()
+            cb.hold(1.0)
 
 
-class Harbor(sim.Model):
-    # Model parameters
-    mean_wind: sim.Param
-    reference_depth: sim.Param
-    arrival_rate: sim.Param          # ships per hour
-    percent_large: sim.Param
-    num_tugs: sim.Param
-    num_berths_small: sim.Param
-    num_berths_large: sim.Param
-    unload_avg_small: sim.Param
-    unload_avg_large: sim.Param
+class HarborFacilities(cb.Model):
+    tugs: cb.Resource
+    berths_small: cb.Resource
+    berths_large: cb.Resource
+    comms: cb.Resource
+    harbormaster: cb.Condition
 
-    # Results
-    avg_time_small: sim.Output       # mean time in system, small ships
-    avg_time_large: sim.Output
-    n_small: sim.Output              # departures counted in the window
-    n_large: sim.Output
-    tug_util: sim.Output             # mean units in use over the window
-    berth_small_util: sim.Output
-    berth_large_util: sim.Output
+    def __init__(self, num_tugs, num_berths_small, num_berths_large):
+        self.tugs = cb.Resource(capacity=num_tugs)
+        self.berths_small = cb.Resource(capacity=num_berths_small)
+        self.berths_large = cb.Resource(capacity=num_berths_large)
+        self.comms = cb.Resource(capacity=1)
 
-    harbormaster_called: sim.Predicate
-    sea: SeaConditions = SeaConditions()
-    facilities: HarborFacilities = HarborFacilities()
-    traffic: ShipTraffic = ShipTraffic()
 
-    @sim.predicate(field="harbormaster_called")
-    def should_call_harbormaster(self) -> bool:
+class ShipTraffic(cb.Model):
+    harbor: cb.Ref["Harbor"]
+    arrival_gap: cb.Input[float] = inputs.dist.exponential(mean=2.0)
+    radio_delay: cb.Input[float] = inputs.dist.gamma(shape=5.0, scale=0.01)
+    movement: cb.Input[float] = inputs.dist.pert(low=0.4, mode=0.5, high=0.8)
+    unload_small: cb.Input[float] = inputs.dist.pert(low=6.0, mode=8.0, high=16.0)
+    unload_large: cb.Input[float] = inputs.dist.pert(low=9.0, mode=12.0, high=24.0)
+    departed: cb.Store[Ship]
+    time_small: cb.Dataset
+    time_large: cb.Dataset
+
+    def __init__(self, harbor, arrival_rate, unload_avg_small, unload_avg_large):
+        self.harbor = harbor
+        self.arrival_gap = inputs.dist.exponential(mean=1.0 / arrival_rate)
+        self.unload_small = inputs.dist.pert(
+            low=0.75 * unload_avg_small, mode=unload_avg_small,
+            high=2.0 * unload_avg_small)
+        self.unload_large = inputs.dist.pert(
+            low=0.75 * unload_avg_large, mode=unload_avg_large,
+            high=2.0 * unload_avg_large)
+
+    @cb.process
+    def arrivals(self):
+        while True:
+            cb.hold(self.arrival_gap.next())
+            size = int(cb.random.bernoulli(self.harbor.percent_large))
+            cb.spawn(Ship, harbor=self.harbor, size=size,
+                     tugs_needed=TUGS_NEEDED[size],
+                     max_wind=MAX_WIND[size], min_depth=MIN_DEPTH[size],
+                     arrival=cb.now())
+
+    @cb.process
+    def departures(self):
+        while True:
+            cb.release(self.departed.get())
+
+
+class Harbor(cb.Model):
+    reference_depth: cb.Param[float] = 15.0
+    percent_large: cb.Param[float] = 0.25
+    sea: SeaConditions
+    facilities: HarborFacilities
+    traffic: ShipTraffic
+    avg_time_small: cb.Output[float]
+    avg_time_large: cb.Output[float]
+    n_small: cb.Output[int]
+    n_large: cb.Output[int]
+    tug_util: cb.Output[float]
+    berth_small_util: cb.Output[float]
+    berth_large_util: cb.Output[float]
+
+    def __init__(self, *, mean_wind=5.0, reference_depth=15.0,
+                 arrival_rate=0.5, percent_large=0.25, num_tugs=10,
+                 num_berths_small=6, num_berths_large=3,
+                 unload_avg_small=8.0, unload_avg_large=12.0):
+        self.reference_depth = reference_depth
+        self.percent_large = percent_large
+        self.facilities = HarborFacilities(
+            int(num_tugs), int(num_berths_small), int(num_berths_large))
+        self.sea = SeaConditions(self, mean_wind)
+        self.traffic = ShipTraffic(
+            self, arrival_rate, unload_avg_small, unload_avg_large)
+
+    @cb.predicate
+    def should_call_harbormaster(self):
         return True
 
-    @sim.collect
+    @cb.on_end
     def harbor_stats(self):
-        self.avg_time_small = self.traffic.time_small.mean()
-        self.avg_time_large = self.traffic.time_large.mean()
-        self.n_small = self.traffic.time_small.count()
-        self.n_large = self.traffic.time_large.count()
+        self.avg_time_small = self.traffic.time_small.sample_mean()
+        self.avg_time_large = self.traffic.time_large.sample_mean()
+        self.n_small = self.traffic.time_small.sample_count()
+        self.n_large = self.traffic.time_large.sample_count()
         self.tug_util = self.facilities.tugs.mean_in_use()
         self.berth_small_util = self.facilities.berths_small.mean_in_use()
         self.berth_large_util = self.facilities.berths_large.mean_in_use()
 
 
-harbor = Harbor()
-
-
-
-
-
-
 def main() -> None:
-    print(f"cimba {cp.version()}, using {cp.use_threads(0)} worker threads")
-
-    # The parameter set of the C tutorial's load_params(), one year of
-    # harbor operation per trial after a day of warmup
-    exp = harbor.experiment(mean_wind=5.0,
-                            reference_depth=15.0,
-                            arrival_rate=0.5,
-                            percent_large=0.25,
-                            num_tugs=10.0,
-                            num_berths_small=6.0,
-                            num_berths_large=3.0,
-                            unload_avg_small=8.0,
-                            unload_avg_large=12.0,
-                            replications=20,
-                            warmup=24.0,
-                            duration=HOURS_PER_YEAR,
-                            seed=20260612)
-
-    t0 = time.perf_counter()
-    fails = exp.run()
-    wall = time.perf_counter() - t0
-    print(f"{len(exp)} trials of {HOURS_PER_YEAR:.0f} h in {wall:.2f} s, "
-          f"{fails} failed\n")
-
-    s = exp.summary()[0]    # single design point: means and 95% CIs
-    print("Time in system (hours):")
-    print(f"  small ships: {s['avg_time_small']:6.2f} "
-          f"+/- {s['avg_time_small_hw']:.2f}"
-          f"   ({s['n_small']:,.0f} departures/trial)")
-    print(f"  large ships: {s['avg_time_large']:6.2f} "
-          f"+/- {s['avg_time_large_hw']:.2f}"
-          f"   ({s['n_large']:,.0f} departures/trial)")
-
-    print("\nMean units in use:")
-    print(f"  tugs:         {s['tug_util']:5.2f} "
-          f"+/- {s['tug_util_hw']:.2f} of 10")
-    print(f"  small berths: {s['berth_small_util']:5.2f} "
-          f"+/- {s['berth_small_util_hw']:.2f} of 6")
-    print(f"  large berths: {s['berth_large_util']:5.2f} "
-          f"+/- {s['berth_large_util_hw']:.2f} of 3")
+    harbor = Harbor()
+    start = time.perf_counter()
+    results = cb.Experiment(
+        harbor, replications=20,
+        window=cb.Window(warmup=24.0, duration=HOURS_PER_YEAR),
+        seed=20260612,
+    ).run()
+    if results.failed.any():
+        raise RuntimeError(f"{results.failed.sum()} harbor trials failed")
+    print(f"cimba {cb.engine_version()}: {results.failed.size} harbor trials "
+          f"in {time.perf_counter() - start:.2f} s")
+    for field in ("n_small", "n_large", "avg_time_small", "avg_time_large",
+                  "tug_util", "berth_small_util", "berth_large_util"):
+        print(f"{field}: {getattr(results[harbor], field).values.mean():.3f}")
 
 
 if __name__ == "__main__":

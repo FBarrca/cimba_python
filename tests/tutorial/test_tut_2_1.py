@@ -1,27 +1,13 @@
-from tutorial import tut_2_1
+import cimba as cb
+from tutorial.tut_2_1 import CheeseGame
 
 
-def test_tut_2_1_preemption_wakes_lower_priority_holder():
-    exp = tut_2_1.game.experiment(
-        replications=1,
-        duration=100.0,
-        warmup=0.0,
-        seed=21,
-    )
-
-    assert exp.run() == 0
-    assert exp["accounting_errors"][0] == 0
-    assert exp["mice_grabbed"][0] > 0
-
-
-def test_tut_2_1_cat_chases_interrupt_rodents():
-    exp = tut_2_1.game.experiment(
-        replications=1,
-        duration=100.0,
-        warmup=0.0,
-        seed=22,
-    )
-
-    assert exp.run() == 0
-    assert exp["cat_chases"][0] > 0
-    assert exp["mice_interrupted"][0] + exp["rats_interrupted"][0] > 0
+def test_cat_interrupts_rodents_competing_for_cheese():
+    game = CheeseGame()
+    results = cb.Experiment(game, window=cb.Window(duration=100), seed=22).run()
+    assert not results.failed.any()
+    assert results[game].mice_grabbed[0, 0] > 0
+    assert results[game].cat_chases[0, 0] > 0
+    assert (results[game].mice_interrupted[0, 0] +
+            results[game].rats_interrupted[0, 0]) > 0
+    assert results[game].accounting_errors[0, 0] == 0

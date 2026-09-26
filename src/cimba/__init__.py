@@ -1,61 +1,63 @@
-"""Cimba model runtime configuration and compiled random draws."""
+"""Object-addressed discrete-event models and source-agnostic inputs."""
 
-from operator import index as _index
+from . import analysis, inputs, random
+from .modeling import (
+    Condition, Container, Dataset, Input, Model, Output, Param, PriorityStore,
+    Process, Ref, Resource, Scheduled, Series, State, Store, end_trial, event,
+    hold, log, now, on_end, on_start, predicate, process, release, schedule,
+    spawn, suspend, sweep, sweeps, this_process,
+)
+from .experiments import Experiment, Window
+from .results import Results, Samples, Signal
 
-from ._cimba import ffi as _ffi, lib as _lib
-from . import random as random
-
-LOGGER_FATAL = 0x80000000
-LOGGER_ERROR = 0x40000000
-LOGGER_WARNING = 0x20000000
-LOGGER_INFO = 0x10000000
+__version__ = "0.7.0"
 
 __all__ = [
-    "LOGGER_ERROR",
-    "LOGGER_FATAL",
-    "LOGGER_INFO",
-    "LOGGER_WARNING",
-    "logger_flags_off",
-    "logger_flags_on",
-    "native_version",
-    "random",
-    "use_threads",
-    "version",
-    "__version__",
+    "Model", "Param", "State", "Output", "Input", "Series", "Ref",
+    "Container", "Store", "PriorityStore", "Resource", "Condition",
+    "Dataset", "Process", "Scheduled", "process", "on_start", "on_end",
+    "predicate", "event", "hold", "now", "suspend", "spawn", "release",
+    "schedule", "this_process", "log", "end_trial", "sweep", "sweeps",
+    "Experiment", "Window", "Results", "Samples", "Signal", "inputs",
+    "random", "analysis", "engine_version", "set_engine_log_level",
+    "cache_info", "clear_cache", "__version__",
 ]
 
-#: Version of this Python wrapper (distinct from the native Cimba version).
-__version__ = "0.6.1"
+
+def engine_version() -> str:
+    """Version of the bundled Cimba engine."""
+    import ctypes
+    from .engine.library import load
+
+    library = load()
+    library.cimba_version.restype = ctypes.c_char_p
+    return library.cimba_version().decode("utf-8")
 
 
-def native_version() -> str:
-    """Return the bundled Cimba engine version."""
-    version = _ffi.string(_lib.cimba_version())
-    assert isinstance(version, bytes)
-    return version.decode("utf-8")
+def set_engine_log_level(flags: int) -> None:
+    """Set the native engine's category bitmask for subsequent runs."""
+    import ctypes
+    from .engine.library import load
+
+    if not 0 <= flags <= 0xFFFFFFFF:
+        raise ValueError("log flags must fit a 32-bit unsigned integer")
+    library = load()
+    library.cpy_logger_flags_off.argtypes = (ctypes.c_uint32,)
+    library.cpy_logger_flags_on.argtypes = (ctypes.c_uint32,)
+    library.cpy_logger_flags_off(0xFFFFFFFF)
+    if flags:
+        library.cpy_logger_flags_on(flags)
 
 
-def logger_flags_on(flags: int) -> None:
-    """Enable logging categories for subsequent model runs."""
-    _lib.cpy_logger_flags_on(_index(flags))
+def cache_info():
+    """Report in-memory class compilation cache usage."""
+    from .compiler.classes import ensure
+
+    return ensure.cache_info()
 
 
-def logger_flags_off(flags: int) -> None:
-    """Disable logging categories for subsequent model runs."""
-    _lib.cpy_logger_flags_off(_index(flags))
+def clear_cache() -> None:
+    """Discard compiled class callbacks after current runs have finished."""
+    from .compiler.classes import ensure
 
-
-def version() -> str:
-    """Return the cimba library version string."""
-    return native_version()
-
-
-def use_threads(n: int) -> int:
-    """Set native workers for the next run and return the effective count.
-
-    Call between runs. Zero selects the runtime's CPU-count default.
-    """
-    n = _index(n)
-    if not 0 <= n <= 0xFFFFFFFF:
-        raise ValueError("worker count must fit an unsigned 32-bit integer")
-    return int(_lib.cimba_threads_use(n))
+    ensure.cache_clear()

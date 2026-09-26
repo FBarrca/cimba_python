@@ -1,72 +1,48 @@
-"""Tutorial 1.2: stop the M/M/1 simulation at a fixed duration."""
+"""Tutorial 1.2: fixed window, queue history and arrival observations."""
 
-import os
-from pathlib import Path
-
-import cimba
-import cimba.random as random
-import cimba.sim as sim
-
-PLOT_PATH = Path("queue_history.png")
-_NON_INTERACTIVE_BACKENDS = frozenset(
-    {"agg", "cairo", "pdf", "pgf", "ps", "svg", "template"}
-)
+import cimba as cb
+from cimba import inputs
 
 
-class MM1(sim.Model):
-    utilization: sim.Param
-    avg_queue_length: sim.Output
-    avg_interarrival_time: sim.Output
-    queue: sim.Queue
-    interarrival_times: sim.Dataset
+class MM1(cb.Model):
+    interarrival: cb.Input[float] = inputs.dist.exponential(mean=1.0 / 0.75)
+    service_time: cb.Input[float] = inputs.dist.exponential(mean=1.0)
+    queue: cb.Container
+    interarrival_times: cb.Dataset
+    avg_queue_length: cb.Output[float]
+    avg_interarrival_time: cb.Output[float]
 
-    @sim.process
-    def arrival(self: "MM1"):
+    @cb.process
+    def arrival(self):
         while True:
-            t_ia = random.exponential(1.0 / self.utilization)
-            self.interarrival_times.add(t_ia)
-            sim.hold(t_ia)
+            gap = self.interarrival.next()
+            cb.hold(gap)
+            self.interarrival_times.record(gap)
             self.queue.put(1)
 
-    @sim.process
-    def service(self: "MM1"):
+    @cb.process
+    def service(self):
         while True:
             self.queue.get(1)
-            t_srv = random.exponential(1.0)
-            sim.hold(t_srv)
+            cb.hold(self.service_time.next())
 
-    @sim.collect
-    def collect_stats(self: "MM1"):
-        self.avg_queue_length = self.queue.history().mean()
-        self.avg_interarrival_time = self.interarrival_times.mean()
-        self.queue.history().capture()
-        self.interarrival_times.capture()
+    @cb.on_end
+    def collect_stats(self):
+        self.avg_queue_length = self.queue.mean_level()
+        self.avg_interarrival_time = self.interarrival_times.sample_mean()
 
-
-model = MM1("MM1")
 
 def main() -> None:
-    cimba.logger_flags_on(cimba.LOGGER_INFO)
-    exp = model.experiment(
-        utilization=[0.75],
-        replications=1,
-        duration=10.0,
-        warmup=0.0,
-        seed=43,
-    )
-    failures = exp.run()
-    if failures:
-        raise RuntimeError(f"{failures} trial(s) failed")
-    avg = float(exp.results.avg_queue_length[0])
-    avg_interarrival = float(exp.results.avg_interarrival_time[0])
-    queue_history = exp.history("queue")
-    interarrivals = exp.dataset("interarrival_times")
-    print(f"Simulation stopped at t=10.0, average queue length: {avg:.6f}")
-    print(f"Average sampled interarrival time: {avg_interarrival:.6f}")
-    print("First queue history rows: time, level, duration")
-    print(queue_history.shape)
-    print("Captured interarrival samples")
-    print(interarrivals.shape)
+    model = MM1()
+    model.queue = cb.Container()
+    model.queue.capture()
+    results = cb.Experiment(model, window=cb.Window(duration=25.0), seed=42).run()
+    if results.failed.any():
+        raise RuntimeError("M/M/1 trial failed")
+    time, level = results[model].queue.trial(0, 0)
+    print(f"Queue mean: {results[model].avg_queue_length[0, 0]:.3f}; "
+          f"interarrival mean: {results[model].avg_interarrival_time[0, 0]:.3f}; "
+          f"captured points: {len(time)}")
 
 
 if __name__ == "__main__":

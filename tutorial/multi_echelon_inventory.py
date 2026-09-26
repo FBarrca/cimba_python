@@ -1,40 +1,17 @@
-"""Multi-echelon inventory policy in Cimba Python.
+"""Multi-echelon inventory with source-agnostic daily demand.
 
-This module implements a simulation-side base policy. It does not run a
-simulation-optimization loop.
-
-The network has six nodes:
-
-* node 0 is an external source with infinite inventory,
-* nodes 1-5 are stocking facilities,
-* 0 -> 1, 1 -> 2, 1 -> 3, 3 -> 4, and 3 -> 5 are replenishment arcs.
-
-The facilities form one ``list[Facility]`` but use two concrete component
-implementations. ``SourceFacility`` supplies orders without holding stock,
-while ``StockingFacility`` owns demand and inventory processes. Cimba selects
-and compiles those implementations from the concrete template instances.
-
-Historical demand and lead-time delay observations are bootstrap-resampled
-outside the simulation with ``cimba.bootstrap`` and replayed as Cimba trace
-fields: facility demands with a joint stationary bootstrap (one set of block
-draws for all facilities, preserving autocorrelation and cross-facility
-correlation), lead-time delays with the ordinary i.i.d. bootstrap (the
-observations are independent). See docs/advanced/bootstrapping.rst for the
-method survey.
-
-Usage with the bundled data:
-
-    python tutorial/multi_echelon_inventory.py
+The six-node network keeps a source facility and five stocking facilities.
+One joint stationary bootstrap drives their related demand histories; an
+independent bootstrap supplies shipment delays. Sources can be replaced with
+traces or fitted models without changing the compiled facility processes.
 """
-
-from __future__ import annotations
 
 from pathlib import Path
 
 import numpy as np
 
-import cimba.sim as sim
-from cimba import bootstrap
+import cimba as cb
+from cimba import inputs
 
 
 SOURCE_NODE = 0
@@ -45,296 +22,226 @@ REORDER_POINT_TOLERANCE = 0.05
 DURATION = 360.0
 WARMUP = 0.0
 
-# Network-node parameters, indexed 0-5 (node 0 is the source).
 BASE_LEAD_TIME = np.array([0.0, 3.0, 4.0, 4.0, 2.0, 2.0])
 BASE_STOCK = np.array([10000.0, 3000.0, 600.0, 900.0, 300.0, 600.0])
 REORDER_POINT = np.array([0.0, 1000.0, 250.0, 200.0, 150.0, 200.0])
 INITIAL_INVENTORY = 0.9 * BASE_STOCK
 
 
-class Shipment(sim.Struct):
-    requester: int
-    quantity: float
+class Order(cb.Model):
+    requester: cb.Ref["Facility"]
+    quantity: cb.State[float]
 
 
-class Facility(sim.Component):
-    # Shared schema: shipment arrivals use a runtime facility index, so
-    # on_hand belongs to every variant even though the source never consumes it.
-    on_hand: sim.FloatState
-    inventory_position: sim.FloatState
-    backorder: sim.FloatState
-    total_demand: sim.FloatState
-    total_shipped: sim.FloatState
-    total_late_sales: sim.FloatState
-    on_hand_total: sim.FloatState
-    on_hand_samples: sim.State
+class Facility(cb.Model):
+    network: cb.Ref["MultiEchelonInventory"]
+    node: cb.Param[int]
+    upstream: cb.Ref["Facility"] | None
+    base_stock: cb.Param[float]
+    reorder_point: cb.Param[float]
+    initial_inventory: cb.Param[float]
+    base_lead_time: cb.Param[float]
+    on_hand: cb.State[float] = 0.0
+    inventory_position: cb.State[float] = 0.0
+    backorder: cb.State[float] = 0.0
+    total_demand: cb.State[float] = 0.0
+    total_shipped: cb.State[float] = 0.0
+    total_late_sales: cb.State[float] = 0.0
+    on_hand_total: cb.State[float] = 0.0
+    on_hand_samples: cb.State[int] = 0
+    avg_on_hand: cb.Output[float]
+    service_level: cb.Output[float]
+    orders: cb.Store[Order]
 
-    avg_on_hand: sim.Output
-    service_level: sim.Output
-
-    order_requesters: sim.Store
-    order_quantities: sim.Store
-
-    def __init__(self, node: int, upstream: int):
+    def __init__(self, network, node, upstream, *, base_stock,
+                 reorder_point, initial_inventory, base_lead_time):
+        self.network = network
         self.node = node
         self.upstream = upstream
+        self.base_stock = float(base_stock)
+        self.reorder_point = float(reorder_point)
+        self.initial_inventory = float(initial_inventory)
+        self.base_lead_time = float(base_lead_time)
 
 
 class SourceFacility(Facility):
-    """External source: accepts every replenishment request immediately."""
+    """External source with unlimited stock."""
 
-    def __init__(self):
-        super().__init__(SOURCE_NODE, -1)
-
-    @sim.process
-    def fulfill_orders(self, env):
+    @cb.process
+    def fulfill_orders(self):
         while True:
-            if self.order_requesters.length() == 0:
-                sim.hold(1.0)
-            else:
-                requester = self.order_requesters.take()
-                quantity = sim.i2f(self.order_quantities.take())
-                handle = sim.spawn(env.shipment, env)
-                shipment = Shipment(handle)
-                shipment.requester = requester
-                shipment.quantity = quantity
+            order = self.orders.get()
+            cb.spawn(Shipment, network=self.network,
+                     requester=order.requester, quantity=order.quantity)
+            cb.release(order)
 
-    @sim.collect
-    def facility_stats(self, env):
+    @cb.on_end
+    def facility_stats(self):
         self.avg_on_hand = 0.0
         self.service_level = 1.0
 
 
 class StockingFacility(Facility):
-    """Inventory-holding node with customer demand and replenishment."""
+    """Inventory-holding node with a daily series and replenishment."""
 
-    # Only stocking facilities own demand, so this field is packed over
-    # logical facility indexes 1-5.
-    demand: sim.Trace
+    demand: cb.Series[float] = cb.Series(step=1.0, origin=1.0)
 
-    @sim.process(priority=10)
-    def initialize(self, env):
-        initial_inventory = sim.Trace(env.initial_inventory)
-        self.on_hand = initial_inventory[self.node]
-        self.inventory_position = initial_inventory[self.node]
+    @cb.on_start
+    def initialize(self):
+        self.on_hand = self.initial_inventory
+        self.inventory_position = self.initial_inventory
 
-    @sim.process
-    def place_order(self, env):
-        base_stock = sim.Trace(env.base_stock)
-        reorder_point = sim.Trace(env.reorder_point)
+    @cb.process
+    def place_order(self):
         while True:
-            sim.hold(1.0)
-            # Inventory position includes stock already ordered but not arrived.
-            threshold = reorder_point[self.node] \
-                * (1.0 + REORDER_POINT_TOLERANCE)
+            cb.hold(1.0)
+            threshold = self.reorder_point * (1.0 + REORDER_POINT_TOLERANCE)
             if self.inventory_position <= threshold:
-                # Order enough to bring this facility back up to base stock.
-                quantity = base_stock[self.node] - self.on_hand
+                quantity = self.base_stock - self.on_hand
                 if quantity > 0.0:
-                    upstream = self.upstream
-                    env.facilities[upstream].order_requesters.put(self.node)
-                    env.facilities[upstream].order_quantities.put(
-                        sim.f2i(quantity))
-                    # Count the order immediately so we do not reorder it again.
+                    order = cb.spawn(Order, requester=self, quantity=quantity)
+                    if self.upstream is not None:
+                        self.upstream.orders.put(order)
                     self.inventory_position += quantity
 
-    @sim.process
-    def fulfill_orders(self, env):
+    @cb.process
+    def fulfill_orders(self):
         while True:
-            if self.order_requesters.length() == 0:
-                sim.hold(1.0)
-            else:
-                # These are replenishment orders from downstream facilities.
-                requester = self.order_requesters.take()
-                quantity = sim.i2f(self.order_quantities.take())
+            order = self.orders.get()
+            quantity = order.quantity
+            while self.on_hand < quantity:
+                cb.hold(1.0)
+            self.on_hand -= quantity
+            self.inventory_position -= quantity
+            cb.spawn(Shipment, network=self.network,
+                     requester=order.requester, quantity=quantity)
+            cb.release(order)
 
-                # Stocking nodes may have to wait until enough stock arrives.
-                shipped_now = min(quantity, self.on_hand)
-                self.on_hand -= shipped_now
-                self.inventory_position -= shipped_now
-
-                remaining = quantity - shipped_now
-                if remaining > EPSILON:
-                    while self.on_hand < remaining:
-                        sim.hold(1.0)
-                    self.on_hand -= remaining
-                    self.inventory_position -= remaining
-
-                handle = sim.spawn(env.shipment, env)
-                shipment = Shipment(handle)
-                shipment.requester = requester
-                shipment.quantity = quantity
-
-    @sim.process
-    def serve_customer(self, env):
-        # The trace holds this trial's bootstrap trajectory; replay it in
-        # order so the temporal structure of the resample survives.
-        trajectory = sim.Trace(self.demand)
-        day = 0
+    @cb.process
+    def serve_customer(self):
         while True:
             self.on_hand_total += self.on_hand
             self.on_hand_samples += 1
-            sim.hold(1.0)
-
-            demand = trajectory[day]
-            day += 1
+            cb.hold(1.0)
+            demand = self.demand.now()
             self.total_demand += demand
-
-            if env.backorder >= 0.5:
-                # Backorder mode counts demand not filled immediately.
-                shipment = min(demand + self.backorder, self.on_hand)
-                self.on_hand -= shipment
-                self.inventory_position -= shipment
-
-                backorder_delta = demand - shipment
-                self.backorder += backorder_delta
-                if backorder_delta > 0.0:
-                    self.total_late_sales += backorder_delta
+            if self.network.backorder >= 0.5:
+                shipped = min(demand + self.backorder, self.on_hand)
+                self.on_hand -= shipped
+                self.inventory_position -= shipped
+                remaining = demand - shipped
+                self.backorder += remaining
+                if remaining > 0.0:
+                    self.total_late_sales += remaining
             else:
-                # Lost-sales mode counts only units shipped on demand.
-                shipment = min(demand, self.on_hand)
-                self.total_shipped += shipment
-                self.on_hand -= shipment
-                self.inventory_position -= shipment
+                shipped = min(demand, self.on_hand)
+                self.total_shipped += shipped
+                self.on_hand -= shipped
+                self.inventory_position -= shipped
 
-    @sim.collect
-    def facility_stats(self, env):
+    @cb.on_end
+    def facility_stats(self):
         if self.on_hand_samples > 0:
             self.avg_on_hand = self.on_hand_total / self.on_hand_samples
         else:
             self.avg_on_hand = self.on_hand
-
         demand = self.total_demand + EPSILON
-        if env.backorder >= 0.5:
+        if self.network.backorder >= 0.5:
             self.service_level = 1.0 - self.total_late_sales / demand
         else:
             self.service_level = self.total_shipped / demand
 
 
-class MultiEchelonInventory(sim.Model):
-    backorder: sim.Param
+class Shipment(cb.Model):
+    network: cb.Ref["MultiEchelonInventory"]
+    requester: cb.Ref[Facility]
+    quantity: cb.State[float]
 
-    base_stock: sim.Trace
-    reorder_point: sim.Trace
-    initial_inventory: sim.Trace
-    base_lead_time: sim.Trace
-    lead_time_delay: sim.Trace
-
-    completed_shipments: sim.Store
-    lead_time_cursor: sim.State
-
-    facilities: list[Facility] = [
-        SourceFacility(),
-        StockingFacility(1, 0),
-        StockingFacility(2, 1),
-        StockingFacility(3, 1),
-        StockingFacility(4, 3),
-        StockingFacility(5, 3),
-    ]
-
-    @sim.process(spawnable=True)
-    def shipment(self, shipment: Shipment):
-        lead_time_delay = sim.Trace(self.lead_time_delay)
-        base_lead_time = sim.Trace(self.base_lead_time)
-        requester = shipment.requester
-        # Each shipment consumes the next resampled delay from the trace.
-        draw = self.lead_time_cursor
-        self.lead_time_cursor += 1
-        delay = lead_time_delay[draw]
-        lead_time = base_lead_time[requester] + delay
+    @cb.process
+    def deliver(self):
+        delay = self.network.lead_time_delay.next()
+        lead_time = self.requester.base_lead_time + delay
         if lead_time > 0.0:
-            sim.hold(lead_time)
-        # The replenishment arrives after its sampled lead time.
-        self.facilities[requester].on_hand += shipment.quantity
-        self.completed_shipments.put(sim.current())
+            cb.hold(lead_time)
+        self.requester.on_hand += self.quantity
+        self.network.completed_shipments.put(self)
 
-    @sim.process
+
+class MultiEchelonInventory(cb.Model):
+    backorder: cb.Param[float] = 0.0
+    lead_time_delay: cb.Input[float] = inputs.trace([0.0], on_exhausted="wrap")
+    completed_shipments: cb.Store[Shipment]
+    facilities: list[Facility]
+
+    def __init__(self, *, backorder=0.0, base_stock=BASE_STOCK,
+                 reorder_point=REORDER_POINT,
+                 initial_inventory=INITIAL_INVENTORY,
+                 base_lead_time=BASE_LEAD_TIME):
+        self.backorder = float(backorder)
+        source = SourceFacility(
+            self, SOURCE_NODE, None,
+            base_stock=base_stock[0], reorder_point=reorder_point[0],
+            initial_inventory=initial_inventory[0],
+            base_lead_time=base_lead_time[0],
+        )
+        dc = StockingFacility(
+            self, 1, source,
+            base_stock=base_stock[1], reorder_point=reorder_point[1],
+            initial_inventory=initial_inventory[1],
+            base_lead_time=base_lead_time[1],
+        )
+        second = StockingFacility(
+            self, 3, dc,
+            base_stock=base_stock[3], reorder_point=reorder_point[3],
+            initial_inventory=initial_inventory[3],
+            base_lead_time=base_lead_time[3],
+        )
+        nodes = [source, dc, None, second, None, None]
+        for node, upstream in ((2, dc), (4, second), (5, second)):
+            nodes[node] = StockingFacility(
+                self, node, upstream,
+                base_stock=base_stock[node], reorder_point=reorder_point[node],
+                initial_inventory=initial_inventory[node],
+                base_lead_time=base_lead_time[node],
+            )
+        self.facilities = nodes
+
+    @cb.process
     def reclaim_shipments(self):
         while True:
-            handle = self.completed_shipments.take()
-            sim.despawn(handle)
+            cb.release(self.completed_shipments.get())
 
 
-model = MultiEchelonInventory("multi-echelon-inventory")
-
-
-
-
-
-
-def load_data(
-    data_dir: str | Path | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Load demand and lead-time observations."""
-
-    root = (
-        Path(__file__).with_name("data") / "multi_echelon_inventory"
-        if data_dir is None
-        else Path(data_dir)
-    )
-    return (
-        np.loadtxt(root / "demandData.csv", delimiter=",", skiprows=1),
-        np.loadtxt(root / "leadTimeExtraDays.csv", delimiter=","),
-    )
+def load_data(data_dir: str | Path | None = None) -> tuple[np.ndarray, np.ndarray]:
+    root = (Path(__file__).with_name("data") / "multi_echelon_inventory"
+            if data_dir is None else Path(data_dir))
+    return (np.loadtxt(root / "demandData.csv", delimiter=",", skiprows=1),
+            np.loadtxt(root / "leadTimeExtraDays.csv", delimiter=","))
 
 
 def main() -> int:
     demand, lead_time_delay = load_data()
-
-    # One demand value per simulated day; size the resamples to cover the
-    # whole recording window (warmup + duration).
-    horizon = int(WARMUP + DURATION) + 1
-
-    # The facility demand histories are related series, so resample them
-    # jointly: one set of stationary-bootstrap block draws drives every
-    # facility, preserving autocorrelation within each series and the
-    # cross-facility correlation that stresses shared upstream capacity.
-    # Mean block length follows the n**(1/3) rule of thumb.
+    network = MultiEchelonInventory()
     mean_block = round(demand.shape[0] ** (1.0 / 3.0))
-    demand_gens = bootstrap.joint(
-        {f"facility_{node}": demand[:, node - 1]
-         for node in range(1, NUM_NODES)},
-        length=horizon,
-        name="demand",
-        mean_block=mean_block,
+    joint = inputs.bootstrap.joint(
+        {node: demand[:, node - 1] for node in range(1, NUM_NODES)},
+        mean_block=mean_block, tag="facility-demand",
     )
-    # The subtype-only field is packed over stocking facilities (nodes 1-5),
-    # so no placeholder is needed for the source at logical index 0.
-    facility_demand = [
-        demand_gens[f"facility_{node}"] for node in range(1, NUM_NODES)
-    ]
-
-    # Lead-time extra days are independent observations, so the ordinary
-    # bootstrap applies. Each shipment consumes one draw; the stocking
-    # facilities order at most once per day, which bounds the draws needed.
-    lead_time_gen = bootstrap.iid(
-        lead_time_delay, length=STOCKING_NODES * horizon)
-
-    exp = model.experiment(
-        backorder=0.0,
-        base_stock=BASE_STOCK,
-        reorder_point=REORDER_POINT,
-        initial_inventory=INITIAL_INVENTORY,
-        base_lead_time=BASE_LEAD_TIME,
-        lead_time_delay=lead_time_gen,
-        facilities__demand=facility_demand,
-        replications=20,
-        duration=DURATION,
-        warmup=WARMUP,
-        seed=123,
-    )
-    failures = exp.run()
-    if failures:
-        raise RuntimeError(f"{failures} trial(s) failed")
-
-    print(
-        "Average on-hand by node:",
-        np.round(exp.results.facilities.avg_on_hand.mean(axis=0), 3),
-    )
-    print(
-        "Service level by node:",
-        np.round(exp.results.facilities.service_level.mean(axis=0), 4),
-    )
+    for node in range(1, NUM_NODES):
+        network.facilities[node].demand = joint[node]
+    network.lead_time_delay = inputs.bootstrap.iid(lead_time_delay)
+    result = cb.Experiment(
+        network, replications=20,
+        window=cb.Window(warmup=WARMUP, duration=DURATION), seed=123,
+    ).run()
+    if result.failed.any():
+        raise RuntimeError(f"{result.failed.sum()} inventory trials failed")
+    print("Average on-hand by node:", np.round([
+        result[facility].avg_on_hand.values.mean()
+        for facility in network.facilities], 3))
+    print("Service level by node:", np.round([
+        result[facility].service_level.values.mean()
+        for facility in network.facilities], 4))
     return 0
 
 

@@ -1,25 +1,13 @@
-import pytest
+import cimba as cb
+from tutorial.tut_1_2 import MM1
 
-from tutorial import tut_1_2
 
-
-def test_tut_1_2_stop_event_ends_infinite_processes():
-    exp = tut_1_2.model.experiment(
-        utilization=[0.75],
-        replications=1,
-        duration=3.5,
-        warmup=0.0,
-        seed=12,
-    )
-
-    assert exp.run() == 0
-    assert exp["avg_queue_length"][0] >= 0.0
-    assert exp["avg_interarrival_time"][0] > 0.0
-    rows = exp.history("queue")
-    assert rows.ndim == 2
-    assert rows.shape[1] == 3
-    assert rows[:, 2].sum() > 0.0
-    samples = exp.dataset("interarrival_times")
-    assert samples.ndim == 1
-    assert samples.size > 0
-    assert samples.mean() == pytest.approx(exp["avg_interarrival_time"][0])
+def test_queue_history_and_arrival_dataset():
+    model = MM1()
+    model.queue = cb.Container()
+    model.queue.capture()
+    results = cb.Experiment(model, window=cb.Window(duration=25), seed=12).run()
+    assert not results.failed.any()
+    time, level = results[model].queue.trial(0, 0)
+    assert len(time) == len(level) > 0
+    assert results[model].avg_interarrival_time[0, 0] > 0

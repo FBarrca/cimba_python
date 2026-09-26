@@ -1,39 +1,27 @@
 import numpy as np
 
-from tutorial import multi_echelon_inventory as inventory
+import cimba as cb
+from cimba import inputs
+from tutorial.multi_echelon_inventory import (
+    MultiEchelonInventory, SourceFacility, StockingFacility,
+)
 
 
-def test_multi_echelon_inventory_uses_concrete_facility_variants():
-    model = inventory.model
-    schema = model.component_schema("facilities.demand")
-
-    assert type(model.facilities[0]) is inventory.SourceFacility
-    assert all(
-        type(facility) is inventory.StockingFacility
-        for facility in model.facilities[1:]
-    )
-    assert schema.owners == (1, 2, 3, 4, 5)
-    assert schema.packed
-
-    horizon = 8
-    exp = model.experiment(
-        backorder=0.0,
-        base_stock=inventory.BASE_STOCK,
-        reorder_point=inventory.REORDER_POINT,
-        initial_inventory=inventory.INITIAL_INVENTORY,
-        base_lead_time=inventory.BASE_LEAD_TIME,
-        lead_time_delay=np.zeros(inventory.STOCKING_NODES * horizon),
-        facilities__demand=[
-            np.full(horizon, float(node))
-            for node in range(1, inventory.NUM_NODES)
-        ],
-        replications=1,
-        duration=5.0,
-        warmup=0.0,
-        seed=123,
-    )
-
-    assert exp.run() == 0
-    assert exp["facilities__avg_on_hand"][0, 0] == 0.0
-    assert exp["facilities__service_level"][0, 0] == 1.0
-    assert np.all(exp["facilities__service_level"][0, 1:] > 0.0)
+def test_joint_demand_can_drive_heterogeneous_facilities():
+    model = MultiEchelonInventory()
+    assert type(model.facilities[0]) is SourceFacility
+    assert all(type(node) is StockingFacility for node in model.facilities[1:])
+    demand = np.tile(np.arange(1.0, 6.0), (8, 1))
+    joint = inputs.bootstrap.joint(
+        {node: demand[:, node - 1] for node in range(1, 6)}, mean_block=2)
+    for node in range(1, 6):
+        model.facilities[node].demand = joint[node]
+    model.lead_time_delay = inputs.trace([0.0], on_exhausted="wrap")
+    results = cb.Experiment(
+        model, window=cb.Window(duration=5), seed=123,
+    ).run()
+    assert not results.failed.any()
+    assert results[model.facilities[0]].avg_on_hand[0, 0] == 0.0
+    assert results[model.facilities[0]].service_level[0, 0] == 1.0
+    assert all(results[node].service_level[0, 0] > 0
+               for node in model.facilities[1:])

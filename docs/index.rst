@@ -1,17 +1,20 @@
-Cimba Python documentation
-==========================
+Cimba Python 0.7
+================
 
 .. image:: static/cimba_logo_large.jpg
 
-.. toctree::
-    :maxdepth: 1
-    :caption: Contents:
+Cimba Python compiles discrete-event models written as Python classes and runs
+them on the native Cimba engine. ``Input`` and ``Series`` fields make recorded
+data, fitted distributions, and resamples interchangeable without editing
+model code.
 
-    welcome
-    concepts/index
-    advanced/index
-    installation
-    tutorial
-    examples/index
-    api_reference/index
-    about/index
+.. toctree::
+   :maxdepth: 2
+
+   quickstart
+   input_modeling
+   modeling
+   experiments
+   api
+   installation
+   migration

@@ -6,7 +6,7 @@ from numba.extending import overload as _nb_overload
 
 _MODEL_ONLY = (
     "cimba.random draws require a compiled model callback. "
-    "Use model.experiment(seed=...) for reproducibility; "
+    "Use Experiment(model, seed=...) for reproducibility; "
     "use numpy.random.default_rng() outside models."
 )
 
@@ -120,8 +120,8 @@ def categorical(probabilities: Iterable[float]) -> int:
 
 
 def _compiled_namespace():
-    from . import _compiled
-    return _compiled
+    from . import compiled
+    return compiled
 
 
 # Model callbacks and the @njit helpers they call share these implementations.

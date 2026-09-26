@@ -1,12 +1,6 @@
-from tutorial import tut_1_5
+from tutorial.tut_1_5 import run_mm1_trial
 
 
-def test_tut_1_5_parameterized_trial_stores_results_on_trial_object():
-    avg_queue_length = tut_1_5.run_mm1_trial(
-        utilization=0.6,
-        warmup=20.0,
-        duration=1500.0,
-        seed=15,
-    )
-
-    assert avg_queue_length > 0.0
+def test_composed_station_runs():
+    assert run_mm1_trial(utilization=0.6, warmup=20,
+                         duration=1_500, seed=15) > 0

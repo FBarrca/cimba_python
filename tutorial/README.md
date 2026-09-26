@@ -1,7 +1,7 @@
 # Cimba Python Tutorials
 
-This directory mirrors `subprojects/cimba/tutorial/` with Python versions built
-on `cimba.sim`.
+This directory follows the upstream C tutorial sequence using the 0.7 model,
+input source, experiment, and result APIs. Each script is a standalone model.
 
 The file names intentionally match the upstream C tutorial sequence:
 
@@ -11,11 +11,12 @@ The file names intentionally match the upstream C tutorial sequence:
 - `tut_2_1.py`, `tut_3_1.py`, and `tut_4_1.py` contain the resource-preemption,
   amusement-park, and harbor models.
 - `tut_4_0.py` is the empty harbor-model template.
-- `tut_4_2.py` sketches the harbor experiment sweep on top of the Python harbor
-  model.
+- `tut_4_2.py` compares two harbor capacities with common seeds.
 - `tut_5_1.py` is a three-station manufacturing-line tutorial model with
   dynamic parts, station handoffs, cycle-time, wait-time, utilization, and
   process-graph outputs.
+- `multi_echelon_inventory.py` drives a six-node network with a joint
+  stationary bootstrap of demand and an independent lead-time bootstrap.
 
 Run from the repository root, for example:
 

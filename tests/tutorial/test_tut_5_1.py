@@ -1,16 +1,14 @@
-from tutorial import tut_5_1
+import cimba as cb
+from tutorial.tut_5_1 import AssemblyLine, RANDOM_SEED
 
 
-def test_tut_5_1_runs_short_assembly_line_experiment(tmp_path):
-    model = tut_5_1.build_model(tmp_path)
-    exp = model.experiment(
-        replications=1,
-        duration=500.0,
-        warmup=0.0,
-        seed=tut_5_1.RANDOM_SEED,
-    )
-
-    assert exp.run() == 0
-    assert exp["total_parts_produced"][0] > 0
-    assert exp["avg_cycle_time"][0] > 0.0
-    assert exp["station_2__utilization"][0] > exp["station_3__utilization"][0]
+def test_assembly_line_handoffs_and_bottleneck():
+    line = AssemblyLine(duration=500)
+    results = cb.Experiment(
+        line, window=cb.Window(duration=500), seed=RANDOM_SEED,
+    ).run()
+    assert not results.failed.any()
+    assert results[line].total_parts_produced[0, 0] > 0
+    assert results[line].avg_cycle_time[0, 0] > 0
+    assert (results[line.station_2].utilization[0, 0] >
+            results[line.station_3].utilization[0, 0])

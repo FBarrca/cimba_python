@@ -1,4 +1,5 @@
-"""
+"""Tutorial 3.1: a nine-attraction park with visitor behavior.
+
 Amusement park - tutorial 3.1 (subprojects/cimba/tutorial/tut_3_1.c)
 through the Python bindings: an M/G/n network with balking, reneging,
 and jockeying customer behaviors.
@@ -19,46 +20,12 @@ The queue wait runs on process timers: the visitor enqueues its own
 process handle, arms a jockeying and a reneging timer, and sim.suspend()s.
 It wakes either by a timer signal or by the ride server, which clears the
 visitor's timers when boarding and resumes it after the ride.
-
-Translation notes (C -> cimba.sim):
-
-* Visitors are dynamic processes, as in C: arrivals sim.spawn()s one per
-  arrival through the ``@sim.process(spawnable=True)`` `visitor` method and initializes its
-  Visitor fields before it starts running (C's visitor_initialize). The
-  per-visitor attributes are sim.Struct fields in the process's native
-  allocation -- the Python form of the C tutorial deriving struct visitor
-  from cmb_process -- and the process sees them through its annotated
-  `vip: Visitor` parameter.
-* As in C, the object a visitor posts in the ride queue is its own
-  process handle. The server views it with Visitor(handle), adds the
-  waiting and riding times to the visitor's fields, and resumes it with
-  sim.SUCCESS -- the same data flow as the C server.
-* A departing visitor records its statistics, hands its own handle to
-  the departures process through the `departed` store, and returns; the
-  departures process sim.despawn()s it (C's visitor_terminate/_destroy).
-  Early despawning just recycles memory during the day -- any spawned
-  process still alive at the end of the trial is reclaimed automatically.
-* The park layout lives in module-level numpy arrays, baked into the
-  compiled code as constants; ride queues and servers are grouped into
-  Attraction components, while visitor arrivals and departures live in a
-  VisitorFlow component.
-* The C alias sampler (cmb_random_alias) becomes a linear scan over the
-  cumulative transition row -- identical distribution, 11 outcomes.
-* The C version stops arrivals at closing time and lets the day drain.
-  Here arrivals stop emitting at start+duration and the trial's cooldown
-  provides the draining window, so every visitor's day is complete.
-
-Usage: uv run python examples/demo_park.py
 """
 
 import time
-
 import numpy as np
-from numba import njit
-
-import cimba as cp
-import cimba.random as random
-import cimba.sim as sim
+import cimba as cb
+from cimba import inputs
 
 # --- Park structure, hard-coded as in the C tutorial -------------------------
 NUM_ATTRACTIONS = 9
@@ -119,264 +86,226 @@ TIMER_RENEGING = 42
 PARK_OPEN = 16 * 60.0       # minutes
 
 
-class Visitor(sim.Struct):
-    """Per-visitor fields, as in the C tutorial's struct visitor."""
-    patience: float
-    priority: int
-    entry_park: float
-    entry_queue: float
-    riding: float
-    waiting: float
-    walking: float
-    rides: int
+class Visitor(cb.Model):
+    park: cb.Ref["Park"]
+    patience: cb.State[float]
+    priority: cb.State[int]
+    entry_park: cb.State[float]
+    process_pointer: cb.State[int] = 0
+    entry_queue: cb.State[float] = 0.0
+    riding: cb.State[float] = 0.0
+    waiting: cb.State[float] = 0.0
+    walking: cb.State[float] = 0.0
+    rides: cb.State[int] = 0
 
-
-@njit
-def _next_attraction(at):
-    """Sample the next stop from the transition row (alias sampler in C)."""
-    r = random.uniform()
-    acc = 0.0
-    for j in range(IDX_EXIT + 1):
-        acc += TRANSITION_PROBS[at, j]
-        if r < acc:
-            return j
-    return IDX_EXIT
-
-
-class RideQueues(sim.Component):
-    line: sim.PQueues = sim.count("queue_count")
-
-    def __init__(self, queue_count: int):
-        self.queue_count = int(queue_count)
-
-
-class Attraction(sim.Component):
-    queues: RideQueues
-
-    def __init__(self, attraction: int):
-        self.attraction = int(attraction)
-        self.queue_count = int(NUM_QUEUES[attraction])
-        self.servers_per_q = int(SERVERS_PER_Q[attraction])
-        self.server_count = self.queue_count * self.servers_per_q
-        self.batch_size = int(BATCH_SIZES[attraction])
-        self.dmin = float(MIN_DUR[attraction])
-        self.dmode = float(MODE_DUR[attraction])
-        self.dmax = float(MAX_DUR[attraction])
-        self.queues = RideQueues(self.queue_count)
-
-    @sim.process(copies="server_count")
-    def server(self, env, idx: int):
-        q = self.queues.line[idx // self.servers_per_q]
-        batch_size = self.batch_size
-        riders = np.empty(MAX_BATCH, dtype=np.int64)
-
-        while True:
-            # Wait for the first rider, then fill the ride as best possible
-            riders[0] = q.take()
-            cnt = 1
-            while q.length() > 0 and cnt < batch_size:
-                riders[cnt] = q.take()
-                cnt = cnt + 1
-            # Boarding: no more jockeying or reneging for this batch, and
-            # the waiting is over -- log it into each visitor's record
-            boarding = sim.now()
-            for i in range(cnt):
-                sim.timers_clear(riders[i])
-                vip = Visitor(riders[i])
-                vip.waiting += boarding - vip.entry_queue
-
-            dur = random.pert(self.dmin, self.dmode, self.dmax)
-            sim.hold(dur)
-
-            # Unload and send the riders on their merry way
-            for i in range(cnt):
-                Visitor(riders[i]).riding += dur
-                sim.resume(riders[i], sim.SUCCESS)
-
-
-class VisitorFlow(sim.Component):
-    # Counters
-    balks: sim.State
-    jockeys: sim.State
-    reneges: sim.State
-
-    # Entities
-    departed: sim.Store                 # finished visitors to reclaim
-    d_park: sim.Dataset                 # time in park
-    d_riding: sim.Dataset
-    d_waiting: sim.Dataset
-    d_walking: sim.Dataset
-    d_rides: sim.Dataset                # attractions ridden per visitor
-
-    @sim.process
-    def arrivals(self, env):
-        closing = env.start_time + env.warmup_s + env.duration_s
-        mean_interarr = 1.0 / ARRIVAL_RATE
-        while True:
-            sim.hold(random.exponential(mean_interarr))
-            if sim.now() >= closing:
-                break
-            # Spawn a new visitor and initialize it before it passes the
-            # turnstile (it starts running once we block on the next hold)
-            priority = 5 if random.bernoulli(PERCENT_GOLDCARDS) == 1 else 0
-            v = sim.spawn(self.visitor, env, priority)
-            vip = Visitor(v)
-            vip.entry_park = sim.now()
-            vip.patience = random.triangular(0.5, 1.0, 1.5)
-            vip.priority = priority
-        while True:
-            sim.suspend()       # park entrance closed for today
-
-    @sim.process(spawnable=True)
-    def visitor(self, env, vip: Visitor):
-        me = sim.current()
+    @cb.process
+    def visit(self):
+        me = cb.this_process()
+        self.process_pointer = me.pointer
         at = IDX_ENTRANCE
         while at != IDX_EXIT:
-            nxt = _next_attraction(at)
-
-            # Walk there
-            mwt = TRANSITION_TIMES[at, nxt]
-            wt = random.pert(0.5 * mwt, mwt, 2.0 * mwt)
-            sim.hold(wt)
-            vip.walking += wt
+            draw = cb.random.uniform()
+            cumulative = 0.0
+            nxt = IDX_EXIT
+            for candidate in range(IDX_EXIT + 1):
+                cumulative += TRANSITION_PROBS[at, candidate]
+                if draw < cumulative:
+                    nxt = candidate
+                    break
+            mean_walk = TRANSITION_TIMES[at, nxt]
+            walk = cb.random.pert(0.5 * mean_walk, mean_walk, 2.0 * mean_walk)
+            cb.hold(walk)
+            self.walking += walk
             at = nxt
             if at == IDX_EXIT:
                 break
 
-            # Join the shortest queue if several
-            ride = at - 1
-            q = env.attractions[ride].queues.line[0]
-            qlen = q.length()
-            for candidate in range(1, env.attractions[ride].queues.queue_count):
-                candidate_q = env.attractions[ride].queues.line[candidate]
-                candidate_len = candidate_q.length()
-                if candidate_len < qlen:
-                    q = candidate_q
-                    qlen = candidate_len
+            chosen = np.int64(0)
+            shortest = 1_000_000
+            for index in range(len(self.park.ride_queues)):
+                ride = self.park.ride_queues[index]
+                if ride.attraction == at:
+                    length = ride.line.length()
+                    if length < shortest:
+                        chosen = np.int64(index)
+                        shortest = length
+            if shortest > self.patience * BALKING_THRESHOLD:
+                self.park.balks += 1
+                continue
 
-            # Balking?
-            if qlen > vip.patience * BALKING_THRESHOLD:
-                self.balks += 1
-                continue        # too long a queue, go somewhere else
-
-            # Arm the jockeying and reneging timeouts, then queue up
-            sim.timer_set(me, vip.patience * JOCKEYING_THRESHOLD,
-                          TIMER_JOCKEYING)
-            sim.timer_add(me, vip.patience * RENEGING_THRESHOLD,
-                          TIMER_RENEGING)
-            vip.entry_queue = sim.now()
-            entry = q.put(me, vip.priority)
-
-            # Suspend until we have finished both queue and ride, trusting
-            # the server to clear our timers at boarding and to update our
-            # waiting and riding times, as in C
+            line = self.park.ride_queues[chosen].line
+            self.entry_queue = cb.now()
+            ticket = line.enqueue(self, self.priority)
+            me.timer_set(self.patience * JOCKEYING_THRESHOLD, TIMER_JOCKEYING)
+            me.timer_set(self.patience * RENEGING_THRESHOLD, TIMER_RENEGING)
             while True:
-                sig = sim.suspend()
-                if sig == TIMER_JOCKEYING:
-                    my_pos = q.position(entry)
-                    new_q = env.attractions[ride].queues.line[0]
-                    new_len = new_q.length()
-                    for candidate in range(
-                            1, env.attractions[ride].queues.queue_count):
-                        candidate_q = \
-                            env.attractions[ride].queues.line[candidate]
-                        candidate_len = candidate_q.length()
-                        if candidate_len < new_len:
-                            new_q = candidate_q
-                            new_len = candidate_len
-                    if new_len < my_pos:
-                        q.cancel(entry)
-                        q = new_q
-                        entry = q.put(me, vip.priority + 1)
-                        self.jockeys += 1
-                elif sig == TIMER_RENEGING:
-                    q.cancel(entry)
-                    sim.timers_clear(me)
-                    self.reneges += 1
-                    break       # give up, go somewhere else
+                signal = cb.suspend()
+                if signal == TIMER_JOCKEYING:
+                    replacement = chosen
+                    replacement_length = shortest
+                    for index in range(len(self.park.ride_queues)):
+                        ride = self.park.ride_queues[index]
+                        if ride.attraction == at:
+                            length = ride.line.length()
+                            if length < replacement_length:
+                                replacement = np.int64(index)
+                                replacement_length = length
+                    if replacement != chosen and (
+                        replacement_length < line.position(ticket)
+                    ):
+                        if line.cancel(ticket):
+                            chosen = replacement
+                            line = self.park.ride_queues[chosen].line
+                            ticket = line.enqueue(self, self.priority + 1)
+                            self.park.jockeys += 1
+                elif signal == TIMER_RENEGING:
+                    if line.cancel(ticket):
+                        self.park.reneges += 1
+                    me.timers_clear()
+                    break
                 else:
-                    vip.rides += 1
-                    break       # yay! slightly dizzy, do it again?
+                    self.rides += 1
+                    break
 
-        # Enough for today: record statistics, then hand ourselves to departures
-        self.d_park.add(sim.now() - vip.entry_park)
-        self.d_riding.add(vip.riding)
-        self.d_waiting.add(vip.waiting)
-        self.d_walking.add(vip.walking)
-        self.d_rides.add(1.0 * vip.rides)
-        self.departed.put(me)
+        self.park.d_park.record(cb.now() - self.entry_park)
+        self.park.d_riding.record(self.riding)
+        self.park.d_waiting.record(self.waiting)
+        self.park.d_walking.record(self.walking)
+        self.park.d_rides.record(float(self.rides))
+        cb.release(self)
 
-    @sim.process
-    def departures(self, env):
+
+class RideQueue(cb.Model):
+    attraction: cb.Param[int]
+    line: cb.PriorityStore[Visitor]
+    duration: cb.Input[float] = inputs.dist.pert(low=3.0, mode=4.0, high=5.0)
+
+    def __init__(self, attraction: int):
+        self.attraction = attraction
+        self.duration = inputs.dist.pert(
+            low=float(MIN_DUR[attraction]),
+            mode=float(MODE_DUR[attraction]),
+            high=float(MAX_DUR[attraction]),
+        )
+
+    @cb.process
+    def server(self):
         while True:
-            sim.despawn(self.departed.take())
+            visitor = self.line.get()
+            visitor.waiting += cb.now() - visitor.entry_queue
+            visitor_process = cb.Process(visitor.process_pointer)
+            visitor_process.timers_clear()
+            duration = self.duration.next()
+            cb.hold(duration)
+            visitor.riding += duration
+            visitor_process.resume(0)
 
 
-class Park(sim.Model):
-    # Results (averages over each trial's visitors)
-    avg_rides: sim.Output
-    avg_time_in_park: sim.Output
-    avg_riding: sim.Output
-    avg_waiting: sim.Output
-    avg_walking: sim.Output
-    n_visitors: sim.Output
-    n_balks: sim.Output
-    n_jockeys: sim.Output
-    n_reneges: sim.Output
+class RideQueueTwo(RideQueue):
+    @cb.process(copies=2)
+    def server(self):
+        while True:
+            visitor = self.line.get()
+            visitor.waiting += cb.now() - visitor.entry_queue
+            visitor_process = cb.Process(visitor.process_pointer)
+            visitor_process.timers_clear()
+            duration = self.duration.next()
+            cb.hold(duration)
+            visitor.riding += duration
+            visitor_process.resume(0)
 
-    flow: VisitorFlow = VisitorFlow()
-    attractions: list[Attraction] = [
-        Attraction(attraction) for attraction in range(1, NUM_ATTRACTIONS + 1)
-    ]
 
-    @sim.collect
+class RideQueueThree(RideQueue):
+    @cb.process(copies=3)
+    def server(self):
+        while True:
+            visitor = self.line.get()
+            visitor.waiting += cb.now() - visitor.entry_queue
+            visitor_process = cb.Process(visitor.process_pointer)
+            visitor_process.timers_clear()
+            duration = self.duration.next()
+            cb.hold(duration)
+            visitor.riding += duration
+            visitor_process.resume(0)
+
+
+class Park(cb.Model):
+    closing: cb.Param[float] = PARK_OPEN
+    arrival_gap: cb.Input[float] = inputs.dist.exponential(mean=1.0 / ARRIVAL_RATE)
+    ride_queues: list[RideQueue]
+    d_park: cb.Dataset
+    d_riding: cb.Dataset
+    d_waiting: cb.Dataset
+    d_walking: cb.Dataset
+    d_rides: cb.Dataset
+    balks: cb.State[int] = 0
+    jockeys: cb.State[int] = 0
+    reneges: cb.State[int] = 0
+    avg_rides: cb.Output[float]
+    avg_time_in_park: cb.Output[float]
+    avg_riding: cb.Output[float]
+    avg_waiting: cb.Output[float]
+    avg_walking: cb.Output[float]
+    n_visitors: cb.Output[int]
+    n_balks: cb.Output[int]
+    n_jockeys: cb.Output[int]
+    n_reneges: cb.Output[int]
+
+    def __init__(self, closing: float = PARK_OPEN):
+        self.closing = closing
+        self.ride_queues = [
+            (RideQueue if SERVERS_PER_Q[attraction] == 1 else
+             RideQueueTwo if SERVERS_PER_Q[attraction] == 2 else
+             RideQueueThree)(attraction)
+            for attraction in range(1, NUM_ATTRACTIONS + 1)
+            for _ in range(int(NUM_QUEUES[attraction]))
+        ]
+
+    @cb.process
+    def arrivals(self):
+        while True:
+            cb.hold(self.arrival_gap.next())
+            if cb.now() >= self.closing:
+                break
+            priority = 5 if cb.random.bernoulli(PERCENT_GOLDCARDS) else 0
+            cb.spawn(Visitor, park=self,
+                     priority=priority,
+                     patience=cb.random.triangular(0.5, 1.0, 1.5),
+                     entry_park=cb.now())
+        while True:
+            cb.suspend()
+
+    @cb.on_end
     def park_stats(self):
-        self.avg_rides = self.flow.d_rides.mean()
-        self.avg_time_in_park = self.flow.d_park.mean()
-        self.avg_riding = self.flow.d_riding.mean()
-        self.avg_waiting = self.flow.d_waiting.mean()
-        self.avg_walking = self.flow.d_walking.mean()
-        self.n_visitors = self.flow.d_park.count()
-        self.n_balks = self.flow.balks
-        self.n_jockeys = self.flow.jockeys
-        self.n_reneges = self.flow.reneges
-
-
-park = Park()
-
-
+        self.avg_rides = self.d_rides.sample_mean()
+        self.avg_time_in_park = self.d_park.sample_mean()
+        self.avg_riding = self.d_riding.sample_mean()
+        self.avg_waiting = self.d_waiting.sample_mean()
+        self.avg_walking = self.d_walking.sample_mean()
+        self.n_visitors = self.d_park.sample_count()
+        self.n_balks = self.balks
+        self.n_jockeys = self.jockeys
+        self.n_reneges = self.reneges
 
 
 def main() -> None:
-    print(f"cimba {cp.version()}, using {cp.use_threads(0)} worker threads")
-    print(f"{NUM_ATTRACTIONS} attractions, {TOTAL_QUEUES} queues, "
-          f"{NUM_SERVERS} ride servers; {PARK_OPEN:.0f} min park day")
-
-    # duration is the time the entrance stays open; the cooldown lets the
-    # park drain so every visitor's day is complete, as in the C version
-    exp = park.experiment(replications=20, duration=PARK_OPEN, warmup=0.0,
-                          cooldown=2000.0, seed=20260613)
-    t0 = time.perf_counter()
-    fails = exp.run()
-    wall = time.perf_counter() - t0
-    print(f"{len(exp)} trials in {wall:.2f} s, {fails} failed\n")
-
-    rows = [
-        ("visitors / day", "n_visitors", "%6.0f"),
-        ("rides taken", "avg_rides", "%6.2f"),
-        ("time in park (min)", "avg_time_in_park", "%6.1f"),
-        ("  riding", "avg_riding", "%6.1f"),
-        ("  waiting in queues", "avg_waiting", "%6.1f"),
-        ("  walking", "avg_walking", "%6.1f"),
-        ("balks / day", "n_balks", "%6.0f"),
-        ("jockey moves / day", "n_jockeys", "%6.0f"),
-        ("reneges / day", "n_reneges", "%6.0f"),
-    ]
-    stats = exp.summary()[0]    # single design point: means and 95% CIs
-    print(f"{'per-visitor averages':<22} {'mean':>7} {'+/-95%':>7}")
-    for label, field, fmt in rows:
-        print(f"{label:<22} {fmt % stats[field]:>7} "
-              f"{stats[field + '_hw']:7.2f}")
+    park = Park()
+    start = time.perf_counter()
+    results = cb.Experiment(
+        park, replications=20,
+        window=cb.Window(duration=PARK_OPEN, cooldown=2_000.0),
+        seed=20260613,
+    ).run()
+    if results.failed.any():
+        raise RuntimeError(f"{results.failed.sum()} park trials failed")
+    print(f"cimba {cb.engine_version()}; {NUM_ATTRACTIONS} attractions, "
+          f"{TOTAL_QUEUES} queues, {NUM_SERVERS} ride servers")
+    print(f"{results.failed.size} trials in {time.perf_counter() - start:.2f} s")
+    for field in ("n_visitors", "avg_rides", "avg_time_in_park", "avg_riding",
+                  "avg_waiting", "avg_walking", "n_balks", "n_jockeys",
+                  "n_reneges"):
+        samples = getattr(results[park], field).values
+        print(f"{field}: {samples.mean():.3f}")
 
 
 if __name__ == "__main__":

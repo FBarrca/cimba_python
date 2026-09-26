@@ -1,49 +1,40 @@
-"""Tutorial 1.4: collect queue statistics over a long run."""
+"""Tutorial 1.4: long-run queue statistics after a warmup."""
 
-import cimba.random as random
-import cimba.sim as sim
+import cimba as cb
+from cimba import inputs
 
-class MM1(sim.Model):
-    utilization: sim.Param
-    avg_queue_length: sim.Output
-    queue: sim.Queue
 
-    @sim.process
+class MM1(cb.Model):
+    interarrival: cb.Input[float] = inputs.dist.exponential(mean=1.0 / 0.75)
+    service_time: cb.Input[float] = inputs.dist.exponential(mean=1.0)
+    queue: cb.Container
+    avg_queue_length: cb.Output[float]
+
+    @cb.process
     def arrival(self):
         while True:
-            t_ia = random.exponential(1.0 / self.utilization)
-            sim.hold(t_ia)
+            cb.hold(self.interarrival.next())
             self.queue.put(1)
 
-    @sim.process
+    @cb.process
     def service(self):
         while True:
             self.queue.get(1)
-            t_srv = random.exponential(1.0)
-            sim.hold(t_srv)
+            cb.hold(self.service_time.next())
 
-    @sim.collect
+    @cb.on_end
     def collect_stats(self):
-        self.avg_queue_length = self.queue.history().mean()
-        self.queue.report()
-        self.queue.history().pacf_correlogram(lags=20)
+        self.avg_queue_length = self.queue.mean_level()
 
-model = MM1("MM1")
 
 def main() -> None:
-    exp = model.experiment(
-        utilization=[0.75],
-        replications=1,
-        duration=1.0e6,
-        warmup=1.0e3,
-        seed=45,
-    )
-    failures = exp.run()
-    if failures:
-        raise RuntimeError(f"{failures} trial(s) failed")
-    avg = float(exp.results.avg_queue_length[0])
-    print("Theory predicts an average M/M/1 waiting-queue length of 2.25")
-    print(f"Simulation result: {avg:.6f}")
+    model = MM1()
+    results = cb.Experiment(
+        model, window=cb.Window(warmup=100.0, duration=5_000.0), seed=14,
+    ).run()
+    if results.failed.any():
+        raise RuntimeError("M/M/1 trial failed")
+    print(f"Average queue length: {results[model].avg_queue_length[0, 0]:.6f}")
 
 
 if __name__ == "__main__":

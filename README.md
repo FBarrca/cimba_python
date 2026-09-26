@@ -1,119 +1,63 @@
 ![Cimba logo](docs/static/cimba_logo_large.jpg)
 
-# Cimba Python
+# Cimba Python 0.7
 
-## Fast discrete event simulation for Python
+Cimba Python compiles object-oriented discrete-event models to run on the [Cimba C engine](https://github.com/ambonvik/cimba). A model declares its variability as inputs. The same compiled model can use distributions, recorded traces, bootstrap resamples, or fitted sources.
 
-Cimba Python provides one modeling API, `cimba.sim`, for [Cimba](https://github.com/ambonvik/cimba),
-a multithreaded discrete event simulation engine written in C and assembly.
-
-It is designed for Python simulation models that need more speed than pure
-Python event scheduling can usually provide. In the included M/M/1 benchmark,
-Cimba Python runs about **24.5–31.3x faster than SimPy** after its one-time Numba
-compile, while keeping model code in Python.
-
-On an AMD Ryzen 7 9700X under WSL Ubuntu 24.04, averaged over 10 runs:
-
-| Benchmark | SimPy | Cimba Python | Cimba C |
-| --- | ---: | ---: | ---: |
-| Single core, single trial | 2.856 s | 0.117 s | 0.078 s |
-| Multicore, 100 trials | 38.723 s | 1.238 s | 0.800 s |
-
-The benchmark data and charts are in
-[`benchmark/AMD_Ryzen_7_9700X_WSL.ods`](benchmark/AMD_Ryzen_7_9700X_WSL.ods).
-
-## Install
+Python 3.13 or newer is required. Linux x86_64, Windows AMD64, and macOS arm64 wheels include the native engine.
 
 ```bash
 pip install cimba
 ```
 
-or with `uv`:
-
-```bash
-uv add cimba
-```
-
-Python 3.13 or newer is required. The Linux, Windows, and macOS wheels embed
-our fork of Cimba **3.0.1** (with Apple Silicon and Windows ports), so you do not need to install Cimba separately. Native
-macOS wheels are available for Apple Silicon. Numba does not currently publish
-the required llvmlite wheels for Intel Macs.
-
-The model runtime manages the strict native object lifecycle required since Cimba
-3.0.0 RC1: initialize before use, terminate after use, and destroy allocated
-objects. This includes temporary statistics objects and spawned processes.
-Abandoned trials also release the runtime's spawned-process registry before
-the worker runs another trial. Python models do not need manual lifecycle calls.
-
-Migration from the removed direct Python and capsule APIs is documented in
-[`docs/about/cimba_python.rst`](docs/about/cimba_python.rst#migrating-from-the-lower-level-api).
-
-## What is it?
-
-Cimba Python gives Python models access to Cimba's native simulation engine
-through the `cimba.sim` API: processes, event queues, buffers, queues, stores,
-priority queues, resources, resource pools, conditions, timers, events, logging
-helpers, and experiment tables. Random distributions live in `cimba.random`.
-
-## What does the code look like?
+## A queue model
 
 ```python
-import cimba.sim as sim
-import cimba.random as random
+import cimba as cb
+from cimba import inputs
 
 
-class MM1(sim.Model):
-    utilization: sim.Param
-    avg_queue_length: sim.Output
-    queue: sim.Queue
+class MM1(cb.Model):
+    interarrival: cb.Input[float] = inputs.dist.exponential(mean=1 / 0.75)
+    service_time: cb.Input[float] = inputs.dist.exponential(mean=1)
+    queue: cb.Container
+    mean_queue: cb.Output[float]
 
-    @sim.process
-    def arrival(self: "MM1"):
+    @cb.process
+    def arrivals(self):
         while True:
-            sim.hold(random.exponential(1.0 / self.utilization))
+            cb.hold(self.interarrival.next())
             self.queue.put(1)
 
-    @sim.process
-    def service(self: "MM1"):
+    @cb.process
+    def server(self):
         while True:
             self.queue.get(1)
-            sim.hold(random.exponential(1.0))
+            cb.hold(self.service_time.next())
 
-    @sim.collect
-    def collect_stats(self: "MM1"):
-        self.avg_queue_length = self.queue.mean_level()
+    @cb.on_end
+    def measure(self):
+        self.mean_queue = self.queue.mean_level()
 
 
-model = MM1("MM1")
-
-exp = model.experiment(
-    utilization=0.75,
-    replications=100,
-    duration=1000.0,
-    warmup=100.0,
-    seed=123,
-)
-exp.run()
-
-print(exp.results.avg_queue_length.mean())
+model = MM1()
+results = cb.Experiment(
+    model, replications=100,
+    window=cb.Window(warmup=100, duration=1000), seed=123,
+).run()
+print(cb.analysis.summary(results[model].mean_queue))
 ```
 
-More examples, tutorials, background notes, and the API reference are in the
-[documentation](https://fbarrca.github.io/cimba_python/).
+To replay observed arrival gaps, assign `model.interarrival = inputs.trace(gaps)`. To resample them, assign `inputs.bootstrap.stationary(gaps, mean_block=7)`. The process code and compiled class stay the same. Input sources are independent streams, and results record their provenance and consumption.
+
+See the [documentation](https://fbarrca.github.io/cimba_python/), [standalone tutorials](tutorial/README.md), and [0.6 to 0.7 migration guide](MIGRATION.md).
 
 ## Development
 
-From a fresh clone:
-
 ```bash
-uv sync
+git submodule update --init --recursive
+uv sync --locked
 uv run pytest
 ```
 
-## License
-
-Cimba Python is licensed under Apache-2.0. See [`LICENSE`](LICENSE) and
-[`NOTICE`](NOTICE).
-
-The bundled Cimba C library is also Apache-2.0 licensed. See
-`subprojects/cimba/NOTICE` for attribution.
+The Cimba C library is an unchanged submodule. Cimba Python is Apache-2.0 licensed; see [LICENSE](LICENSE) and [NOTICE](NOTICE).

@@ -1,4 +1,5 @@
-"""
+"""Tutorial 2.1: mice, rats and a cat competing for cheese.
+
 Mice, rats, and a cat - tutorial 2.1 (subprojects/cimba/tutorial/tut_2_1.c)
 through the Python bindings: interrupt and preempt process interactions.
 
@@ -12,134 +13,150 @@ to chase rodents, interrupting them with either the generic INTERRUPTED
 signal or a random user-defined signal in [10, 100]; an interrupted call
 returns early but holdings are unchanged.
 
-Translation notes (C -> cimba.sim):
-
-* The cat picks its victim through the declared sim.Processes fields
-  (env.mouse[i] / env.rat[i]), which publish the handles of each
-  @sim.process copy - the C version reads the same handles out of its
-  simulation struct.
-* The C version verifies cheese accounting with debug asserts against
-  cmb_resourcepool_held_by_process() after every step; here the checks
-  count mismatches into the accounting_errors output (asserted to be 0),
-  via ``env.cheese.held()``.
-* The C tutorial infers its holdings from the returned signals: PREEMPTED
-  means "all my cheese is gone", anything else "unchanged". Both readings
-  are wrong: a preemptor only takes what it needs starting from the
-  lowest-priority holder (a victim may keep a remainder), a process
-  waiting in acquire can have its prior holdings raided yet still return
-  SUCCESS once its request is eventually granted, and a PREEMPTED return
-  can even leave the victim holding MORE than before (part of the
-  in-flight request granted and kept before the raid). The header warns
-  "do not assume" -- signals say why you woke, not what you hold -- and
-  the C tutorial's own debug assert fails within ~1000 time units. This
-  port treats the pool's books (``env.cheese.held()``) as authoritative after
-  every blocking call and classifies the net change as grabbed/stolen.
-* The C version logs every move; here the events are tallied into
-  per-species counters instead.
-* C gives each animal a random initial priority at creation; here all
-  start at 0 and draw a random priority at the top of the first loop,
-  which is equivalent from the second event on.
-
-Usage: uv run python examples/demo_cheese.py
 """
 
 import time
 
 import numpy as np
-from numba import njit
 
-import cimba as cp
-import cimba.random as random
-import cimba.sim as sim
+import cimba as cb
+
 
 NUM_MICE = 5
 NUM_RATS = 2
 CHEESE_AMOUNT = 20
+DURATION = 100_000.0
 
-DURATION = 100000.0
 
+class Rodent(cb.Model):
+    game: cb.Ref["CheeseGame"]
+    is_rat: cb.Param[int] = 0
+    process_pointer: cb.State[int] = 0
 
-class CheeseGame(sim.Model):
-    # Results
-    mice_grabbed: sim.Output        # cheese units successfully acquired
-    mice_stolen: sim.Output         # units taken from mice by preemptors
-    mice_preempted: sim.Output      # preemption events suffered
-    mice_interrupted: sim.Output    # times a mouse was interrupted
-    rats_grabbed: sim.Output
-    rats_stolen: sim.Output
-    rats_preempted: sim.Output
-    rats_interrupted: sim.Output
-    cat_chases: sim.Output
-    accounting_errors: sim.Output   # held-amount mismatches (must be 0)
-    cheese_in_use: sim.Output       # time-weighted mean units held
+    def __init__(self, game, is_rat):
+        self.game = game
+        self.is_rat = is_rat
 
-    # Counters (auto-zeroed per trial)
-    m_grab: sim.State
-    m_stol: sim.State
-    m_pre: sim.State
-    m_int: sim.State
-    r_grab: sim.State
-    r_stol: sim.State
-    r_pre: sim.State
-    r_int: sim.State
-    chases: sim.State
-    acct_errors: sim.State
-
-    # The pile of cheese cubes
-    cheese: sim.Pool = CHEESE_AMOUNT
-
-    # Process handles, used by the cat to pick a victim
-    mouse: sim.Processes
-    rat: sim.Processes
-
-    @sim.process(copies=NUM_MICE, field="mouse")
-    def mouse_process(self):
-        me = sim.current()
+    @cb.process
+    def forage(self):
+        me = cb.this_process()
+        self.process_pointer = me.pointer
         held = 0
         while True:
-            held, grabbed, stolen, preempted, interrupted = _forage_once(
-                self, me, 0, 1, 5, -10, 10, held)
-            self.m_grab = self.m_grab + grabbed
-            self.m_stol = self.m_stol + stolen
-            self.m_pre = self.m_pre + preempted
-            self.m_int = self.m_int + interrupted
+            if self.is_rat:
+                amount = cb.random.dice(3, 10)
+                me.priority_set(cb.random.dice(-5, 15))
+                signal = self.game.cheese.preempt(amount)
+            else:
+                amount = cb.random.dice(1, 5)
+                me.priority_set(cb.random.dice(-10, 10))
+                signal = self.game.cheese.acquire(amount)
 
-    @sim.process(copies=NUM_RATS, field="rat")
-    def rat_process(self):
-        me = sim.current()
-        held = 0
-        while True:
-            held, grabbed, stolen, preempted, interrupted = _forage_once(
-                self, me, 1, 3, 10, -5, 15, held)
-            self.r_grab = self.r_grab + grabbed
-            self.r_stol = self.r_stol + stolen
-            self.r_pre = self.r_pre + preempted
-            self.r_int = self.r_int + interrupted
+            new_held = int(self.game.cheese.held(me))
+            if self.is_rat:
+                if signal == 0:
+                    self.game.r_grab += amount
+                elif signal == -1:
+                    self.game.r_pre += 1
+                else:
+                    self.game.r_int += 1
+                if held + amount > new_held:
+                    self.game.r_stol += held + amount - new_held
+            else:
+                if signal == 0:
+                    self.game.m_grab += amount
+                elif signal == -1:
+                    self.game.m_pre += 1
+                else:
+                    self.game.m_int += 1
+                if held + amount > new_held:
+                    self.game.m_stol += held + amount - new_held
+            held = new_held
 
-    @sim.process
+            signal = cb.hold(cb.random.exponential(1.0))
+            if self.is_rat:
+                if signal == -1:
+                    self.game.r_pre += 1
+                elif signal != 0:
+                    self.game.r_int += 1
+            else:
+                if signal == -1:
+                    self.game.m_pre += 1
+                elif signal != 0:
+                    self.game.m_int += 1
+            actual = int(self.game.cheese.held(me))
+            if actual < held:
+                if self.is_rat:
+                    self.game.r_stol += held - actual
+                else:
+                    self.game.m_stol += held - actual
+            held = actual
+            if held > 1:
+                drop = cb.random.dice(1, held)
+                self.game.cheese.release(drop)
+                held -= drop
+            if held != self.game.cheese.held(me):
+                self.game.acct_errors += 1
+            signal = cb.hold(cb.random.exponential(1.0))
+            if signal == -1:
+                if self.is_rat:
+                    self.game.r_pre += 1
+                else:
+                    self.game.m_pre += 1
+            actual = int(self.game.cheese.held(me))
+            if actual < held:
+                if self.is_rat:
+                    self.game.r_stol += held - actual
+                else:
+                    self.game.m_stol += held - actual
+            held = actual
+
+
+class CheeseGame(cb.Model):
+    rodents: list[Rodent]
+    cheese: cb.Resource = cb.Resource(capacity=CHEESE_AMOUNT)
+    m_grab: cb.State[int] = 0
+    m_stol: cb.State[int] = 0
+    m_pre: cb.State[int] = 0
+    m_int: cb.State[int] = 0
+    r_grab: cb.State[int] = 0
+    r_stol: cb.State[int] = 0
+    r_pre: cb.State[int] = 0
+    r_int: cb.State[int] = 0
+    chases: cb.State[int] = 0
+    acct_errors: cb.State[int] = 0
+    mice_grabbed: cb.Output[int]
+    mice_stolen: cb.Output[int]
+    mice_preempted: cb.Output[int]
+    mice_interrupted: cb.Output[int]
+    rats_grabbed: cb.Output[int]
+    rats_stolen: cb.Output[int]
+    rats_preempted: cb.Output[int]
+    rats_interrupted: cb.Output[int]
+    cat_chases: cb.Output[int]
+    accounting_errors: cb.Output[int]
+    cheese_in_use: cb.Output[float]
+
+    def __init__(self):
+        self.rodents = ([Rodent(self, 0) for _ in range(NUM_MICE)] +
+                        [Rodent(self, 1) for _ in range(NUM_RATS)])
+
+    @cb.process
     def cat(self):
         while True:
-            # Nobody interrupts a sleeping cat, disregard the signal
-            sim.hold(random.exponential(5.0))
+            cb.hold(cb.random.exponential(5.0))
             while True:
-                # Awake, looking for rodents
-                sim.hold(random.exponential(1.0))
-                i = random.dice(0, NUM_MICE + NUM_RATS - 1)
-                if i < NUM_MICE:
-                    target = self.mouse[i]
-                else:
-                    target = self.rat[i - NUM_MICE]
-                # Send it the generic signal or a random user-defined one
-                if random.bernoulli(0.5) == 1:
-                    sim.interrupt(target, sim.INTERRUPTED, 0)
-                else:
-                    sim.interrupt(target, random.dice(10, 100), 0)
-                self.chases = self.chases + 1
-                # Flip a coin to decide whether to go back to sleep
-                if random.bernoulli(0.5) == 0:
+                cb.hold(cb.random.exponential(1.0))
+                index = cb.random.dice(0, NUM_MICE + NUM_RATS - 1)
+                pointer = self.rodents[index].process_pointer
+                if pointer:
+                    signal = -2 if cb.random.bernoulli(0.5) else cb.random.dice(10, 100)
+                    cb.Process(pointer).interrupt(signal, 0)
+                    self.chases += 1
+                if not cb.random.bernoulli(0.5):
                     break
 
-    @sim.collect
+    @cb.on_end
     def game_stats(self):
         self.mice_grabbed = self.m_grab
         self.mice_stolen = self.m_stol
@@ -154,129 +171,24 @@ class CheeseGame(sim.Model):
         self.cheese_in_use = self.cheese.mean_in_use()
 
 
-@njit
-def _take_stock(env, me, expected):
-    """Resync our belief with the pool's books after a blocking call.
-    Holdings can only shrink while we are blocked (preemptors raiding
-    them); anything else is an accounting error. Returns (held, stolen)."""
-    held = env.cheese.held(me)
-    stolen = expected - held
-    if stolen < 0:
-        env.acct_errors = env.acct_errors + 1
-        stolen = 0
-    return held, stolen
-
-
-@njit
-def _forage_once(env, me, preempting, amt_lo, amt_hi, pri_lo, pri_hi, held):
-    """One forage cycle of a rodent: take, hold, drop some, rest.
-    Returns (held, grabbed, stolen, preempted, interrupted) for this
-    cycle; accounting mismatches are counted into env.acct_errors."""
-    preempted = 0
-    interrupted = 0
-
-    # Decide on a random amount and a random priority for this round
-    amount = random.dice(amt_lo, amt_hi)
-    sim.set_priority(me, random.dice(pri_lo, pri_hi))
-    if preempting == 1:
-        sig = env.cheese.preempt(amount)
-    else:
-        sig = env.cheese.acquire(amount)
-    held_now = env.cheese.held(me)
-    grabbed = 0
-    stolen = 0
-    if sig == sim.SUCCESS:
-        # The full request was granted, though prior holdings may have
-        # been raided while we waited; more than held + amount is a bug
-        grabbed = amount
-        stolen = held + amount - held_now
-        if stolen < 0:
-            env.acct_errors = env.acct_errors + 1
-            stolen = 0
-    else:
-        # Preempted or interrupted mid-acquire: part of the request may
-        # have been granted and kept, prior holdings may have been
-        # raided -- only the net change is knowable
-        if sig == sim.PREEMPTED:
-            preempted = preempted + 1
-        else:
-            interrupted = interrupted + 1
-        if held_now > held:
-            grabbed = held_now - held
-        else:
-            stolen = held - held_now
-    held = held_now
-
-    # Hold on to it for a while
-    sig = sim.hold(random.exponential(1.0))
-    if sig == sim.PREEMPTED:
-        preempted = preempted + 1
-    elif sig != sim.SUCCESS:
-        interrupted = interrupted + 1
-    held, lost = _take_stock(env, me, held)
-    stolen = stolen + lost
-
-    # Drop some amount. Release is immediate and exact, so here the
-    # books must match our belief to the unit.
-    if held > 1:
-        release = random.dice(1, held)
-        env.cheese.release(release)
-        held = held - release
-    if held != env.cheese.held(me):
-        env.acct_errors = env.acct_errors + 1
-
-    # Hang on a moment before trying again
-    sig = sim.hold(random.exponential(1.0))
-    if sig == sim.PREEMPTED:
-        preempted = preempted + 1
-    held, lost = _take_stock(env, me, held)
-    stolen = stolen + lost
-    return held, grabbed, stolen, preempted, interrupted
-
-
-game = CheeseGame()
-
-
-
-
-
-
-
-
-
-
 def main() -> None:
-    print(f"cimba {cp.version()}, using {cp.use_threads(0)} worker threads")
-    print(f"{NUM_MICE} mice and {NUM_RATS} rats compete for "
-          f"{CHEESE_AMOUNT} cheese cubes, 1 cat chases the rodents")
-
-    exp = game.experiment(replications=10, duration=DURATION, warmup=0.0,
-                          seed=20260612)
-    t0 = time.perf_counter()
-    fails = exp.run()
-    wall = time.perf_counter() - t0
-    print(f"{len(exp)} trials of {DURATION:.0f} time units in "
-          f"{wall:.2f} s, {fails} failed\n")
-
-    def avg(field: str) -> float:
-        return float(np.mean(getattr(exp.results, field)))
-
-    print(f"{'':>10} {'grabbed':>10} {'stolen':>10} {'preempted':>10} "
-          f"{'interrupted':>11}")
-    print(f"{'mice':>10} {avg('mice_grabbed'):10.0f} "
-          f"{avg('mice_stolen'):10.0f} "
-          f"{avg('mice_preempted'):10.0f} {avg('mice_interrupted'):11.0f}")
-    print(f"{'rats':>10} {avg('rats_grabbed'):10.0f} "
-          f"{avg('rats_stolen'):10.0f} "
-          f"{avg('rats_preempted'):10.0f} {avg('rats_interrupted'):11.0f}")
-
-    print(f"\ncat chases: {avg('cat_chases'):.0f} per trial")
-    print(f"cheese in use: {avg('cheese_in_use'):.1f} of "
-          f"{CHEESE_AMOUNT} cubes on average")
-
-    errors = int(exp.results.accounting_errors.sum())
-    print(f"accounting errors (held vs pool_held): {errors}")
-    assert errors == 0, "cheese accounting mismatch!"
+    game = CheeseGame()
+    start = time.perf_counter()
+    results = cb.Experiment(
+        game, replications=10, window=cb.Window(duration=DURATION),
+        seed=20260612,
+    ).run()
+    elapsed = time.perf_counter() - start
+    if results.failed.any():
+        raise RuntimeError(f"{results.failed.sum()} cheese trials failed")
+    print(f"cimba {cb.engine_version()}; {NUM_MICE} mice, {NUM_RATS} rats, "
+          f"{CHEESE_AMOUNT} cheese cubes")
+    print(f"{results.failed.size} trials in {elapsed:.2f} s")
+    for kind in ("mice", "rats"):
+        print(kind, *(f"{getattr(results[game], kind + '_' + name).values.mean():.1f}"
+                      for name in ("grabbed", "stolen", "preempted", "interrupted")))
+    print(f"cat chases: {results[game].cat_chases.values.mean():.1f}")
+    assert np.all(results[game].accounting_errors.values == 0)
 
 
 if __name__ == "__main__":

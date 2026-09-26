@@ -1,90 +1,22 @@
 .. _installation:
 
-Installation guide
-==================
+Installation
+============
 
-You will need Python 3.13, ``uv``, git, and the local build tools required by
-the Python extension. The package builds and embeds its bundled simulation
-engine, so you do not need to install a separate runtime library before using
-Cimba Python.
+Python 3.13 or newer is required. Install a wheel with ``pip install cimba``
+or ``uv add cimba``. The Linux x86_64, Windows AMD64, and macOS arm64 wheels
+embed the native engine.
 
-Linux
------
-
-On Linux, clone the repository and let ``uv`` create the project environment:
+For a source checkout, initialize the unchanged engine submodule, install a C
+compiler and NASM, then run:
 
 .. code-block:: bash
 
-    git clone <repo-url> cimba_python
-    cd cimba_python
-    uv sync
+   git submodule update --init --recursive
+   uv sync --locked
+   uv run python -c "import cimba; print(cimba.engine_version())"
+   uv run pytest
 
-On Ubuntu or WSL, install the usual native build packages first:
-
-.. code-block:: bash
-
-    sudo apt install build-essential nasm
-
-Use ``uv run`` for commands that should execute inside the project
-environment.
-
-For native INFO logging, build with Meson's standard build type option:
-
-.. code-block:: bash
-
-    uv sync --reinstall-package cimba --config-settings=setup-args=-Dbuildtype=debugoptimized
-
-Windows
--------
-
-On Windows, install Python 3.13, ``uv``, git, NASM, and a supported compiler
-toolchain. Then run the same project commands from a developer shell:
-
-.. code-block:: batch
-
-   git clone <repo-url> cimba_python
-   cd cimba_python
-   uv sync
-
-If Windows Security blocks build tools from writing into the project directory,
-allow the compiler, assembler, and Python build tools. If imports fail because
-another application provides incompatible runtime DLLs earlier on ``PATH``,
-adjust ``PATH`` so the active compiler environment comes first.
-
-macOS
------
-
-Apple Silicon Macs are supported with native arm64 wheels, so the normal
-installation does not require Xcode or a separate Cimba library:
-
-.. code-block:: bash
-
-   python -m pip install cimba
-
-For a source checkout, install Xcode Command Line Tools, clone the repository,
-and run ``uv sync``. Intel Macs are not currently supported because Numba does
-not publish the required llvmlite wheels for that architecture.
-
-Verifying your installation
----------------------------
-
-Verify that Python can import the package:
-
-.. code-block:: bash
-
-    uv run python -c "import cimba; print(cimba.native_version())"
-
-If all goes well, this prints a version such as::
-
-    3.0.0
-
-Run the test suite with:
-
-.. code-block:: bash
-
-    uv run pytest
-
-The tests build and execute small ``cimba.sim`` models covering imports,
-logging, declarations, queues, resources, pools, stores, priority queues,
-conditions, random draws, process signals, timers, dynamic processes, events,
-and parallel experiments.
+On Apple Silicon, install Xcode Command Line Tools for a source build. On
+Windows use clang-cl and NASM. On Linux install the platform compiler and
+NASM. The test suite includes native execution and every standalone tutorial.

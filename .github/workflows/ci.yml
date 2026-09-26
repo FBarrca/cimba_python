@@ -44,6 +44,25 @@ jobs:
       - name: Run tests
         run: uv run pytest
 
+      - name: Check shipped native runtime with AddressSanitizer
+        run: |
+          uv run meson setup build/asan --buildtype=debug -Db_sanitize=address
+          uv run ninja -C build/asan cimba_ext
+          uv build --wheel --no-build-isolation --out-dir build/asan-wheel
+          mkdir -p build/asan-wheel-unpacked
+          uv run python -m zipfile -e build/asan-wheel/*.whl build/asan-wheel-unpacked
+          cp build/asan/libcimba_py.so build/asan-wheel-unpacked/cimba/libcimba_py.so
+          ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 \
+          LD_PRELOAD="$(gcc -print-file-name=libasan.so)" \
+          PYTHONPATH="$PWD/build/asan-wheel-unpacked:$PWD/.venv/lib/python3.13/site-packages" \
+          .venv/bin/python -S -m pytest -q \
+            tests/test_spawn_inputs.py tests/test_spawn.py \
+            > build/asan-pytest.log 2>&1 || {
+              tail -n 100 build/asan-pytest.log
+              exit 1
+            }
+          tail -n 2 build/asan-pytest.log
+
   test-windows:
     name: Test Windows
     runs-on: windows-2025
@@ -165,7 +184,7 @@ jobs:
         run: uv build
 
       - name: Smoke-test built wheel
-        run: uv run --no-project --isolated --with dist/*.whl python -c "import cimba; print(cimba.native_version())"
+        run: uv run --no-project --isolated --with dist/*.whl python -c "import cimba; print(cimba.engine_version())"
 
       - name: Upload distributions
         uses: actions/upload-artifact@v7

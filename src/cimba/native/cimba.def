@@ -1,5 +1,4 @@
 EXPORTS
-    PyInit__cimba_native
     cimba_version
     cimba_run
     cimba_threads_use
@@ -86,6 +85,34 @@ EXPORTS
     cpy_buffer_put
     cpy_buffer_get
     cpy_buffer_mean_level
+    cpy_store_put_int
+    cpy_store_get_int
+    cpy_store_put_float
+    cpy_store_get_float
+    cpy_store_put_model
+    cpy_store_get_model
+    cpy_priority_put_int
+    cpy_priority_get_int
+    cpy_priority_put_float
+    cpy_priority_get_float
+    cpy_priority_put_model
+    cpy_priority_get_model
+    cpy_priority_enqueue_model
+    cpy_priority_cancel
+    cpy_priority_position
+    cpy_priority_length
+    cpy_store_length
+    cpy_capture_release
+    cpy_condition_wait
+    cpy_condition_signal
+    cpy_schedule_event
+    cpy_schedule_cancel
+    cpy_schedule_pending
+    cpy_model_allocate
+    cpy_model_input_bind
+    cpy_model_start
+    cpy_model_release
+    cpy_end_trial
     cpy_buffer_history
     cpy_buffer_report_file
     cpy_buffer_level
@@ -192,3 +219,12 @@ EXPORTS
     cpy_logger_user_msg
     cpy_logger_user_i64
     cpy_logger_user_f64
+    cpy_abi_version
+    cpy_input_slot_sizeof
+    cpy_input_seed
+    cpy_input_next
+    cpy_series_at
+    cpy_series_now
+    cpy_input_release
+    cpy_trial_header_sizeof
+    cpy_run

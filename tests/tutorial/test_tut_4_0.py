@@ -1,13 +1,8 @@
-from tutorial import tut_4_0
+import cimba as cb
+from tutorial.tut_4_0 import HarborTemplate
 
 
-def test_tut_4_0_empty_simulation_template_runs_control_events():
-    exp = tut_4_0.model.experiment(
-        replications=1,
-        duration=10.0,
-        warmup=0.0,
-        seed=40,
-    )
-
-    assert exp.run() == 0
-    assert exp["result"][0] == 0.0
+def test_empty_harbor_template():
+    model = HarborTemplate()
+    results = cb.Experiment(model, window=cb.Window(duration=10)).run()
+    assert results[model].result[0, 0] == 0.0

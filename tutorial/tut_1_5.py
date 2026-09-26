@@ -1,71 +1,54 @@
-"""Tutorial 1.5: refactored M/M/1 trial with parameters and outputs."""
+"""Tutorial 1.5: a queue station composed into a model."""
 
-import cimba.random as random
-import cimba.sim as sim
+import cimba as cb
+from cimba import inputs
 
 
-class MM1Station(sim.Component):
-    queue: sim.Queue
+class MM1Station(cb.Model):
+    interarrival: cb.Input[float] = inputs.dist.exponential(mean=1.0 / 0.75)
+    service_time: cb.Input[float] = inputs.dist.exponential(mean=1.0)
+    queue: cb.Container
 
-    @sim.process
-    def arrival(self, env):
+    @cb.process
+    def arrival(self):
         while True:
-            t_ia = random.exponential(1.0 / env.utilization)
-            sim.hold(t_ia)
+            cb.hold(self.interarrival.next())
             self.queue.put(1)
 
-    @sim.process
-    def service(self, env):
+    @cb.process
+    def service(self):
         while True:
             self.queue.get(1)
-            t_srv = random.exponential(1.0)
-            sim.hold(t_srv)
+            cb.hold(self.service_time.next())
 
 
-class MM1(sim.Model):
-    utilization: sim.Param
-    avg_queue_length: sim.Output
-    station: MM1Station = MM1Station()
+class MM1(cb.Model):
+    station: MM1Station
+    avg_queue_length: cb.Output[float]
 
-    @sim.collect
+    def __init__(self):
+        self.station = MM1Station()
+
+    @cb.on_end
     def collect_stats(self):
         self.avg_queue_length = self.station.queue.mean_level()
 
 
-def build_model() -> MM1:
-    model = MM1("MM1")
-
-
-    return model
-
-
-def run_mm1_trial(
-    *,
-    utilization: float,
-    duration: float,
-    warmup: float,
-    seed: int,
-) -> float:
-    exp = build_model().experiment(
-        utilization=[utilization],
-        replications=1,
-        duration=duration,
-        warmup=warmup,
-        seed=seed,
-    )
-    failures = exp.run()
-    if failures:
-        raise RuntimeError(f"{failures} trial(s) failed")
-    return float(exp.results.avg_queue_length[0])
+def run_mm1_trial(*, utilization: float, duration: float,
+                  warmup: float, seed: int) -> float:
+    model = MM1()
+    model.station.interarrival = inputs.dist.exponential(mean=1.0 / utilization)
+    results = cb.Experiment(
+        model, window=cb.Window(warmup=warmup, duration=duration), seed=seed,
+    ).run()
+    if results.failed.any():
+        raise RuntimeError("M/M/1 trial failed")
+    return float(results[model].avg_queue_length[0, 0])
 
 
 def main() -> None:
-    avg = run_mm1_trial(
-        utilization=0.75,
-        duration=1.0e6,
-        warmup=1.0e3,
-        seed=46,
-    )
+    avg = run_mm1_trial(utilization=0.75, duration=1.0e6,
+                        warmup=1.0e3, seed=46)
     print(f"Avg {avg:.6f}")
 
 

@@ -1,376 +1,185 @@
-"""
-Tutorial 5.1: Assembly-line flow, bottlenecks, and process graphs.
-
-This model builds a three-station manufacturing line from reusable components.
-It is a compact place to study dynamic parts, store handoffs, processing
-resources, per-station measurements, whole-system measurements, and graph
-output in one runnable simulation.
-
-Run from the repository root:
-
-    uv run python tutorial/tut_5_1.py
-"""
+"""Tutorial 5.1: a three-station assembly line with dynamic parts."""
 
 from pathlib import Path
-import shutil
-import subprocess
-from tempfile import TemporaryDirectory
 
 import numpy as np
 
-import cimba as cp
-import cimba.random as random
-import cimba.sim as sim
+import cimba as cb
+from cimba import inputs
+from cimba.diagrams import mermaid
 
 
 RANDOM_SEED = 45
-STATION_1_NAME = "Station 1"
-STATION_2_NAME = "Station 2"
-STATION_3_NAME = "Station 3"
-STATION_NAMES = (STATION_1_NAME, STATION_2_NAME, STATION_3_NAME)
-NUM_STATIONS = 3
-STATION_1_MEAN = 5.0
-STATION_2_MEAN = 7.0
-STATION_3_MEAN = 4.0
+STATION_NAMES = ("Station 1", "Station 2", "Station 3")
+STATION_MEANS = (5.0, 7.0, 4.0)
 INTERARRIVAL_TIME = 3.0
 SIMULATION_TIME = 10_000.0
 PLOT_DIR = Path(__file__).with_name("tut_5_1_plots")
 
 
-class Part(sim.Struct):
-    part_id: int
-    arrival_system: float
-    station_entry: float
+class Part(cb.Model):
+    part_id: cb.State[int]
+    arrival_system: cb.State[float]
+    station_entry: cb.State[float]
 
 
-class Station(sim.Component):
-    avg_wait_time: sim.Output
-    utilization: sim.Output
-    inbox: sim.Store
-    downstream: sim.Ref[sim.Component]
-    resource: sim.Resource
-    wait_time: sim.Dataset
+class FinishedParts(cb.Model):
+    line: cb.Ref["AssemblyLine"]
+    inbox: cb.Store[Part]
+
+    def __init__(self, line):
+        self.line = line
+
+    @cb.process
+    def finish(self):
+        while True:
+            part = self.inbox.get()
+            self.line.cycle_time.record(cb.now() - part.arrival_system)
+            self.line.system.get(1)
+            cb.release(part)
+
+
+class Station(cb.Model):
+    processing_time: cb.Input[float] = inputs.dist.exponential(mean=5.0)
+    inbox: cb.Store[Part]
+    downstream: cb.Ref["Station"] | None
+    finished: cb.Ref[FinishedParts] | None
+    resource: cb.Resource
+    wait_time: cb.Dataset
+    avg_wait_time: cb.Output[float]
+    utilization: cb.Output[float]
 
     def __init__(self, name: str, mean_processing_time: float, *,
-                 downstream=None):
+                 downstream=None, finished=None):
         self.name = name
-        self.mean_processing_time = mean_processing_time
-        if downstream is not None:
-            self.downstream = downstream
+        self.processing_time = inputs.dist.exponential(mean=mean_processing_time)
+        self.downstream = downstream
+        self.finished = finished
 
-    @sim.collect
-    def station_stats(self, env):
-        self.avg_wait_time = self.wait_time.mean()
+    @cb.process
+    def server(self):
+        while True:
+            part = self.inbox.get()
+            self.wait_time.record(cb.now() - part.station_entry)
+            self.resource.acquire()
+            cb.hold(self.processing_time.next())
+            self.resource.release()
+            part.station_entry = cb.now()
+            if self.downstream is not None:
+                self.downstream.inbox.put(part)
+            elif self.finished is not None:
+                self.finished.inbox.put(part)
+
+    @cb.on_end
+    def station_stats(self):
+        self.avg_wait_time = self.wait_time.sample_mean()
         self.utilization = 100.0 * self.resource.mean_in_use()
 
-    @sim.process
-    def server(self, env):
-        while True:
-            # Take a part from the inbox.
-            handle = self.inbox.take()
-            item = Part(handle)
 
-            # Update the part's wait time.
-            wait_time = sim.now() - item.station_entry
-            self.wait_time.add(wait_time)
+class AssemblyLine(cb.Model):
+    duration: cb.Param[float] = SIMULATION_TIME
+    arrival_gap: cb.Input[float] = inputs.dist.exponential(mean=INTERARRIVAL_TIME)
+    generated_parts: cb.State[int] = 0
+    system: cb.Container
+    cycle_time: cb.Dataset
+    finished_parts: FinishedParts
+    station_1: Station
+    station_2: Station
+    station_3: Station
+    total_parts_produced: cb.Output[int]
+    avg_cycle_time: cb.Output[float]
+    max_cycle_time: cb.Output[float]
+    throughput_rate: cb.Output[float]
+    avg_number_in_system: cb.Output[float]
+    max_number_in_system: cb.Output[float]
+    final_number_in_system: cb.Output[int]
 
-            # Hold the resource for the processing time.
-            self.resource.acquire()
-            sim.hold(random.exponential(self.mean_processing_time))
-            self.resource.release()
+    def __init__(self, duration=SIMULATION_TIME):
+        self.duration = duration
+        self.finished_parts = FinishedParts(self)
+        self.station_3 = Station(STATION_NAMES[2], STATION_MEANS[2],
+                                 finished=self.finished_parts)
+        self.station_2 = Station(STATION_NAMES[1], STATION_MEANS[1],
+                                 downstream=self.station_3)
+        self.station_1 = Station(STATION_NAMES[0], STATION_MEANS[0],
+                                 downstream=self.station_2)
+        self.system = cb.Container()
+        self.system.capture()
+        self.cycle_time = cb.Dataset()
+        self.cycle_time.capture()
+        for station in (self.station_1, self.station_2, self.station_3):
+            station.wait_time = cb.Dataset()
+            station.wait_time.capture()
 
-            # Update the part's station entry time to the current time.
-            item.station_entry = sim.now()
-
-            # Put the part in the downstream station's inbox.
-            self.downstream.inbox.put(handle)
-
-
-class FinishedParts(sim.Component):
-    inbox: sim.Store
-    departed: sim.Store
-
-    @sim.process
-    def finish(self, env):
-        while True:
-            handle = self.inbox.take()
-            item = Part(handle)
-            env.cycle_time.add(sim.now() - item.arrival_system)
-            env.system.get(1)
-            self.departed.put(handle)
-
-    @sim.process
-    def reclaim(self, env):
-        while True:
-            sim.despawn(self.departed.take())
-
-
-class AssemblyLine(sim.Model):
-    total_parts_produced: sim.Output
-    avg_cycle_time: sim.Output
-    max_cycle_time: sim.Output
-    throughput_rate: sim.Output
-    avg_number_in_system: sim.Output
-    max_number_in_system: sim.Output
-    final_number_in_system: sim.Output
-
-    generated_parts: sim.State
-    system: sim.Queue
-    cycle_time: sim.Dataset
-    finished_parts: FinishedParts = FinishedParts()
-    station_3: Station = Station(STATION_3_NAME, STATION_3_MEAN,
-                                 downstream=finished_parts)
-    station_2: Station = Station(STATION_2_NAME, STATION_2_MEAN,
-                                 downstream=station_3)
-    station_1: Station = Station(STATION_1_NAME, STATION_1_MEAN,
-                                 downstream=station_2)
-
-    @sim.process
+    @cb.process
     def arrivals(self):
         while True:
-            sim.hold(random.exponential(INTERARRIVAL_TIME))
-            handle = sim.spawn(self.part_lifecycle, self)
-            part = Part(handle)
-
+            cb.hold(self.arrival_gap.next())
             self.generated_parts += 1
-            part.part_id = self.generated_parts
-            part.arrival_system = sim.now()
+            part = cb.spawn(Part, part_id=self.generated_parts,
+                            arrival_system=cb.now(), station_entry=cb.now())
+            self.system.put(1)
+            self.station_1.inbox.put(part)
 
-    @sim.process(spawnable=True)
-    def part_lifecycle(self, item: Part):
-        self.system.put(1)
-        item.station_entry = sim.now()
-        self.station_1.inbox.put(sim.current())
-
-def build_model(raw_dir: Path) -> AssemblyLine:
-    cycle_file = sim.log_text(str(raw_dir / "cycle_times.txt"))
-    wait_files = (
-        sim.log_text(str(raw_dir / "station_1_wait_times.txt")),
-        sim.log_text(str(raw_dir / "station_2_wait_times.txt")),
-        sim.log_text(str(raw_dir / "station_3_wait_times.txt")),
-    )
-    system_file = sim.log_text(str(raw_dir / "number_in_system.txt"))
-
-    class ReportingAssemblyLine(AssemblyLine):
-        @sim.collect
-        def collect_stats(self):
-            completed = self.cycle_time.count()
-            self.total_parts_produced = completed
-            self.avg_cycle_time = self.cycle_time.mean()
-            self.max_cycle_time = self.cycle_time.max()
-            self.throughput_rate = completed / self.duration_s
-            self.avg_number_in_system = self.system.mean_level()
-            self.max_number_in_system = self.system.history().max()
-            self.final_number_in_system = self.system.level()
-
-            self.cycle_time.print_file(cycle_file, 0)
-            self.station_1.wait_time.print_file(wait_files[0], 0)
-            self.station_2.wait_time.print_file(wait_files[1], 0)
-            self.station_3.wait_time.print_file(wait_files[2], 0)
-            self.system.history().print_file(system_file, 0)
-
-    model = ReportingAssemblyLine("assembly_line")
-
-    return model
+    @cb.on_end
+    def collect_stats(self):
+        completed = self.cycle_time.sample_count()
+        self.total_parts_produced = completed
+        self.avg_cycle_time = self.cycle_time.sample_mean()
+        self.max_cycle_time = self.cycle_time.sample_max()
+        self.throughput_rate = completed / self.duration
+        self.avg_number_in_system = self.system.mean_level()
+        self.max_number_in_system = self.system.max_level()
+        self.final_number_in_system = self.system.level()
 
 
-def read_values(path: Path) -> np.ndarray:
-    text = path.read_text().strip()
-    if not text:
-        return np.array([], dtype=float)
-    return np.atleast_1d(np.loadtxt(path, dtype=float))
+def print_results(model: AssemblyLine, results: cb.Results) -> None:
+    line = results[model]
+    print("--- Simulation Results Analysis (Cimba) ---")
+    print(f"Total parts produced: {int(line.total_parts_produced[0, 0])}")
+    print(f"Average cycle time: {line.avg_cycle_time[0, 0]:.2f} minutes")
+    print(f"Maximum cycle time: {line.max_cycle_time[0, 0]:.2f} minutes")
+    print(f"Throughput rate: {line.throughput_rate[0, 0]:.2f} parts/minute")
+    for station in (model.station_1, model.station_2, model.station_3):
+        values = results[station]
+        print(f"{station.name}: wait {values.avg_wait_time[0, 0]:.2f} min, "
+              f"utilization {values.utilization[0, 0]:.2f}%")
+    print(f"Average parts in system: {line.avg_number_in_system[0, 0]:.2f}")
+    print(f"Maximum parts in system: {line.max_number_in_system[0, 0]:.0f}")
+    print(f"Parts still in system: {line.final_number_in_system[0, 0]:.0f}")
 
 
-def read_timeseries(path: Path) -> tuple[np.ndarray, np.ndarray]:
-    text = path.read_text().strip()
-    if not text:
-        empty = np.array([], dtype=float)
-        return empty, empty
-    rows = np.atleast_2d(np.loadtxt(path, dtype=float))
-    return rows[:, 0], rows[:, 1]
-
-
-def station_values(exp: sim.Experiment, field: str) -> np.ndarray:
-    return np.array(
-        [
-            getattr(getattr(exp.results, "station_1"), field)[0],
-            getattr(getattr(exp.results, "station_2"), field)[0],
-            getattr(getattr(exp.results, "station_3"), field)[0],
-        ],
-        dtype=float,
-    )
-
-
-def print_results(exp: sim.Experiment) -> None:
-    wait_times = station_values(exp, "avg_wait_time")
-    utilization = station_values(exp, "utilization")
-
-    print("--- Simulation Finished ---")
-    print("\n--- Simulation Results Analysis (Cimba) ---")
-    print(f"Total parts produced: {int(exp.results.total_parts_produced[0])}")
-    print(
-        "Average cycle time per part: "
-        f"{exp.results.avg_cycle_time[0]:.2f} minutes"
-    )
-    print(
-        "Maximum cycle time per part: "
-        f"{exp.results.max_cycle_time[0]:.2f} minutes"
-    )
-    print(f"Throughput rate: {exp.results.throughput_rate[0]:.2f} parts per minute")
-    for i in range(NUM_STATIONS):
-        print(
-            f"{STATION_NAMES[i]} - Average Wait Time: "
-            f"{wait_times[i]:.2f} minutes"
-        )
-        print(f"{STATION_NAMES[i]} - Utilization: {utilization[i]:.2f}%")
-    print(f"Average number in system: {exp.results.avg_number_in_system[0]:.2f}")
-    print(f"Maximum number in system: {exp.results.max_number_in_system[0]:.0f}")
-    print(f"Parts still in system: {exp.results.final_number_in_system[0]:.0f}")
-
-
-def load_pyplot():
+def plot_results(model: AssemblyLine, results: cb.Results) -> None:
     try:
-        import matplotlib.pyplot as plt
+        import matplotlib.pyplot as plt  # pyright: ignore[reportMissingImports]
     except ModuleNotFoundError as exc:
-        raise SystemExit(
-            "Plotting needs matplotlib. Run it with: "
-            "uv run --extra plot python tutorial/tut_5_1.py"
-        ) from exc
-    return plt
-
-
-def plot_process_dag(model: AssemblyLine) -> None:
+        raise SystemExit("Install the plot extra to create figures") from exc
     PLOT_DIR.mkdir(parents=True, exist_ok=True)
-    graph = model.process_dag()
-    mermaid_path = PLOT_DIR / "process_dag.mmd"
-    dot_path = PLOT_DIR / "process_dag.dot"
-
-    mermaid_path.write_text(graph.to_mermaid(direction="TD") + "\n")
-    dot_path.write_text(graph.to_dot(rankdir="TB") + "\n")
-
-    dot = shutil.which("dot")
-    if dot is not None:
-        subprocess.run(
-            [dot, "-Tpng", str(dot_path), "-o",
-             str(PLOT_DIR / "process_dag.png")],
-            check=True,
-        )
-        subprocess.run(
-            [dot, "-Tsvg", str(dot_path), "-o",
-             str(PLOT_DIR / "process_dag.svg")],
-            check=True,
-        )
-
-    print(f"\nSaved process DAG in {PLOT_DIR}")
-
-
-def plot_results(exp: sim.Experiment, raw_dir: Path) -> None:
-    plt = load_pyplot()
-    PLOT_DIR.mkdir(parents=True, exist_ok=True)
-
-    cycle_times = read_values(raw_dir / "cycle_times.txt")
-    wait_times = [
-        read_values(raw_dir / f"station_{i + 1}_wait_times.txt")
-        for i in range(NUM_STATIONS)
-    ]
-    time_points, parts_in_system = read_timeseries(
-        raw_dir / "number_in_system.txt"
-    )
-
-    plt.figure(figsize=(10, 6))
-    plt.hist(cycle_times, bins=20, color="skyblue", edgecolor="black")
-    avg_cycle_time = exp.results.avg_cycle_time[0]
-    plt.axvline(
-        avg_cycle_time,
-        color="red",
-        linestyle="dashed",
-        linewidth=2,
-        label=f"Avg: {avg_cycle_time:.2f}",
-    )
-    plt.title("Distribution of Part Cycle Times")
-    plt.xlabel("Cycle Time (minutes)")
-    plt.ylabel("Number of Parts")
-    plt.legend()
+    _, cycle_times = results[model].cycle_time.trial(0, 0)
+    _, axes = plt.subplots(1, 2, figsize=(12, 4))
+    axes[0].hist(cycle_times, bins=20)
+    axes[0].set_title("Part cycle time")
+    axes[0].set_xlabel("Minutes")
+    utilizations = [results[station].utilization[0, 0] for station in
+                    (model.station_1, model.station_2, model.station_3)]
+    axes[1].bar(STATION_NAMES, utilizations)
+    axes[1].set_title("Station utilization")
+    axes[1].set_ylabel("Percent")
     plt.tight_layout()
-    plt.savefig(PLOT_DIR / "cycle_times.png", dpi=150)
-
-    fig, axes = plt.subplots(
-        NUM_STATIONS, 1, figsize=(10, 4 * NUM_STATIONS), sharex=True
-    )
-    fig.suptitle("Distribution of Waiting Times at Each Station", fontsize=16)
-    avg_wait_times = station_values(exp, "avg_wait_time")
-    for i, ax in enumerate(axes):
-        ax.hist(wait_times[i], bins=15, color="lightcoral", edgecolor="black")
-        ax.axvline(
-            avg_wait_times[i],
-            color="blue",
-            linestyle="dashed",
-            linewidth=2,
-            label=f"Avg: {avg_wait_times[i]:.2f}",
-        )
-        ax.set_title(f"{STATION_NAMES[i]} Waiting Times")
-        ax.set_ylabel("Number of Parts")
-        ax.legend()
-    axes[-1].set_xlabel("Waiting Time (minutes)")
-    plt.tight_layout(rect=(0, 0, 1, 0.96))
-    plt.savefig(PLOT_DIR / "station_wait_times.png", dpi=150)
-
-    station_utilization = station_values(exp, "utilization")
-    plt.figure(figsize=(10, 6))
-    plt.bar(STATION_NAMES, station_utilization, color="mediumseagreen")
-    plt.title("Average Station Utilization")
-    plt.xlabel("Station")
-    plt.ylabel("Utilization (%)")
-    plt.ylim(0, 100)
-    for i, value in enumerate(station_utilization):
-        plt.text(i, value + 1, f"{value:.2f}%", ha="center")
-    plt.tight_layout()
-    plt.savefig(PLOT_DIR / "station_utilization.png", dpi=150)
-
-    plt.figure(figsize=(12, 6))
-    plt.step(time_points, parts_in_system, where="post", color="dodgerblue")
-    avg_number = exp.results.avg_number_in_system[0]
-    plt.axhline(
-        avg_number,
-        color="blue",
-        linewidth=1,
-        label=f"Mean: {avg_number:.2f}",
-    )
-    plt.title("Number of Parts in the System Over Time")
-    plt.xlabel("Time (minutes)")
-    plt.ylabel("Number of Parts")
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(PLOT_DIR / "number_in_system.png", dpi=150)
-
-    print(f"\nSaved plots in {PLOT_DIR}")
-    if "agg" not in plt.get_backend().lower():
-        plt.show()
+    plt.savefig(PLOT_DIR / "assembly_line.png", dpi=150)
 
 
 def main() -> None:
-    print("--- Assembly Line Simulation Starting (Cimba) ---")
-    print(f"cimba {cp.version()}")
-
-    with TemporaryDirectory() as temp_dir:
-        raw_dir = Path(temp_dir)
-        model = build_model(raw_dir)
-        exp = model.experiment(
-            replications=1000,
-            duration=SIMULATION_TIME,
-            warmup=0.0,
-            seed=RANDOM_SEED,
-        )
-        failures = exp.run()
-        if failures:
-            raise RuntimeError(f"{failures} trial(s) failed")
-
-        print_results(exp)
-        plot_process_dag(model)
-        # plot_results(exp, raw_dir)
-
-    print("\n--- End of Cimba Script ---")
+    model = AssemblyLine()
+    results = cb.Experiment(
+        model, replications=10, window=cb.Window(duration=SIMULATION_TIME),
+        seed=RANDOM_SEED,
+    ).run()
+    if results.failed.any():
+        raise RuntimeError(f"{results.failed.sum()} assembly trials failed")
+    print_results(model, results)
+    PLOT_DIR.mkdir(parents=True, exist_ok=True)
+    (PLOT_DIR / "process_graph.mmd").write_text(mermaid(model) + "\n")
 
 
 if __name__ == "__main__":
