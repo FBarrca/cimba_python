@@ -56,14 +56,15 @@ The kinds of field
        :doc:`entities`.
    * - ``x: OtherModel``
      - child
-     - A model owned by this one: part of the tree.
+     - A model owned by this one: part of the tree. It can be swept over
+       several models: one tree per option.
    * - ``x: list[OtherModel]``
      - collection
      - A fixed-size list of owned child models; items may be subclasses.
    * - ``x: cb.Ref[OtherModel]``
      - reference
      - A pointer to another model somewhere in the tree. Add ``| None`` to
-       make it optional. It can be swept over models in the tree.
+       make it optional.
    * - ``x: list[cb.Ref[OtherModel]]``
      - collection of references
      - A list of pointers, not ownership. Items may be ``None``.
@@ -96,7 +97,7 @@ defined. Create one yourself only when you need to configure it, for example
 to ``capture()`` it.
 
 Assignments are checked on the spot. Assigning a sweep to anything but a
-``Param``, an input or a ``Ref`` is a ``TypeError`` at that line, and so is assigning
+``Param``, an input or a child model is a ``TypeError`` at that line, and so is assigning
 something that isn't a source to an ``Input``. Missing values (a ``Param``
 with no value, an input with no source, a required ``Ref`` that is ``None``,
 a reference to a model outside the tree) are reported when you create the
@@ -190,9 +191,10 @@ subclasses, goes in a ``@cb.function``:
 * On the host it stays a normal method, so policy logic is easy to
   unit-test.
 
-Because a ``Ref`` is only a pointer, it can be **swept** over candidate
-models that are in the tree. That runs each alternative as its own design
-point, with common random numbers. See :doc:`../guides/policies`.
+A child model can be **swept** over several objects,
+``dock.router = cb.sweep(SizeRouter(), RoundRobin())``. Each option then gets
+its own model tree, and each option's trials contain only that option. See
+:doc:`../guides/policies`.
 
 Static and dynamic instances
 ----------------------------

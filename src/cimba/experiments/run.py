@@ -21,7 +21,7 @@ from cimba.engine.runtime import (
 from cimba.inputs import dist
 from cimba.inputs.sources import DistributionSource, GeneratedRows, Source, TraceSource, trace_rng
 from cimba.layout import TrialImageLayout
-from cimba.modeling import Condition, Container, Dataset, Model, PriorityStore, Resource, Store
+from cimba.modeling import Condition, Container, Dataset, Model, PriorityStore, Resource, Store, Sweep
 from cimba.results import InputRecord, InstanceResults, Results, RunMeta, Samples, Signal
 from cimba.schema import Assembly, ModelDefinitionError
 from .design import Design, DesignPoint, trial_seed
@@ -88,9 +88,17 @@ class Experiment:
         self.window = window or Window()
         self.seed = int(seed)
         self.seeding = seeding
+        # The full tree includes every option of a swept child model; it is used
+        # for validation and design expansion. Trials run on per-option trees.
         self.assembly = Assembly.of(model)
-        self.layout = TrialImageLayout.of(self.assembly)
         self.design = Design.of(self.assembly)
+        self._swept_children = tuple(
+            (instance.model, field.name)
+            for instance in self.assembly.instances for field in instance.schema.fields
+            if field.kind == "child" and isinstance(instance.values[field.name], Sweep))
+        # With swept children this lays out every option; runs then use one
+        # layout per option (see _run_variants).
+        self.layout = TrialImageLayout.of(self.assembly)
         self.seeds = None if seeds is None else np.asarray(seeds, dtype=np.uint64).copy()
         if self.seeds is not None and self.seeds.shape not in {
             (self.replications,), (len(self.design.points), self.replications)
@@ -152,6 +160,7 @@ class Experiment:
         chunk.layout = self.layout
         chunk.design = self.design
         chunk.seeds = seeds
+        chunk._swept_children = ()
         return chunk
 
     def only(self, *, trials, workers: int | None = 1,
@@ -169,6 +178,9 @@ class Experiment:
             points.append(DesignPoint(new_index, original.levels,
                                       original.bindings))
             seeds[new_index, 0] = self._seed(point_index, replication)
+        if self._swept_children:
+            return self._run_variants(points, seeds, workers=workers,
+                                      on_failure=on_failure, input_memory=input_memory)
         focused = self._subset(seeds)
         focused.design = Design(self.design.axes, tuple(points))
         return focused.run(workers=workers, on_failure=on_failure,
@@ -241,8 +253,134 @@ class Experiment:
 
     def run(self, *, workers: int | None = None,
             on_failure: str = "record", input_memory: int = 1 << 30) -> Results:
+        """Run every trial; returns immutable :class:`Results`."""
         if input_memory < 1:
             raise ExperimentConfigError("input_memory must be positive")
+        if self._swept_children:
+            seeds = np.asarray([[self._seed(point.index, r) for r in range(self.replications)]
+                                for point in self.design.points], dtype=np.uint64)
+            return self._run_variants(list(self.design.points), seeds, workers=workers,
+                                      on_failure=on_failure, input_memory=input_memory)
+        return self._run_single(workers=workers, on_failure=on_failure,
+                                input_memory=input_memory)
+
+    def _run_variants(self, points: list[DesignPoint], seeds: np.ndarray, *,
+                      workers: int | None, on_failure: str, input_memory: int) -> Results:
+        """Run each combination of swept child models on its own model tree.
+
+        A trial contains only the options its design point selects: the other
+        options do not exist in it, so their processes and hooks never run.
+        Each group reuses the original trial seeds, keeping common random
+        numbers across options, and the parts are merged into one Results.
+        """
+        groups: dict[tuple[int, ...], list[int]] = {}
+        for position, point in enumerate(points):
+            key = tuple(id(point.bindings[swept]) for swept in self._swept_children)
+            groups.setdefault(key, []).append(position)
+        parts = []
+        for positions in groups.values():
+            first = points[positions[0]]
+            picks = {swept: first.bindings[swept] for swept in self._swept_children}
+            part = object.__new__(Experiment)
+            part.model = self.model
+            part.replications = seeds.shape[1]
+            part.window = self.window
+            part.seed = self.seed
+            part.seeding = self.seeding
+            part.assembly = Assembly.of(self.model, picks=picks)
+            part.layout = TrialImageLayout.of(part.assembly)
+            part.design = Design(self.design.axes, tuple(
+                DesignPoint(local, points[position].levels, points[position].bindings)
+                for local, position in enumerate(positions)))
+            part.seeds = seeds[positions]
+            part._swept_children = ()
+            parts.append(part._run_single(workers=workers, on_failure=on_failure,
+                                          input_memory=input_memory))
+        return self._merge(points, list(groups.values()), parts, seeds, workers)
+
+    def _merge(self, points, groups, parts, seeds, workers) -> Results:
+        count, replications = seeds.shape
+        failed = np.ones((count, replications), dtype=bool)
+        reasons = np.full((count, replications), "", dtype=object)
+        for positions, part in zip(groups, parts):
+            failed[positions] = part.failed
+            reasons[positions] = part.failure_reasons
+        outcomes = {}
+        for instance in self.assembly.instances:
+            model = instance.model
+            present = [(positions, part) for positions, part in zip(groups, parts)
+                       if model in part.by_object]
+            fields = {}
+            if not present:
+                # An option that no selected trial uses: report it as absent.
+                for field in instance.schema.fields:
+                    if field.kind == "output":
+                        fields[field.name] = Samples(np.full((count, replications), np.nan))
+                    elif field.kind in {"input", "series"}:
+                        def absent(point, replication, label=instance.label):
+                            raise KeyError(f"{label} is not part of design point {point}")
+                        fields[field.name] = InputRecord(
+                            (None,) * count, np.zeros((count, replications), dtype=np.uint64),
+                            np.zeros((count, replications), dtype=np.int64), absent)
+                    elif field.kind == "entity" and instance.values[field.name].captured:
+                        fields[field.name] = Signal(tuple(
+                            tuple((np.empty(0), np.empty(0)) for _ in range(replications))
+                            for _ in range(count)))
+                outcomes[model] = InstanceResults(fields)
+                continue
+            for name, value in present[0][1][model]._fields.items():
+                if isinstance(value, Samples):
+                    merged = np.full((count, replications), np.nan)
+                    for positions, part in present:
+                        merged[positions] = part[model]._fields[name].values
+                    fields[name] = Samples(merged)
+                elif isinstance(value, InputRecord):
+                    source: list[Any] = [None] * count
+                    consumed = np.zeros((count, replications), dtype=value.consumed.dtype)
+                    extended = np.zeros((count, replications), dtype=value.extended.dtype)
+                    owners = {}
+                    for positions, part in present:
+                        record = part[model]._fields[name]
+                        consumed[positions] = record.consumed
+                        extended[positions] = record.extended
+                        for local, position in enumerate(positions):
+                            source[position] = record.source[local]
+                            owners[position] = (record, local)
+
+                    def rows(point, replication, owners=owners, label=instance.label):
+                        if point not in owners:
+                            raise KeyError(f"{label} is not part of design point {point}")
+                        record, local = owners[point]
+                        return record.rows(local, replication)
+                    fields[name] = InputRecord(tuple(source), consumed, extended, rows)
+                elif isinstance(value, Signal):
+                    trials: list[Any] = [tuple((np.empty(0), np.empty(0))
+                                               for _ in range(replications))
+                                         for _ in range(count)]
+                    for positions, part in present:
+                        signal = part[model]._fields[name]
+                        for local, position in enumerate(positions):
+                            trials[position] = signal.trials[local]
+                    fields[name] = Signal(tuple(trials))
+            outcomes[model] = InstanceResults(fields)
+        meta = {
+            "workers": workers,
+            "wall_time": sum(part.meta["wall_time"] for part in parts),
+            "compile": MappingProxyType({
+                "misses": sum(part.meta["compile"]["misses"] for part in parts),
+                "wall_time": sum(part.meta["compile"]["wall_time"] for part in parts)}),
+            "extensions": sum(part.meta["extensions"] for part in parts),
+            "native_failed": sum(part.meta["native_failed"] for part in parts),
+            "variants": len(parts),
+        }
+        return Results(MappingProxyType(outcomes), failed, reasons.astype(str), seeds,
+                       RunMeta(MappingProxyType(meta)),
+                       Design(self.design.axes, tuple(points)))
+
+    def _run_single(self, *, workers: int | None = None,
+                    on_failure: str = "record", input_memory: int = 1 << 30) -> Results:
+        if on_failure not in {"record", "raise"}:
+            raise ExperimentConfigError("on_failure must be record or raise")
         bytes_per_replication = 0
         for point in self.design.points:
             for instance in self.assembly.instances:

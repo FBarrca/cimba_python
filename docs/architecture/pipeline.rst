@@ -103,9 +103,17 @@ The instance path
         spawned model records (freed when the trial ends)
 
 3. **Design.** ``Design.of(assembly)`` finds every sweep, including sweeps
-   inside distribution parameters and sweeps of sources, and expands them
-   into design points. Each point binds every (instance, field) to a concrete
-   value or source.
+   inside distribution parameters, sweeps of sources and sweeps of child
+   models, and expands them into design points. Each point binds every
+   (instance, field) to a concrete value, source or model.
+
+4. **Model options.** When a child model is swept, the full assembly lists
+   every option (labelled ``store.policy#0``, ``#1`` …) for validation and
+   design expansion. The experiment then groups design points by the options
+   they select, builds one assembly and layout per group with
+   ``Assembly.of(root, picks=...)``, where the option is simply
+   ``store.policy``, runs each group with its original seeds, and merges the
+   parts into one ``Results``.
 
 Where the paths meet: inside ``run()``
 --------------------------------------

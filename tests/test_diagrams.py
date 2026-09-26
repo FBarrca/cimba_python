@@ -232,21 +232,20 @@ class RightRouter(Router):
 class Hub(cb.Model):
     left: cb.Store[int]
     right: cb.Store[int]
-    routers: list[Router]
-    router: cb.Ref[Router]
+    router: Router
 
     def __init__(self):
-        self.routers = [LeftRouter(), RightRouter()]
-        for router in self.routers:
+        options = [LeftRouter(), RightRouter()]
+        for router in options:
             router.hub = self
-        self.router = cb.sweep(*self.routers)  # pyright: ignore[reportAttributeAccessIssue]
+        self.router = cb.sweep(options)  # pyright: ignore[reportAttributeAccessIssue]
 
     @cb.process
     def feed(self):
         self.router.route(1)
 
 
-def test_process_graph_follows_polymorphic_functions_through_swept_refs():
+def test_process_graph_follows_polymorphic_functions_into_every_option():
     edges = {(e.source, e.label, e.target) for e in process_graph(Hub()).edges}
     assert ("hub.feed", "put", "hub.left") in edges
     assert ("hub.feed", "put", "hub.right") in edges
@@ -254,7 +253,7 @@ def test_process_graph_follows_polymorphic_functions_through_swept_refs():
 
 def test_mermaid_quotes_edge_labels_with_parentheses():
     text = structure(Hub()).to_mermaid()
-    assert '-.->|"router (sweep)"|' in text
+    assert '-->|"router (option 1)"|' in text
 
 
 def test_mermaid_quotes_list_item_edge_labels():

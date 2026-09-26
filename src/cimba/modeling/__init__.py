@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from itertools import count
-from types import UnionType
-from typing import Any, Generic, TypeVar, Union, get_args, get_origin, get_type_hints
+from typing import Any, Generic, TypeVar, get_args, get_origin, get_type_hints
 
 T = TypeVar("T")
 M = TypeVar("M", bound="Model")
@@ -58,6 +57,9 @@ class Sweep(Generic[T]):
 
 
 def sweep(*values: T) -> Sweep[T]:
+    """An independent design axis: ``sweep(a, b, c)`` or ``sweep([a, b, c])``."""
+    if len(values) == 1 and isinstance(values[0], (list, tuple)):
+        values = tuple(values[0])
     if not values:
         raise ValueError("sweep needs at least one value")
     return Sweep(tuple(values), next(_axis_ids))
@@ -320,25 +322,19 @@ class Model(metaclass=ModelMeta):
             except (NameError, AttributeError):
                 annotations.update(getattr(cls, "__annotations__", {}))
         declaration = annotations.get(name)
-        optional = False
-        if get_origin(declaration) in (UnionType, Union):
-            members = [m for m in get_args(declaration) if m is not type(None)]
-            if len(members) == 1:
-                optional = len(members) != len(get_args(declaration))
-                declaration = members[0]
         origin = get_origin(declaration) or declaration
         if origin is Param:
             pass
-        elif origin is Ref and isinstance(value, Sweep):
-            allowed = [x for x in value.values if not (optional and x is None)]
-            if not all(isinstance(x, Model) for x in allowed):
-                raise TypeError(f"{type(self).__name__}.{name} sweep must contain models"
-                                + (" or None" if optional else ""))
+        elif isinstance(origin, type) and issubclass(origin, Model) and isinstance(value, Sweep):
+            # A swept child: one model tree per option (see cimba.experiments).
+            if not all(isinstance(x, origin) for x in value.values):
+                raise TypeError(f"{type(self).__name__}.{name} sweep must contain "
+                                f"{origin.__name__} models")
         elif origin in (Input, Series):
             if not isinstance(value, (Source, Sweep)):
                 raise TypeError(f"{type(self).__name__}.{name} expects an input source or sweep")
             if isinstance(value, Sweep) and not all(isinstance(x, Source) for x in value.values):
                 raise TypeError(f"{type(self).__name__}.{name} sweep must contain sources")
         elif isinstance(value, Sweep):
-            raise TypeError(f"{type(self).__name__}.{name} is not a Param, Ref or input")
+            raise TypeError(f"{type(self).__name__}.{name} is not a Param, input or child model")
         object.__setattr__(self, name, value)

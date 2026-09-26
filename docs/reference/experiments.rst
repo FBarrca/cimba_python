@@ -10,9 +10,10 @@ Sweeps
 
    Create an independent design axis. Assign it to a ``Param`` field, a
    distribution parameter, an ``Input``/``Series`` field (as a sweep of
-   sources), or a ``Ref`` field (as a sweep of models in the tree).
-   Independent sweeps cross. ``Results.levels`` returns the swept values,
-   including the model objects of a reference sweep.
+   sources), or a child model field (as a sweep of model objects: one model
+   tree per option). Independent sweeps cross. A single list argument is
+   accepted: ``sweep([a, b, c])``. ``Results.levels`` returns the swept
+   values, including the model objects of a model sweep.
 
    The returned object has ``values`` and one method:
 
@@ -88,7 +89,9 @@ Results
 
    .. method:: __getitem__(model)
 
-      Results for a static model instance, with one attribute per field:
+      Results for a static model instance (including every option of a
+      model sweep, with ``nan`` outputs where it wasn't selected), with one
+      attribute per field:
       :class:`Samples` for outputs, an ``InputRecord`` for inputs and series,
       a :class:`Signal` for captured entities.
 
@@ -108,7 +111,8 @@ Results
 
       Read-only mapping: ``wall_time``, ``workers``,
       ``compile`` (``misses``, ``wall_time``), ``extensions``,
-      ``native_failed`` and, when chunked, ``chunks``.
+      ``native_failed``, ``chunks`` when replications were chunked, and
+      ``variants`` (model trees run) when a child model is swept.
 
    .. method:: levels(sweep)
 

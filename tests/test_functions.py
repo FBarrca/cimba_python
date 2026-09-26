@@ -1,5 +1,6 @@
 """@cb.function: methods callable from compiled code, with dynamic dispatch."""
 
+import numpy as np
 import pytest
 
 import cimba as cb
@@ -277,7 +278,7 @@ def test_distribution_inputs_inside_functions():
 
 
 class Store(cb.Model):
-    policy: cb.Ref[Policy]
+    policy: Policy
     demand: cb.Input[float] = inputs.dist.exponential(mean=10.0)
     on_hand: cb.State[float] = 50.0
     position: cb.State[float] = 50.0
@@ -303,43 +304,61 @@ class Store(cb.Model):
         self.total_ordered = self.ordered
 
 
-class Study(cb.Model):
-    candidates: list[Policy]
-    store: Store
+class Audited(Policy):
+    """A policy with its own process: it must only run where it is selected."""
 
-    def __init__(self):
-        self.candidates = [BaseStock(), MinMax()]
-        self.store = Store()
+    audits: cb.State[int] = 0
+    audit_count: cb.Output[int]
+
+    @cb.process
+    def audit(self):
+        while True:
+            cb.hold(7.0)
+            self.audits += 1
+
+    @cb.on_end
+    def report(self):
+        self.audit_count = self.audits
 
 
-def test_reference_sweep_compares_policies_in_one_experiment():
-    study = Study()
-    choice = cb.sweep(*study.candidates)
-    study.store.policy = choice  # pyright: ignore[reportAttributeAccessIssue]
-    results = cb.Experiment(study, replications=4, seed=3).run(workers=2)
+def test_sweeping_a_child_model_runs_one_option_per_trial():
+    store = Store()
+    options = [BaseStock(), MinMax(), Audited()]
+    store.policy = cb.sweep(options)  # pyright: ignore[reportAttributeAccessIssue]  (a list works too)
+    results = cb.Experiment(store, replications=4, seed=3,
+                            window=cb.Window(duration=40.0)).run(workers=2)
     assert not results.failed.any(), results.failure_reasons
-    assert results.levels(choice) == tuple(study.candidates)
-    ordered = results[study.store].total_ordered.values
-    assert ordered.shape == (2, 4)
+    assert results.levels(store.policy) == tuple(options)
+    assert results.meta.variants == 3
+    ordered = results[store].total_ordered.values
+    assert ordered.shape == (3, 4)
     assert (ordered[0] != ordered[1]).all()                 # different policies
-    first = results[study.store].first_demand.values
-    assert (first[0] == first[1]).all()                     # same demand (CRN)
-    comparison = cb.analysis.compare(results[study.store].total_ordered, a=0, b=1)
+    first = results[store].first_demand.values
+    assert (first[0] == first[1]).all() and (first[1] == first[2]).all()   # CRN
+    audits = results[options[2]].audit_count.values
+    assert (audits[2] == 5).all()                           # runs where selected...
+    assert np.isnan(audits[:2]).all()                       # ...and nowhere else
+    comparison = cb.analysis.compare(results[store].total_ordered, a=0, b=1)
     assert comparison.n == 4
 
-    from cimba.diagrams import process_graph, structure
-    edges = {(e.source, e.label, e.target) for e in structure(study).edges}
-    assert ("study.store", "policy (sweep)", "study.candidates[1]") in edges
-    process_graph(study)
+
+def test_child_sweeps_cross_with_other_sweeps_and_rerun_single_trials():
+    store = Store()
+    options = [BaseStock(), Audited()]
+    store.policy = cb.sweep(*options)  # pyright: ignore[reportAttributeAccessIssue]
+    options[0].target = cb.sweep(80.0, 120.0)
+    experiment = cb.Experiment(store, replications=2, seed=5,
+                               window=cb.Window(duration=40.0))
+    results = experiment.run(workers=1)
+    assert results.failed.shape == (4, 2)                  # 2 policies x 2 targets
+    again = experiment.only(trials=[5])                    # point 2, replication 1
+    assert again[store].total_ordered[0, 0] == results[store].total_ordered[2, 1]
 
 
-def test_reference_sweep_choices_must_be_in_the_tree():
-    study = Study()
-    study.store.policy = cb.sweep(study.candidates[0], MinMax())  # pyright: ignore[reportAttributeAccessIssue]
-    with pytest.raises(ModelDefinitionError, match="outside the tree"):
-        cb.Experiment(study)
-    with pytest.raises(TypeError, match="must contain models"):
-        study.store.policy = cb.sweep(1.0, 2.0)  # pyright: ignore[reportAttributeAccessIssue]
+def test_child_sweep_options_must_match_the_field_type():
+    store = Store()
+    with pytest.raises(TypeError, match="must contain Policy models"):
+        store.policy = cb.sweep(1.0, 2.0)  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_function_names_do_not_shadow_entity_methods():

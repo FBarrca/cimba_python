@@ -176,13 +176,14 @@ The one place that loads the native library and touches addresses:
 The orchestrator, and the only package that sees everything:
 
 * ``design.py`` expands sweeps (in ``Param`` fields, distribution
-  parameters and source sweeps) into design points, and derives trial seeds
-  with ``SeedSequence``;
+  parameters, sources and child models) into design points, and derives
+  trial seeds with ``SeedSequence``;
 * ``run.py`` holds ``Experiment`` and ``Window``. It validates sources
   against the window, plans memory chunks, generates rows for row sources
   once per replication, allocates and binds trial blocks, calls the native
   runner, reruns exhausted trials with extended rows, and assembles
-  ``Results``.
+  ``Results``. For swept child models it runs one model tree per option and
+  merges the parts.
 
 .. _arch-pkg-results:
 

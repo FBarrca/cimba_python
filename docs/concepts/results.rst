@@ -100,6 +100,8 @@ Run metadata
      - The ``workers`` argument.
    * - ``meta.chunks``
      - Present when replications were processed in several memory chunks.
+   * - ``meta.variants``
+     - Present when a child model was swept: the number of model trees run.
 
 Tables
 ------

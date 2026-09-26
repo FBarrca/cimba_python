@@ -48,8 +48,8 @@ Invariants
        scheduling, memory chunking and input extension.
    * - Structural immutability
      - The instance tree, fields and input declarations are fixed for an
-       experiment. Experiments vary values, sources and reference targets
-       only.
+       experiment, except that a swept child model gives one tree per
+       option. Experiments vary values, sources and model options.
    * - Window semantics
      - Time-weighted statistics cover the measurement window. Datasets are
        cleared when it opens.
@@ -165,8 +165,19 @@ already points to. Each class fills its slots with its own implementations,
 and subclasses keep their bases' slot positions. The price is one indirect
 call and annotated signatures, since a call through a pointer needs a fixed
 machine signature. In return, the caller still depends only on the base
-class, and swapping a policy (even by sweeping a reference) never
-recompiles anything.
+class, and swapping a policy (even by sweeping it) never recompiles
+anything.
+
+Sweeping models: one tree per option
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Separate trees** (chosen) versus one tree with every option present. If all
+options lived in every trial and a pointer chose among them, the options that
+weren't selected would still run their processes and hooks and silently
+distort the results. Instead, the experiment expands the full design, groups
+design points by the options they select, and runs each group on a tree that
+contains only those options, with the original seeds. Classes are compiled
+once, so the cost is only a separate memory layout per option.
 
 Common random numbers by default
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

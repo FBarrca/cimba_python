@@ -17,9 +17,9 @@ Model
    has no side effects: nothing is compiled or run until an experiment runs.
 
    Assigning attributes is validated: a :func:`sweep` is accepted only by
-   ``Param``, ``Input``, ``Series`` and ``Ref`` fields. ``Input``/``Series``
-   fields accept only sources or sweeps of sources; a ``Ref`` sweep must
-   contain models (and ``None`` if the reference is optional).
+   ``Param``, ``Input``, ``Series`` and child-model fields. ``Input``/``Series``
+   fields accept only sources or sweeps of sources; a child sweep must
+   contain models of the field's type.
 
    .. method:: describe()
 
@@ -47,8 +47,7 @@ Field types
 
    A reference to another model instance of class ``M`` (or a subclass).
    Write ``cb.Ref[M] | None`` for an optional reference. Forward references
-   by string are allowed: ``cb.Ref["Harbor"]``. It may be assigned a
-   :func:`sweep` of models in the tree, one per design point.
+   by string are allowed: ``cb.Ref["Harbor"]``.
 
 .. class:: Input[T]
 
@@ -79,7 +78,9 @@ Field types
       *Compiled.* The value of the bucket containing ``time`` (not before
       ``origin``).
 
-Other annotations: a model class (child), ``list[M]`` (owned children),
+Other annotations: a model class (child; it may be assigned a
+:func:`sweep` of model objects, giving one model tree per option),
+``list[M]`` (owned children),
 ``list[cb.Ref[M]]`` (references, items may be ``None``), and a plain
 ``float``/``int``/``bool`` (constant). Unannotated attributes are host-only.
 

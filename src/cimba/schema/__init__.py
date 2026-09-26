@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from types import UnionType
 from types import MappingProxyType
+from collections.abc import Mapping
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from cimba.inputs.sources import Source
@@ -238,11 +239,16 @@ class Assembly:
     by_object: MappingProxyType
 
     @classmethod
-    def of(cls, root: Model, *, strict: bool = True) -> "Assembly":
+    def of(cls, root: Model, *, strict: bool = True,
+           picks: Mapping[tuple[Model, str], Model] | None = None) -> "Assembly":
         """Snapshot the configured tree rooted at ``root``.
 
-        With ``strict=False`` missing sources, parameters, initial states and
-        required references are tolerated (used to draw unfinished models).
+        A child field set to a sweep of models contributes every option, each
+        labelled ``path.field#i``, unless ``picks`` fixes the option for that
+        (model, field): then the tree contains only the chosen model, under the
+        plain label ``path.field``. With ``strict=False`` missing sources,
+        parameters, initial states and required references are tolerated (used
+        to draw unfinished models).
         """
         if not isinstance(root, Model):
             raise ModelDefinitionError("experiment root must be a Model")
@@ -287,6 +293,17 @@ class Assembly:
                     raise ModelDefinitionError(f"{label}.{field.name}: parameter missing")
                 elif field.kind == "state" and value is None and strict:
                     raise ModelDefinitionError(f"{label}.{field.name}: initial state missing")
+                elif field.kind == "child" and isinstance(value, Sweep):
+                    chosen = (picks or {}).get((model, field.name))
+                    if chosen is not None:
+                        children.append((chosen, f"{label}.{field.name}"))
+                    else:
+                        for i, option in enumerate(value.values):
+                            if not isinstance(option, field.value_type):
+                                raise ModelDefinitionError(
+                                    f"{label}.{field.name}: sweep option {i} is not a "
+                                    f"{field.value_type.__name__}")
+                            children.append((option, f"{label}.{field.name}#{i}"))
                 elif field.kind == "child":
                     if not isinstance(value, field.value_type):
                         raise ModelDefinitionError(
@@ -323,24 +340,17 @@ class Assembly:
         for instance in instances:
             for field in instance.schema.fields:
                 if field.kind == "ref":
-                    value = instance.values[field.name]
-                    # A swept reference picks one of several models per design
-                    # point: a pointer is data, so every choice must already be
-                    # part of the tree.
-                    targets = value.values if isinstance(value, Sweep) else (value,)
-                    for target in targets:
-                        if target is None and not field.optional and strict:
-                            raise ModelDefinitionError(
-                                f"{instance.label}.{field.name}: reference missing")
-                        if target is not None and not isinstance(target, field.value_type):
-                            raise ModelDefinitionError(
-                                f"{instance.label}.{field.name}: expected "
-                                f"{field.value_type.__name__} reference")
-                        if target is not None and target not in visited:
-                            raise ModelDefinitionError(
-                                f"{instance.label}.{field.name}: "
-                                + ("swept reference to a model outside the tree"
-                                   if isinstance(value, Sweep) else "dangling reference"))
+                    target = instance.values[field.name]
+                    if target is None and not field.optional and strict:
+                        raise ModelDefinitionError(
+                            f"{instance.label}.{field.name}: reference missing")
+                    if target is not None and not isinstance(target, field.value_type):
+                        raise ModelDefinitionError(
+                            f"{instance.label}.{field.name}: expected "
+                            f"{field.value_type.__name__} reference")
+                    if target is not None and target not in visited:
+                        raise ModelDefinitionError(
+                            f"{instance.label}.{field.name}: dangling reference")
                 elif field.kind == "collection" and get_origin(field.value_type) is Ref:
                     for position, target in enumerate(instance.values[field.name]):
                         if target is not None and target not in visited:
