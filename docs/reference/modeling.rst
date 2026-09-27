@@ -268,6 +268,13 @@ All verbs are *compiled*.
 
    Stop a spawned model's processes and retire it.
 
+.. function:: is_dynamic(model)
+
+   Return ``True`` if this instance was created by :func:`spawn`, or
+   ``False`` for a static model in the configured tree. Remains ``True``
+   after :func:`release`: this reports creation mode, not whether the model
+   is still active. Accepts model instances only.
+
 .. function:: schedule(event, delay, priority=0)
 
    Run the ``@event`` method ``event`` after ``delay`` (≥ 0). Returns a

@@ -13,7 +13,7 @@ from numba.extending import intrinsic, overload, overload_method
 from cimba.engine.symbols import register
 from cimba.layout import MODEL_RECORD_CLASSES, STORE_MODEL_TARGETS, RecordLayout
 from cimba.modeling import (
-    Process, end_trial, hold, log, now, release, schedule, suspend, this_process,
+    Process, end_trial, hold, is_dynamic, log, now, release, schedule, suspend, this_process,
 )
 from cimba.schema import ClassSchema
 from .numba_compat import cgutils, infer_getattr, make_overload_method_template
@@ -42,7 +42,7 @@ for _name in ("cmb_process_hold", "cmb_time", "cpy_buffer_put",
               "cpy_store_length",
               "cpy_condition_wait", "cpy_condition_signal",
               "cpy_schedule_event", "cpy_schedule_cancel",
-              "cpy_schedule_pending", "cpy_model_release",
+              "cpy_schedule_pending", "cpy_model_release", "cpy_model_is_dynamic",
               "cpy_process_current", "cpy_process_yield",
               "cpy_process_status", "cpy_process_timer_set",
               "cmb_process_resume", "cmb_process_interrupt",
@@ -134,6 +134,8 @@ _event_pending = types.ExternalFunction(
     "cpy_schedule_pending", types.uint64(types.uint64))
 _model_release = types.ExternalFunction(
     "cpy_model_release", types.void(types.intp))
+_model_is_dynamic = types.ExternalFunction(
+    "cpy_model_is_dynamic", types.int64(types.intp))
 _process_current = types.ExternalFunction(
     "cpy_process_current", types.intp())
 _process_yield = types.ExternalFunction(
@@ -488,6 +490,14 @@ def model_release(model):
     if isinstance(model, types.Record):
         def implementation(model):
             _model_release(record_address(model))
+        return implementation
+
+
+@overload(is_dynamic)
+def model_is_dynamic(model):
+    if _record_model_class(model) is not None:
+        def implementation(model):
+            return bool(_model_is_dynamic(record_address(model)))
         return implementation
 
 

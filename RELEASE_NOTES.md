@@ -1,3 +1,11 @@
+# Cimba Python 0.7.3
+
+Released 2026-09-27.
+
+- Add `cb.is_dynamic(model)` for compiled model code. It reports whether an
+  instance was spawned, remains true after release, and removes the need for
+  constructor flags when a class supports both static and dynamic instances.
+
 # Cimba Python 0.7.2
 
 Released 2026-09-27.

@@ -1,4 +1,5 @@
 EXPORTS
+    cpy_model_is_dynamic
     cimba_version
     cimba_run
     cimba_threads_use

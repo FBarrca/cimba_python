@@ -279,6 +279,15 @@ def release(model: Model) -> None:
     raise NotInCompiledCode("release() is available only in compiled model code")
 
 
+def is_dynamic(model: Model) -> bool:
+    """Whether this instance was spawned, even if it has been released.
+
+    Available only in compiled model code. Static tree instances return False.
+    This reports creation mode, not whether the model is still active.
+    """
+    raise NotInCompiledCode("is_dynamic() is available only in compiled model code")
+
+
 def schedule(event: Any, delay: float, priority: int = 0) -> Scheduled:
     raise NotInCompiledCode("schedule() is available only in compiled model code")
 

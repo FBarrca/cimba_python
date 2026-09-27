@@ -278,6 +278,32 @@ Dynamic models: spawn and release
 releases its own model) and marks the model released. Its memory is
 reclaimed when the trial ends.
 
+``cb.is_dynamic(model)`` returns whether an instance was created by
+``cb.spawn``. It returns ``False`` for static tree models and stays ``True``
+for spawned models after release. Like ``spawn`` and ``release``, it is
+available only in compiled model code.
+
+Use it when the same class supports static and dynamic instances, without
+maintaining a constructor flag. Track domain state separately to prevent
+repeated release:
+
+.. code-block:: python
+
+   class Document(cb.Model):
+       closed: cb.State[bool] = False
+
+       @cb.function
+       def close(self) -> None:
+           if self.closed:
+               return
+           self.closed = True
+           if cb.is_dynamic(self):
+               cb.release(self)
+
+Here, closing a static document only sets its ``closed`` state; its
+processes must check that state themselves. Closing a spawned document
+also stops its model processes.
+
 .. note::
 
    At the end of the cooldown the window stops every process, spawned ones

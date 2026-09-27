@@ -130,6 +130,18 @@ void cpy_model_start(void *record, const cpy_process_descriptor *processes,
     }
 }
 
+int64_t cpy_model_is_dynamic(void *record)
+{
+    trial_resources *resources = active_trial;
+    if (resources == NULL) cimba_trial_abandon();
+    /* Released nodes remain registered until trial cleanup. Creation mode
+     * is independent of whether the model's processes are still active. */
+    for (spawned_model *node = resources->spawned; node != NULL;
+         node = node->next)
+        if (node->record == record) return 1;
+    return 0;
+}
+
 void cpy_model_release(void *record)
 {
     trial_resources *resources = active_trial;
