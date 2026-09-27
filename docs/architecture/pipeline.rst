@@ -59,9 +59,10 @@ The class path
    library. Because these are real types, misuse is a compile-time error.
 
 4. **Compile.** ``compiler.ensure(schema)`` compiles each process, hook,
-   predicate, event and function with ``numba.njit`` for the record type,
-   wraps each in a C-callable ``cfunc``, and builds the class's dispatch
-   table. Table slots follow ``ClassSchema.slots``: a subclass keeps its
+   predicate, event and function once with ``numba.njit`` for the record
+   type. One native module per class then adapts each method to the entry
+   point the engine calls, and the class's dispatch table holds those
+   entries. Table slots follow ``ClassSchema.slots``: a subclass keeps its
    bases' slots in the same positions and appends its own. A call
    ``view.f(x)`` compiles to "load the table pointer from the record, load
    slot *k*, call". The *record's* class picks the implementation, which is

@@ -17,16 +17,15 @@ compiled code still depends on classes alone.
 from __future__ import annotations
 
 import inspect
-from typing import Any
 
 from llvmlite import ir
-from numba import carray, cfunc, from_dtype, njit, types
+from numba import from_dtype, types
 
 from cimba.layout import RecordLayout
 from cimba.modeling import Model
 from cimba.schema import ClassSchema, FunctionSignature
 from . import views
-from .handles import _model_pointer_cast, _record_model_class, record_address
+from .handles import _record_model_class
 from .numba_compat import AbstractTemplate, cpu_target, lower_builtin, signature
 
 
@@ -48,18 +47,6 @@ def _numba_type(kind):
     return _record_type(kind)
 
 
-def _abi_type(kind):
-    if kind is None:
-        return types.void
-    if kind is float:
-        return types.float64
-    if kind is bool:
-        return types.uint8
-    if kind is int:
-        return types.int64
-    return types.intp
-
-
 def _ir_type(kind) -> ir.Type:
     if kind is None:
         return ir.VoidType()
@@ -71,37 +58,14 @@ def _ir_type(kind) -> ir.Type:
 
 
 # ------------------------------------------------------------------ callee side
-def compile_function(schema: ClassSchema, name: str, record_type, record_cast):
-    """Compile this class's implementation of ``name`` behind the slot ABI."""
-    method = getattr(schema.cls, name)
+def function_signature(schema: ClassSchema, name: str, record_type):
+    """The ``njit`` signature of this class's implementation of ``name``.
+
+    Its native entry point (see ``compiler.entries``) adapts it to the slot ABI.
+    """
     signature = schema.signature(name)
-    kinds = signature.types
-    compiled = njit(_numba_type(signature.returns)(
-        record_type, *(_numba_type(kind) for kind in kinds)))(method)
-    namespace: dict[str, Any] = {"carray": carray, "cast": record_cast,
-                                 "compiled": compiled, "address": record_address}
-    arguments = []
-    for index, kind in enumerate(kinds):
-        if kind is bool:
-            arguments.append(f"a{index} != 0")
-        elif kind in (float, int):
-            arguments.append(f"a{index}")
-        else:
-            namespace[f"cast{index}"] = _model_pointer_cast(_record_type(kind))
-            arguments.append(f"carray(cast{index}(a{index}), 1)[0]")
-    call = f"compiled(carray(cast(context), 1)[0], {', '.join(arguments)})"
-    if signature.returns is None:
-        body = f"    {call}"
-    elif signature.returns is bool:
-        body = f"    return 1 if {call} else 0"
-    elif signature.returns in (float, int):
-        body = f"    return {call}"
-    else:
-        body = f"    return address({call})"
-    parameters = ", ".join(["context"] + [f"a{i}" for i in range(len(kinds))])
-    exec(f"def wrapper({parameters}):\n{body}\n", namespace)  # noqa: S102 - fixed template
-    abi = _abi_type(signature.returns)(types.intp, *(_abi_type(kind) for kind in kinds))
-    return cfunc(abi, no_cpython_wrapper=True)(namespace["wrapper"])
+    return _numba_type(signature.returns)(
+        record_type, *(_numba_type(kind) for kind in signature.types))
 
 
 # ------------------------------------------------------------------ caller side
@@ -225,4 +189,4 @@ def resolve_function(context, record, name: str):
 views.function_resolver = resolve_function
 
 
-__all__ = ["compile_function", "resolve_function"]
+__all__ = ["function_signature", "resolve_function"]

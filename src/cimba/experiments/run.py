@@ -224,15 +224,15 @@ class Experiment:
                     inputs.append((placement.offset, offset,
                                    label.encode("utf-8")[:95]))
             for name, copies, priority in instance.schema.processes:
-                processes.append((placement.offset, code.processes[name].address,
+                processes.append((placement.offset, code.entries[name],
                                   priority, copies, _native_name(name)))
         for instance in reversed(self.assembly.instances):
             placement = self.layout.by_object[instance.model]
             code = compiled[instance.schema.cls]
             for name in instance.schema.starts:
-                starts.append((placement.offset, code.starts[name].address))
+                starts.append((placement.offset, code.entries[name]))
             for name in instance.schema.ends:
-                ends.append((placement.offset, code.ends[name].address))
+                ends.append((placement.offset, code.entries[name]))
         tables = [
             np.array(entities, dtype=ENTITY_DESCRIPTOR),
             np.array(processes, dtype=PROCESS_DESCRIPTOR),

@@ -136,18 +136,22 @@ Compiles each model **class** once and never looks at instances or sources.
   ``Series.now`` and ``Resource.acquire``, and implement the verbs. Each maps
   to one external C call. Misuse (a ``Store[Part]`` given a ``Ship``) is a
   typing error at compile time.
-* **Functions** (``functions.py``): ``@function`` support. It compiles each
-  class's implementations behind a fixed C calling convention derived from
-  the annotations, and lowers ``view.f(args)`` to an indirect call through
+* **Functions** (``functions.py``): ``@function`` support. It derives each
+  function's signature from its annotations (its entry point puts every
+  class's implementation behind the same C calling convention), and lowers ``view.f(args)`` to an indirect call through
   the record's dispatch table. Calls are typed under a private key, so a
   function named like an entity method (``get``, ``level``) can't shadow it.
 * **Spawning** (``spawning.py``): typing and lowering for
   ``cb.spawn(ModelClass, ...)``, which checks keyword fields against the
   schema at compile time.
 * **Classes** (``classes.py``): ``ensure(schema)`` compiles every process,
-  hook, predicate and event with ``numba.njit`` over the class's record type,
-  wraps them as C callbacks, builds the class dispatch table, and caches the
-  result for the process lifetime.
+  hook, predicate, event and function once with ``numba.njit`` over the
+  class's record type, builds the class dispatch table, and caches the result
+  for the process lifetime.
+* **Entries** (``entries.py``): the native entry points the engine calls.
+  Numba already emits a C wrapper beside each compiled method; one LLVM
+  module per class adapts those wrappers to the engine's calling conventions
+  and is emitted once, so no method is compiled twice.
 
 Only ``numba_compat.py`` imports ``numba.core`` internals, which contains
 Numba version churn in one file.

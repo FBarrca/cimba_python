@@ -25,6 +25,6 @@ class Queue(Model):
 def test_compile_is_per_class_and_source_agnostic():
     schema = ClassSchema.of(Queue)
     compiled = ensure(schema)
-    assert compiled.processes["arrivals"].address
-    assert compiled.ends["measure"].address
+    assert compiled.entries["arrivals"]
+    assert compiled.entries["measure"]
     assert ensure(schema) is compiled
