@@ -91,6 +91,33 @@ def test_container_initial_level():
         cb.Container(initial=1.5)  # pyright: ignore[reportArgumentType]
 
 
+class Sampler(cb.Model):
+    samples: cb.Dataset
+    count: cb.Output[int]
+
+    @cb.process
+    def sample(self):
+        self.samples.record(0.0)
+        cb.hold(1.0)
+        self.samples.record(1.0)
+
+    @cb.on_end
+    def finish(self):
+        self.count = self.samples.sample_count()
+
+
+# Opening the window clears datasets. Without a warmup it opens before the
+# processes start, so samples recorded at time 0 count.
+@pytest.mark.parametrize("window, count",
+                         [(cb.Window(duration=10.0), 2),
+                          (cb.Window.until_idle(), 2),
+                          (cb.Window(warmup=1.0, duration=10.0), 1)])
+def test_window_opening_keeps_samples_from_its_start(window, count):
+    model = Sampler()
+    results = cb.Experiment(model, window=window).run(workers=1)
+    assert results[model].count.values.tolist() == [[count]]
+
+
 def test_window_end_stops_spawned_processes():
     # Before the fix this model never finished, so run it in a subprocess
     # with a timeout rather than hang the test session.

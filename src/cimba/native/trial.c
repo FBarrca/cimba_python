@@ -451,14 +451,18 @@ static void run_trial(void *block)
         }
     }
 
-    if (isfinite(header->duration)) {
+    /* Without a warmup the window opens now, as it does for until-idle runs:
+     * an event at time 0 would run after the process starts queued above
+     * and clear the samples they record at time 0. */
+    if (!isfinite(header->duration) || header->warmup == 0.0)
+        record_start(resources, NULL);
+    else
         cmb_event_schedule(record_start, resources, NULL, header->warmup, 0);
+    if (isfinite(header->duration)) {
         cmb_event_schedule(record_stop, resources, NULL,
                            header->warmup + header->duration, 0);
         cmb_event_schedule(stop_processes, resources, NULL,
                            header->warmup + header->duration + header->cooldown, 0);
-    } else {
-        record_start(resources, NULL);
     }
     cmb_event_queue_execute();
     record_stop(resources, NULL);

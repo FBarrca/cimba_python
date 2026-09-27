@@ -231,6 +231,8 @@ as one value per customer. That's what a :class:`~cimba.Dataset` is for:
 ``record(value)`` adds a sample; ``sample_mean()``, ``sample_count()`` and
 ``sample_max()`` summarize them inside the trial. Datasets are cleared when the
 measurement window opens, so warm-up samples never pollute your statistics.
+Without a warmup the window opens as the processes start, so samples they
+record at time 0 count, but samples recorded in ``@cb.on_start`` hooks do not.
 
 Summaries are often enough. When you want the full picture, a histogram or a
 plot of the queue over time, ask Cimba to **capture** the entity:
