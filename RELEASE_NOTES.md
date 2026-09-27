@@ -1,3 +1,21 @@
+# Cimba Python 0.7.2
+
+Released 2026-09-27.
+
+## Faster compilation
+
+Each model method is compiled once. The extra Numba `@cfunc` wrapper is gone;
+one small native entry module per class adapts the engine's calling
+conventions to the method wrappers. Fresh-process compile time drops 22–41%
+on the tutorials and about 56% on classes with many processes. Simulation
+runtime is unchanged.
+
+## Fixes
+
+- A window with warmup 0 opens as the processes start, so samples they record
+  at time 0 are kept. Positive warmups are unchanged. Samples recorded in
+  `@cb.on_start` hooks are still cleared when the window opens.
+
 # Cimba Python 0.7.1
 
 Released 2026-09-26.
