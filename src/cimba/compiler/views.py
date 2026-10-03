@@ -10,6 +10,7 @@ from functools import lru_cache
 import operator
 from typing import get_args, get_origin
 
+import numpy as np
 from llvmlite import ir
 from numba import from_dtype, types
 from numba.extending import (
@@ -88,7 +89,8 @@ def collection_getitem(collection, index):
 def collection_length(collection):
     if isinstance(collection, CollectionViewType):
         def implementation(collection):
-            return collection.length
+            # Keep the storage ABI unsigned, but match Python's signed len().
+            return np.intp(collection.length)
         return implementation
 
 

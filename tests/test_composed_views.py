@@ -77,6 +77,50 @@ def test_collection_bounds_abandon_trial():
     assert result.failed.tolist() == [[True, True]]
 
 
+class SignedIndex(cb.Model):
+    workers: list[Worker]
+    chosen: cb.Output[int]
+    last: cb.Output[int]
+    seen: cb.Output[float]
+
+    @cb.process
+    def select(self):
+        chosen = -1
+        for index in range(len(self.workers)):
+            chosen = index
+        self.chosen = chosen
+        last = len(self.workers) - 1
+        self.last = last
+        if chosen >= 0:
+            self.workers[chosen].value = 7.0
+            self.seen = self.workers[last].value
+
+
+@pytest.mark.parametrize("count", [0, 2])
+def test_collection_length_supports_signed_arithmetic_and_sentinel_indices(count):
+    model = SignedIndex()
+    model.workers = [Worker() for _ in range(count)]
+    result = cb.Experiment(model).run(workers=1, on_failure="raise")
+    assert result[model].chosen[0, 0] == count - 1
+    assert result[model].last[0, 0] == count - 1
+    if count:
+        assert result[model].seen[0, 0] == 7.0
+
+
+def test_negative_collection_index_still_abandons_trial():
+    class NegativeIndex(cb.Model):
+        workers: list[Worker]
+
+        @cb.process
+        def select(self):
+            self.workers[-1].value = 1.0
+
+    model = NegativeIndex()
+    model.workers = [Worker()]
+    result = cb.Experiment(model).run(workers=1)
+    assert result.failed[0, 0]
+
+
 class OtherWorker(cb.Model):
     value: cb.State[float] = 2.0
     total: cb.Output[float]
