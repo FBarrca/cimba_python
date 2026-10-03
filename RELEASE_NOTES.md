@@ -1,3 +1,15 @@
+# Cimba Python 0.7.4
+
+Released 2026-10-03.
+
+- Fix compilation through model references and inherited fields.
+- Add distribution tags for reproducible random streams across model refactors.
+- Fix signed arithmetic on model collection lengths.
+- Add condition wait timeouts and a boolean result.
+- Support optional inputs as empty sources.
+- Allow releasing static models while retaining their state and end hooks.
+- Add child attachment hooks and `cb.options()` for configuring model sweeps.
+
 # Cimba Python 0.7.3
 
 Released 2026-09-27.
