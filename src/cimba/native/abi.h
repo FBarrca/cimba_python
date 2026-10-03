@@ -140,6 +140,8 @@ CPY_EXPORT void cpy_model_start(void *record,
                                 const cpy_input_descriptor *inputs,
                                 uint64_t input_count);
 CPY_EXPORT void cpy_model_release(void *record);
+CPY_EXPORT int64_t cpy_condition_wait_until(void *condition, void *callback,
+                                           void *context, double timeout);
 CPY_EXPORT int64_t cpy_model_is_dynamic(void *record);
 CPY_EXPORT void cpy_end_trial(void);
 

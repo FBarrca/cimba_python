@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+from math import inf
 from functools import lru_cache
 from typing import Any, cast as type_cast
 
@@ -40,7 +41,7 @@ for _name in ("cmb_process_hold", "cmb_time", "cpy_buffer_put",
               "cpy_priority_enqueue_model", "cpy_priority_cancel",
               "cpy_priority_position", "cpy_priority_length",
               "cpy_store_length",
-              "cpy_condition_wait", "cpy_condition_signal",
+              "cpy_condition_wait_until", "cpy_condition_signal",
               "cpy_schedule_event", "cpy_schedule_cancel",
               "cpy_schedule_pending", "cpy_model_release", "cpy_model_is_dynamic",
               "cpy_process_current", "cpy_process_yield",
@@ -122,7 +123,8 @@ _priority_length = types.ExternalFunction(
 _store_length = types.ExternalFunction(
     "cpy_store_length", types.uint64(types.intp))
 _condition_wait = types.ExternalFunction(
-    "cpy_condition_wait", types.int64(types.intp, types.intp, types.intp))
+    "cpy_condition_wait_until",
+    types.int64(types.intp, types.intp, types.intp, types.float64))
 _condition_signal = types.ExternalFunction(
     "cpy_condition_signal", types.uint64(types.intp))
 _schedule_event = types.ExternalFunction(
@@ -811,11 +813,11 @@ def _condition_handle(record) -> bool:
 
 
 @_record_method("wait_until", _condition_handle)
-def condition_wait(record, predicate):
+def condition_wait(record, predicate, timeout=inf):
     if isinstance(predicate, PredicateHandleType):
-        def implementation(record, predicate):
-            _condition_wait(record.condition_handle, predicate.callback,
-                            predicate.context)
+        def implementation(record, predicate, timeout=inf):
+            return bool(_condition_wait(record.condition_handle, predicate.callback,
+                                        predicate.context, float(timeout)))
         return implementation
 
 

@@ -85,8 +85,8 @@ These calls may suspend the calling process:
      - an item is available / there is room.
    * - ``resource.acquire(n)`` / ``preempt(n)``
      - ``n`` units are granted.
-   * - ``condition.wait_until(predicate)``
-     - the condition is signalled and the predicate is true.
+   * - ``condition.wait_until(predicate, timeout=math.inf)``
+     - the predicate holds, the timeout expires, or the process is interrupted.
    * - ``cb.suspend()``
      - something resumes, interrupts or times out the process.
 
@@ -188,7 +188,7 @@ state. Two pieces are involved:
 
        @cb.process
        def waiter(self):
-           self.gate.wait_until(self.is_ready)    # sleeps until signalled AND true
+           self.gate.wait_until(self.is_ready)    # returns whether ready holds
            ...
 
        @cb.process
@@ -203,6 +203,9 @@ state. Two pieces are involved:
 * ``signal()`` makes the condition re-evaluate its waiters' predicates and
   wake those that are true. Conditions don't watch state by themselves:
   whoever changes relevant state must signal.
+* ``wait_until`` checks the predicate before blocking and returns a bool.
+  Use ``if self.gate.wait_until(self.is_ready, timeout=5.0): ...`` to wait at
+  most five time units.
 
 Events
 ------

@@ -23,23 +23,26 @@ class Ship(cb.Model):
     min_depth: cb.State[float]
     arrival: cb.State[float]
 
+    @cb.predicate
+    def can_enter(self):
+        sea = self.harbor.sea
+        facilities = self.harbor.facilities
+        berths = (facilities.berths_large if self.size == LARGE else
+                  facilities.berths_small)
+        return (sea.water_depth >= self.min_depth and
+                sea.wind_mag <= self.max_wind and
+                facilities.tugs.available() >= self.tugs_needed and
+                berths.available() >= 1)
+
     @cb.process
     def voyage(self):
-        sea = self.harbor.sea
         facilities = self.harbor.facilities
         if self.size == LARGE:
             berths = facilities.berths_large
         else:
             berths = facilities.berths_small
 
-        while True:
-            ready = (sea.water_depth >= self.min_depth and
-                     sea.wind_mag <= self.max_wind and
-                     facilities.tugs.available() >= self.tugs_needed and
-                     berths.available() >= 1)
-            if ready:
-                break
-            facilities.harbormaster.wait_until(self.harbor.should_call_harbormaster)
+        facilities.harbormaster.wait_until(self.can_enter)
 
         berths.acquire(1)
         facilities.tugs.acquire(self.tugs_needed)
@@ -182,10 +185,6 @@ class Harbor(cb.Model):
         self.sea = SeaConditions(self, mean_wind)
         self.traffic = ShipTraffic(
             self, arrival_rate, unload_avg_small, unload_avg_large)
-
-    @cb.predicate
-    def should_call_harbormaster(self):
-        return True
 
     @cb.on_end
     def harbor_stats(self):

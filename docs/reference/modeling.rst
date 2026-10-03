@@ -180,10 +180,14 @@ Entity methods are *compiled*, except ``capture()`` and the constructors.
 
 .. class:: Condition()
 
-   .. method:: wait_until(predicate)
+   .. method:: wait_until(predicate, timeout=math.inf) -> bool
 
-      Block until signalled while ``predicate`` (a ``@predicate`` method,
-      passed uncalled) is true.
+      Return immediately if ``predicate`` (a ``@predicate`` method, passed
+      uncalled) holds; otherwise wait until it holds after a signal, a timeout
+      expires, or the process is interrupted. Return whether it holds when
+      the wait ends. ``timeout`` is nonnegative simulation time: infinity
+      means no deadline and zero polls without blocking. The wait cancels
+      only its own timer before returning.
 
    .. method:: signal()
 

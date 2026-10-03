@@ -160,6 +160,34 @@ CPY_EXPORT int64_t cpy_condition_wait(void *condition, void *callback,
     return cmb_condition_wait(condition, predicate_demand, &predicate);
 }
 
+CPY_EXPORT int64_t cpy_condition_wait_until(void *condition, void *callback,
+                                           void *context, double timeout)
+{
+    if (isnan(timeout) || timeout < 0.0) cimba_trial_abandon();
+    cpy_bound_predicate predicate = {
+        (cpy_predicate_callback)callback, context,
+    };
+    bool satisfied = predicate.callback(predicate.context) != 0;
+    if (satisfied || timeout == 0.0) return satisfied;
+
+    struct cmb_process *process = cmb_process_current();
+    if (process == NULL) cimba_trial_abandon();
+    const double deadline = cmb_time() + timeout;
+    /* Own one timer, leaving any application timers intact. */
+    const uint64_t timer = isfinite(timeout)
+        ? cmb_process_timer_add(process, timeout, CMB_PROCESS_TIMEOUT) : 0;
+    do {
+        const int64_t signal = cmb_condition_wait(condition, predicate_demand,
+                                                  &predicate);
+        satisfied = predicate.callback(predicate.context) != 0;
+        if (satisfied || signal != CMB_PROCESS_SUCCESS || cmb_time() >= deadline)
+            break;
+        /* Another waiter can change the predicate before we resume. */
+    } while (true);
+    if (timer != 0) cmb_process_timer_cancel(process, timer);
+    return satisfied;
+}
+
 CPY_EXPORT uint64_t cpy_condition_signal(void *condition)
 {
     return cmb_condition_signal(condition);

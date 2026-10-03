@@ -86,8 +86,8 @@ Waiting for a condition
 
 A ship can dock only when *five* things are true at once: depth, wind, tugs,
 berth, and (a moment later) radio. You can't express that as a single
-``acquire``. What we want is: *sleep until the world might have changed, then
-check again.*
+``acquire``. The ship waits until its entry conditions hold, then acquires
+the resources it needs.
 
 That's a :class:`~cimba.Condition`. Processes wait on it with
 ``wait_until(predicate)``; anyone who changes something relevant calls
@@ -99,15 +99,14 @@ The ship's voyage starts like this:
 
 .. literalinclude:: ../../tutorial/tut_4_1.py
    :pyobject: Ship.voyage
-   :lines: 1-18
+   :lines: 1-9
    :dedent: 4
 
-The harbor's predicate is deliberately simple: it always says "yes, wake up",
-and the ship re-checks its own detailed condition in the ``while`` loop. That
-keeps the ship-specific logic next to the ship.
+The ship's predicate checks depth, wind, tugs and berths. ``wait_until`` checks
+it before blocking and again when signalled, keeping the entry rules on the ship.
 
 .. literalinclude:: ../../tutorial/tut_4_1.py
-   :pyobject: Harbor.should_call_harbormaster
+   :pyobject: Ship.can_enter
    :dedent: 4
 
 The other half of the contract is signalling. The tide signals every hour, and
@@ -117,8 +116,6 @@ world changed.
 
 .. tip::
 
-   Predicates can also be selective. If ``is_ready`` checks the actual
-   condition (``return self.ready``), waiters wake only when it's true.
    Predicates are compiled like processes and follow the same rules.
 
    A related tool is the **event**: a method marked ``@cb.event`` that you
@@ -131,7 +128,7 @@ Once cleared, the ship grabs what it needs in order, and releases in order:
 
 .. literalinclude:: ../../tutorial/tut_4_1.py
    :pyobject: Ship.voyage
-   :lines: 19-45
+   :lines: 11-
    :dedent: 4
 
 Every duration comes from an input on ``ShipTraffic``. The ship reaches them

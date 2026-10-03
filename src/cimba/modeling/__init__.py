@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from itertools import count
+from math import inf
 from typing import Any, Generic, TypeVar, get_args, get_origin, get_type_hints
 
 T = TypeVar("T")
@@ -166,7 +167,12 @@ class Resource(Entity):
 
 
 class Condition(Entity):
-    def wait_until(self, predicate) -> None:
+    def wait_until(self, predicate, timeout: float = inf) -> bool:
+        """Wait for a predicate, returning whether it holds on return.
+
+        A finite timeout bounds the wait in simulation time. Zero polls the
+        predicate without blocking; infinity waits without a deadline.
+        """
         raise NotInCompiledCode("Condition.wait_until() requires compiled model code")
 
     def signal(self) -> None:

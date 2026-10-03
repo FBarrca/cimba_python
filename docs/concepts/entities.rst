@@ -117,9 +117,9 @@ A pool of ``capacity`` identical units, ``Resource(capacity=n)`` (default 1).
 Condition
 ---------
 
-``wait_until(predicate)`` blocks until the condition is signalled *and*
-``predicate`` (a ``@cb.predicate`` method) returns true. ``signal()``
-re-evaluates all waiters. See :doc:`processes`.
+``wait_until(predicate, timeout=math.inf)`` waits for a ``@cb.predicate``
+method to hold, a timeout, or an interruption, and returns whether the
+predicate holds. ``signal()`` re-evaluates all waiters. See :doc:`processes`.
 
 Dataset
 -------

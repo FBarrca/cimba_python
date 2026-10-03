@@ -105,6 +105,7 @@ EXPORTS
     cpy_store_length
     cpy_capture_release
     cpy_condition_wait
+    cpy_condition_wait_until
     cpy_condition_signal
     cpy_schedule_event
     cpy_schedule_cancel
