@@ -152,7 +152,7 @@ Random streams and common random numbers
 
 Each input owns an **independent random stream** in each trial. It is derived
 from the replication's seed and the input's identity: its canonical path
-(``network.facilities[2].demand``) or, for resampled sources, its tag. This
+(``network.facilities[2].demand``) or an explicit source ``tag``. This
 has two important consequences:
 
 * **Inputs don't disturb each other.** If one process draws twice as many
@@ -170,10 +170,11 @@ That's how cross-series structure is preserved.
 
 .. note::
 
-   Because streams are keyed by path, renaming a field or the root class,
-   or moving a model in the tree, gives its inputs different random numbers.
-   Results stay statistically equivalent but aren't bit-identical to runs
-   before the change.
+   Renaming or moving an untagged input changes its random stream. Use a
+   stable tag, such as ``inputs.dist.normal(sd=2, tag="vendor:7:lateness")``,
+   to preserve draws across refactors. Use distinct tags for independent
+   streams; matching tags and distribution parameters reproduce the same
+   draws for a given trial seed.
 
 Model-internal randomness that isn't a real-world input, such as routing coin
 flips, can use :mod:`cimba.random` instead. It draws from the trial's

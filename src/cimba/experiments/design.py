@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import product
 from types import MappingProxyType
 from typing import Any
@@ -58,7 +58,7 @@ class Design:
                              if isinstance(parameter, Sweep) else parameter)
                             for key, parameter in value.parameters
                         )
-                        value = DistributionSource(value.method, parameters)
+                        value = replace(value, parameters=parameters)
                     bindings[(instance.model, field.name)] = value
             points.append(DesignPoint(len(points), MappingProxyType(levels),
                                       MappingProxyType(bindings)))

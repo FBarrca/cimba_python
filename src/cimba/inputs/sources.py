@@ -89,10 +89,15 @@ class DistributionSource(Input[Any], Series[Any]):
     method: str
     parameters: tuple[tuple[str, Any], ...]
     on_exhausted: str = "fail"
+    tag: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.tag is not None and not isinstance(self.tag, str):
+            raise InputError("distribution tag must be a string or None")
 
     def describe(self) -> dict[str, Any]:
         return {"version": 1, "method": f"dist.{self.method}",
-                "parameters": dict(self.parameters)}
+                "parameters": dict(self.parameters), "tag": self.tag}
 
 
 @dataclass(frozen=True, eq=False)

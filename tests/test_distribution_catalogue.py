@@ -16,7 +16,8 @@ class Draw(cb.Model):
         self.sample = self.value.next()
 
 
-def test_distribution_catalogue_uses_one_model_class():
+@pytest.mark.parametrize("tag", [None, "catalogue:draw"])
+def test_distribution_catalogue_uses_one_model_class(tag):
     dist = inputs.dist
     sources = [
         dist.exponential(mean=2), dist.normal(mean=3, sd=2),
@@ -38,12 +39,14 @@ def test_distribution_catalogue_uses_one_model_class():
         dist.hypoexponential([1, 3]),
     ]
     for source in sources:
+        source = getattr(dist, source.method)(**dict(source.parameters), tag=tag)
         model = Draw()
         model.value = source
         result = cb.Experiment(model, replications=8, seed=71).run(workers=1)
         assert not result.failed.any(), source.method
         assert np.isfinite(result[model].sample.values).all(), source.method
         assert result[model].value.source[0]["method"] == f"dist.{source.method}"
+        assert result[model].value.source[0]["tag"] == tag
         assert result.meta.compile.misses in (0, 1)
 
 
@@ -91,3 +94,54 @@ def test_only_reruns_selected_trials_with_original_seeds():
         full[model].sample.values[0, 1],
     ]
     assert focused.meta.compile.misses == 0
+
+
+class Wrapper(cb.Model):
+    draw: Draw
+
+
+def test_tagged_streams_survive_tree_refactors_and_replay_exactly():
+    flat = Draw()
+    nested = Wrapper()
+    nested.draw = Draw()
+    renamed = type("Renamed", (cb.Model,), {"__annotations__": {"sampler": Draw}})()
+    renamed.sampler = Draw()
+    draws = []
+    for root, model in ((flat, flat), (nested, nested.draw), (renamed, renamed.sampler)):
+        model.value = inputs.dist.normal(tag="vendor:7:lateness")
+        experiment = cb.Experiment(root, replications=6, seed=71)
+        result = experiment.run(workers=2, on_failure="raise")
+        draws.append(result[model].sample.values)
+        for r in range(6):
+            assert result[model].value.rows(0, r).tolist() == [draws[-1][0, r]]
+        focused = experiment.only(trials=[4], workers=1)
+        assert focused[model].sample[0, 0] == draws[-1][0, 4]
+    assert np.array_equal(draws[0], draws[1])
+    assert np.array_equal(draws[0], draws[2])
+    assert len(set(draws[0][0])) == 6
+
+
+def test_untagged_stream_keeps_path_identity_and_tags_select_distinct_streams():
+    model = Draw()
+    seen = {}
+    for tag in (None, "draw.value", "other", ""):
+        model.value = inputs.dist.normal(tag=tag)
+        seen[tag] = cb.Experiment(model, seed=71).run(workers=1)[model].sample[0, 0]
+    assert seen[None] == seen["draw.value"]
+    assert seen[None] != seen["other"]
+    assert seen[None] != seen[""]
+
+
+def test_parameter_sweep_preserves_stream_tag():
+    model = Draw()
+    model.value = inputs.dist.normal(mean=cb.sweep(0.0, 10.0), tag="swept")
+    result = cb.Experiment(model, replications=3, seed=71).run(workers=1)
+    assert all(source["tag"] == "swept" for source in result[model].value.source)
+    assert np.allclose(np.diff(result[model].sample.values, axis=0), 10.0)
+    for p in range(2):
+        assert result[model].value.rows(p, 0)[0] == result[model].sample[p, 0]
+
+
+def test_distribution_tag_requires_a_string():
+    with pytest.raises(inputs.InputError, match="tag must be a string"):
+        inputs.dist.normal(tag=123)

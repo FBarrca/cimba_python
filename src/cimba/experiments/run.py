@@ -586,7 +586,8 @@ class Experiment:
                                 else:
                                     slot["parameters"][:len(parameters)] = list(parameters.values())
                                 from hashlib import sha256
-                                label = f"{instance.label}.{field.name}"
+                                label = (value.tag if value.tag is not None else
+                                         f"{instance.label}.{field.name}")
                                 nonce = int.from_bytes(sha256(label.encode()).digest()[:8], "little")
                                 address = blocks.ctypes.data + i * self.layout.size + placement.offset + placement.record.offset(field.name)
                                 seed_input(address, int(seeds[point.index, r]) ^ nonce)
@@ -743,7 +744,8 @@ class Experiment:
                                                        :int(consumed_for_field[p, r])]
                         if isinstance(chosen, DistributionSource):
                             from hashlib import sha256
-                            label = f"{self.assembly.by_object[model].label}.{name}"
+                            label = (chosen.tag if chosen.tag is not None else
+                                     f"{self.assembly.by_object[model].label}.{name}")
                             nonce = int.from_bytes(sha256(label.encode()).digest()[:8], "little")
                             parameters = dict(chosen.parameters)
                             categorical = None

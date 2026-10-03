@@ -15,6 +15,10 @@ Drawn inside the trial on the input's own random stream. Never exhausted.
 Numeric parameters may be :func:`cimba.sweep` objects (or ``sweep.map(...)``);
 fixed values are validated when the source is built, swept values when the
 experiment is created.
+Every constructor accepts keyword-only ``tag: str | None = None``. A tag
+replaces the input's tree path when deriving its random stream, preserving
+draws across renames and moves. Equal tags intentionally share a stream
+identity; the default retains path-based seeding.
 
 .. list-table::
    :header-rows: 1
@@ -215,7 +219,7 @@ All sources have ``describe() -> dict`` (versioned provenance) and an
 
 .. class:: DistributionSource
 
-   ``method`` and ``parameters``. Built by ``inputs.dist.*``.
+   ``method``, ``parameters`` and optional ``tag``. Built by ``inputs.dist.*``.
 
 .. class:: TraceSource
 
