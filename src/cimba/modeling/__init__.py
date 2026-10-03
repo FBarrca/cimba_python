@@ -283,6 +283,11 @@ def spawn(*args, **kwargs):
 
 
 def release(model: Model) -> None:
+    """Stop this model's processes, whether it is static or spawned.
+
+    Releasing the caller's own model ends the calling process. Static records,
+    children and end hooks remain; spawned models are retired as before.
+    """
     raise NotInCompiledCode("release() is available only in compiled model code")
 
 

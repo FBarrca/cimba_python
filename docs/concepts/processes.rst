@@ -278,18 +278,17 @@ Dynamic models: spawn and release
 5. its processes are scheduled to start at the current time;
 6. a handle to the new model is returned.
 
-``cb.release(model)`` stops the model's processes (ending the caller if it
-releases its own model) and marks the model released. Its memory is
-reclaimed when the trial ends.
+``cb.release(model)`` stops a static or spawned model's processes, ending
+the caller if it releases its own model. Static models keep their state and
+``on_end`` hooks; spawned models are retired and skip those hooks. Children
+continue independently. Memory is reclaimed when the trial ends.
 
 ``cb.is_dynamic(model)`` returns whether an instance was created by
 ``cb.spawn``. It returns ``False`` for static tree models and stays ``True``
 for spawned models after release. Like ``spawn`` and ``release``, it is
 available only in compiled model code.
 
-Use it when the same class supports static and dynamic instances, without
-maintaining a constructor flag. Track domain state separately to prevent
-repeated release:
+Track domain state to prevent repeated release:
 
 .. code-block:: python
 
@@ -301,12 +300,10 @@ repeated release:
            if self.closed:
                return
            self.closed = True
-           if cb.is_dynamic(self):
-               cb.release(self)
+           cb.release(self)
 
-Here, closing a static document only sets its ``closed`` state; its
-processes must check that state themselves. Closing a spawned document
-also stops its model processes.
+Here, closing either kind of document stops its model processes. The state
+guard avoids releasing the same instance twice, which would fail the trial.
 
 .. note::
 

@@ -273,7 +273,12 @@ All verbs are *compiled*.
 
 .. function:: release(model)
 
-   Stop a spawned model's processes and retire it.
+   Stop this model's processes, including copies and pending starts. Releasing
+   the caller's own model ends the calling process. Static tree models keep
+   their record, entities, children and ``on_end`` hooks; spawned models are
+   retired and skip their ``on_end`` hooks. Memory is reclaimed at trial end.
+   Children continue independently. Releasing the same instance twice fails
+   the trial.
 
 .. function:: is_dynamic(model)
 

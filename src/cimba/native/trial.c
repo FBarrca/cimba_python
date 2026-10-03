@@ -26,6 +26,11 @@ typedef struct spawned_model {
     int released;
 } spawned_model;
 
+typedef struct released_static_model {
+    struct released_static_model *next;
+    void *record;
+} released_static_model;
+
 typedef struct trial_resources {
     cpy_trial_header *header;
     const cpy_trial_descriptor *descriptor;
@@ -34,6 +39,7 @@ typedef struct trial_resources {
     uint64_t process_count;
     uint64_t next_input_stream;
     spawned_model *spawned;
+    released_static_model *released_static;
     int queue_initialized;
     int random_initialized;
     int recording_started;
@@ -142,23 +148,67 @@ int64_t cpy_model_is_dynamic(void *record)
     return 0;
 }
 
+static int static_model_released(const trial_resources *resources, const void *record)
+{
+    for (released_static_model *node = resources->released_static; node != NULL;
+         node = node->next)
+        if (node->record == record) return 1;
+    return 0;
+}
+
+static void free_released_static_models(trial_resources *resources)
+{
+    while (resources->released_static != NULL) {
+        released_static_model *node = resources->released_static;
+        resources->released_static = node->next;
+        free(node);
+    }
+}
+
+static void stop_model_process(struct cmb_process *process,
+                               const struct cmb_process *current)
+{
+    if (process == NULL || process == current) return;
+    const enum cmb_process_state state = cmb_process_status(process);
+    if (state == CMB_PROCESS_INITIALIZED)
+        /* Also cancel a start already handed from our deferred event to Cimba. */
+        cmb_event_pattern_cancel(CMB_ANY_ACTION, process, CMB_ANY_OBJECT);
+    else if (state == CMB_PROCESS_RUNNING)
+        cmb_process_stop(process, NULL);
+}
+
 void cpy_model_release(void *record)
 {
     trial_resources *resources = active_trial;
     if (resources == NULL) cimba_trial_abandon();
     spawned_model *node = resources->spawned;
     while (node != NULL && node->record != record) node = node->next;
-    if (node == NULL || node->released) cimba_trial_abandon();
-    node->released = 1;
     struct cmb_process *current = cmb_process_current();
+    if (node == NULL) {
+        if (static_model_released(resources, record)) cimba_trial_abandon();
+        released_static_model *released = calloc(1, sizeof(*released));
+        if (released == NULL) cimba_trial_abandon();
+        released->record = record;
+        released->next = resources->released_static;
+        resources->released_static = released;
+        /* Hooks can release a model before its processes are even created. */
+        for (uint64_t i = 0; i < resources->process_count; ++i) {
+            struct cmb_process *process = resources->processes[i];
+            if (cmb_process_context(process) == record)
+                stop_model_process(process, current);
+        }
+        if (current != NULL && cmb_process_context(current) == record)
+            cmb_process_exit(NULL);
+        return;
+    }
+    if (node->released) cimba_trial_abandon();
+    node->released = 1;
     for (uint64_t i = 0; i < node->process_count; ++i) {
         struct cmb_process *process = node->processes[i];
         if (node->start_events[i] &&
             cmb_event_is_scheduled(node->start_events[i]))
             cmb_event_cancel(node->start_events[i]);
-        if (process != NULL && process != current &&
-            cmb_process_status(process) == CMB_PROCESS_RUNNING)
-            cmb_process_stop(process, NULL);
+        stop_model_process(process, current);
     }
     if (current != NULL)
         for (uint64_t i = 0; i < node->process_count; ++i)
@@ -261,6 +311,7 @@ static void abandoned_trial(void *argument)
     inspect_inputs(resources);
     release_inputs(resources);
     free_spawned_nodes(resources, 0);
+    free_released_static_models(resources);
     cpy_capture_release(resources->header->capture,
                         resources->descriptor->entity_count);
     resources->header->capture = NULL;
@@ -467,7 +518,8 @@ static void run_trial(void *block)
                                    (char *)block + item->record_offset,
                                    item->priority);
             resources->processes[index++] = process;
-            cmb_process_start(process);
+            if (!static_model_released(resources, (char *)block + item->record_offset))
+                cmb_process_start(process);
         }
     }
 
@@ -505,6 +557,7 @@ static void run_trial(void *block)
         cmb_process_destroy(resources->processes[i]);
     }
     free_spawned_nodes(resources, 1);
+    free_released_static_models(resources);
     for (uint64_t i = 0; i < descriptor->entity_count; ++i) {
         const uint32_t kind = descriptor->entities[i].kind;
         if (kind == CPY_ENTITY_CONTAINER) {

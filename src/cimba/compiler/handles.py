@@ -489,7 +489,7 @@ def model_schedule(event, delay, priority=0):
 
 @overload(release)
 def model_release(model):
-    if isinstance(model, types.Record):
+    if _record_model_class(model) is not None:
         def implementation(model):
             _model_release(record_address(model))
         return implementation
