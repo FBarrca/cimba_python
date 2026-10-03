@@ -263,6 +263,14 @@ class Assembly:
             children: list[tuple[Model, str]] = []
             for field in schema.fields:
                 value = model.__dict__.get(field.name, field.default)
+                if (field.kind in {"child", "collection"} and value is not None and
+                        field.name not in model.__dict__ and
+                        not (field.kind == "collection" and
+                             get_origin(field.value_type) is Ref)):
+                    # Class defaults are templates: materialize and attach once
+                    # per owner, never again when snapshotting a swept variant.
+                    value = deepcopy(value)
+                    setattr(model, field.name, value)
                 if field.kind == "entity" and value is None:
                     entity_type = get_origin(field.value_type) or field.value_type
                     value = entity_type() if isinstance(entity_type, type) else Entity()
@@ -308,6 +316,8 @@ class Assembly:
                                     f"{label}.{field.name}: sweep option {i} is not a "
                                     f"{field.value_type.__name__}")
                             children.append((option, f"{label}.{field.name}#{i}"))
+                elif field.kind == "child" and value is None and field.optional:
+                    pass
                 elif field.kind == "child":
                     if not isinstance(value, field.value_type):
                         raise ModelDefinitionError(

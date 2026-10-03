@@ -26,6 +26,15 @@ Model
       Return a tuple with one dict per model instance in the tree:
       ``{"label": path, "class": name, "fields": ((name, kind), ...)}``.
 
+   .. method:: attached(owner, field)
+
+      Host-only hook, called after this model is assigned to an owned child
+      field or list. Every child sweep option receives the hook. ``owner``
+      is the parent model, ``field`` its field name. The default does nothing;
+      override it to bind a ``Ref`` to the owner. Reference assignments do
+      not call it. Class-default children are copied and attached once per
+      owner during assembly. Reassign a list to attach newly added children.
+
 Field types
 -----------
 

@@ -142,7 +142,7 @@ class Experiment:
                 value = instance.values[field.name]
                 rows.append({"instance": instance.label, "field": field.name,
                              "kind": field.kind,
-                             "source": value.describe() if hasattr(value, "describe") else None})
+                             "source": value.describe() if isinstance(value, Source) else None})
         return rows
 
     def _seed(self, point: int, replication: int) -> int:

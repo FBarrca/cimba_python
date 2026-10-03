@@ -28,6 +28,11 @@ Sweeps
    Create linked sweeps that share one axis, one per column. All columns
    must have the same, nonzero length. Returns a tuple of sweeps.
 
+.. function:: options(value)
+
+   Return a sweep's tuple of options, or ``(value,)`` for an ordinary value.
+   Host-only helper; lists are ordinary values and are not flattened.
+
 Experiment
 ----------
 

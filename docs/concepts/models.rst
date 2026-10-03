@@ -89,9 +89,9 @@ A field's value is resolved in this order:
 1. an assignment on the instance (in ``__init__`` or later: ``model.x = 3``);
 2. the default on the class (``x: cb.Param[float] = 1.0``).
 
-Class defaults for entities and sources are templates. Each instance gets its
-own copy, so ``worker: cb.Resource = cb.Resource(capacity=2)`` gives every
-station its own two-unit resource. Entities with no value, such as
+Class defaults for entities, child models and sources are templates. Each
+instance gets its own copy, so ``worker: cb.Resource = cb.Resource(capacity=2)``
+gives every station its own two-unit resource. Entities with no value, such as
 ``queue: cb.Store[Job]``, are created automatically when the experiment is
 defined. Create one yourself only when you need to configure it, for example
 to ``capture()`` it.
@@ -130,6 +130,9 @@ a cousin, anything. Cycles are fine. Two rules apply:
 Build the tree in ``__init__``. It runs only in Python, when you construct
 the model, and it's the natural place to turn domain arguments into fields
 and children. Constructing a model never compiles or runs anything.
+
+Override :meth:`cimba.Model.attached` to bind a child back to its owner. The hook
+runs for each assigned child, including every option of a child sweep.
 
 In compiled code, following a child or reference is a pointer load:
 ``self.plant.dispatcher.queue.put(job)``. A list supports ``len()`` and

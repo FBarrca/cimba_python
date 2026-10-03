@@ -4,7 +4,7 @@ from . import analysis, inputs, random
 from .modeling import (
     Condition, Container, Dataset, Input, Model, Output, Param, PriorityStore,
     Process, Ref, Resource, Scheduled, Series, State, Store, end_trial, event,
-    function, hold, is_dynamic, log, now, on_end, on_start, predicate, process, release, schedule,
+    function, hold, is_dynamic, log, now, on_end, on_start, options, predicate, process, release, schedule,
     spawn, suspend, sweep, sweeps, this_process,
 )
 from .experiments import Experiment, Window
@@ -17,7 +17,7 @@ __all__ = [
     "Container", "Store", "PriorityStore", "Resource", "Condition",
     "Dataset", "Process", "Scheduled", "process", "on_start", "on_end",
     "predicate", "event", "function", "hold", "now", "suspend", "spawn", "release",
-    "is_dynamic", "schedule", "this_process", "log", "end_trial", "sweep", "sweeps",
+    "is_dynamic", "schedule", "this_process", "log", "end_trial", "sweep", "sweeps", "options",
     "Experiment", "Window", "Results", "Samples", "Signal", "inputs",
     "random", "analysis", "engine_version", "set_engine_log_level",
     "cache_info", "clear_cache", "__version__",

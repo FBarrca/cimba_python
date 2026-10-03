@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from itertools import count
 from math import inf
 from types import UnionType
-from typing import Any, Generic, TypeVar, Union, get_args, get_origin, get_type_hints
+from typing import Any, Generic, TypeVar, Union, cast, get_args, get_origin, get_type_hints
 
 T = TypeVar("T")
 M = TypeVar("M", bound="Model")
@@ -65,6 +65,11 @@ def sweep(*values: T) -> Sweep[T]:
     if not values:
         raise ValueError("sweep needs at least one value")
     return Sweep(tuple(values), next(_axis_ids))
+
+
+def options(value: T | Sweep[T]) -> tuple[T, ...]:
+    """Return a sweep's options, or a one-item tuple for an ordinary value."""
+    return value.values if isinstance(value, Sweep) else (value,)
 
 
 def sweeps(*columns):
@@ -323,6 +328,13 @@ class ModelMeta(type):
 class Model(metaclass=ModelMeta):
     """A configured model node; constructing it does not compile or run code."""
 
+    def attached(self, owner: Model, field: str) -> None:
+        """Host hook called after this model is assigned to an owned field.
+
+        Each child sweep option and each owned list item receives the same
+        owner and field name. Override to bind a reference back to the owner.
+        """
+
     def describe(self):
         from cimba.schema import Assembly
         return tuple({"label": instance.label,
@@ -351,13 +363,29 @@ class Model(metaclass=ModelMeta):
                 optional = len(members) != len(get_args(declaration))
                 declaration = members[0]
         origin = get_origin(declaration) or declaration
+        children: tuple[Model, ...] = ()
         if origin is Param:
             pass
-        elif isinstance(origin, type) and issubclass(origin, Model) and isinstance(value, Sweep):
-            # A swept child: one model tree per option (see cimba.experiments).
-            if not all(isinstance(x, origin) for x in value.values):
-                raise TypeError(f"{type(self).__name__}.{name} sweep must contain "
-                                f"{origin.__name__} models")
+        elif isinstance(origin, type) and issubclass(origin, Model):
+            if value is not None or not optional:
+                candidates = options(value)
+                if not all(isinstance(child, origin) for child in candidates):
+                    message = (f"sweep must contain {origin.__name__} models"
+                               if isinstance(value, Sweep) else
+                               f"expects a {origin.__name__} child")
+                    raise TypeError(f"{type(self).__name__}.{name} {message}")
+                children = cast(tuple[Model, ...], candidates)
+        elif origin is list and get_args(declaration) and (
+            isinstance(get_args(declaration)[0], type) and
+            issubclass(get_args(declaration)[0], Model)
+        ):
+            expected = get_args(declaration)[0]
+            if not isinstance(value, list) or not all(
+                isinstance(child, expected) for child in value
+            ):
+                raise TypeError(f"{type(self).__name__}.{name} expects a list of "
+                                f"{expected.__name__} models")
+            children = tuple(value)
         elif origin in (Input, Series):
             if origin is Input and optional and value is None:
                 object.__setattr__(self, name, value)
@@ -372,3 +400,5 @@ class Model(metaclass=ModelMeta):
         elif isinstance(value, Sweep):
             raise TypeError(f"{type(self).__name__}.{name} is not a Param, input or child model")
         object.__setattr__(self, name, value)
+        for child in children:
+            child.attached(self, name)
