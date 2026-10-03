@@ -272,7 +272,8 @@ Dynamic models: spawn and release
    (every field without a default must be given);
 3. input fields must be passed an input of the spawning model; the new model
    gets an independent cursor and a new random stream derived from the trial
-   seed and the spawn order;
+   seed and the spawn order. Optional inputs may be omitted or passed as
+   ``None`` and behave as empty sources;
 4. its ``on_start`` hooks run immediately;
 5. its processes are scheduled to start at the current time;
 6. a handle to the new model is returned.

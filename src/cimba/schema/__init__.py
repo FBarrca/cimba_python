@@ -10,7 +10,7 @@ from types import MappingProxyType
 from collections.abc import Mapping
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
-from cimba.inputs.sources import Source
+from cimba.inputs.sources import EmptySource, Source
 from cimba.modeling import (
     Condition, Container, Dataset, Entity, Input, Model, Output, Param,
     PriorityStore, Ref, Resource, Series, State, Store, Sweep,
@@ -280,12 +280,16 @@ class Assembly:
                 ):
                     pass
                 elif field.kind in {"input", "series"}:
+                    if field.kind == "input" and field.optional and value is None:
+                        value = EmptySource()
                     if type(value) is Series:
                         raise ModelDefinitionError(f"{label}.{field.name}: input source missing")
                     if not isinstance(value, (Source, Sweep)):
                         raise ModelDefinitionError(f"{label}.{field.name}: input source missing")
                     choices = value.values if isinstance(value, Sweep) else (value,)
-                    if not all(isinstance(x, Source) for x in choices):
+                    if not all(isinstance(x, Source) or
+                               (field.kind == "input" and field.optional and x is None)
+                               for x in choices):
                         raise ModelDefinitionError(f"{label}.{field.name}: invalid source")
                     if field.kind == "series" and field.step is None:
                         raise ModelDefinitionError(f"{label}.{field.name}: Series step missing")

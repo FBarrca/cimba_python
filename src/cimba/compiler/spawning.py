@@ -13,7 +13,7 @@ from llvmlite import ir
 from numba import from_dtype, types
 
 from cimba.engine.symbols import register
-from cimba.engine.abi import INPUT_SLOT
+from cimba.engine.abi import INPUT_EMPTY, INPUT_SLOT, INPUT_SLOT_BOOL, INPUT_SLOT_INT
 from cimba.layout import MODEL_RECORD_CLASSES, RecordLayout
 from cimba.modeling import ModelMeta, spawn
 from cimba.schema import ClassSchema
@@ -36,6 +36,11 @@ class ModelClassType(types.Type):
     @property
     def key(self):
         return self.model_class
+
+
+def _input_type(field):
+    return from_dtype({float: INPUT_SLOT, int: INPUT_SLOT_INT,
+                       bool: INPUT_SLOT_BOOL}[field.value_type])
 
 
 @register_model(ModelClassType)
@@ -77,7 +82,10 @@ class SpawnTemplate(AbstractTemplate):
         for field in schema.fields:
             if field.kind in {"input", "series"}:
                 source_type = kws.get(field.name)
-                if source_type is None or source_type != from_dtype(INPUT_SLOT):
+                if (field.kind == "input" and field.optional and
+                        (source_type is None or isinstance(source_type, types.NoneType))):
+                    continue
+                if source_type != _input_type(field):
                     raise TypeError(f"{schema.cls.__name__}.{field.name}: "
                                     "spawn requires an existing input handle")
             if field.kind in {"state", "param", "constant"}:
@@ -145,7 +153,14 @@ def lower_spawn(context, builder, sig, arguments):
                         zip(sig.args[1:], arguments[1:])))
     for field in schema.fields:
         if field.kind in {"input", "series"}:
-            target_type = from_dtype(INPUT_SLOT)
+            argument = supplied.get(field.name)
+            if argument is None or isinstance(argument[0], types.NoneType):
+                # calloc supplies an empty slot; only its kind needs setting.
+                builder.store(context.get_constant(types.uint32, INPUT_EMPTY),
+                              _field_pointer(context, builder, record,
+                                             layout.offset(field.name), types.uint32))
+                continue
+            target_type = _input_type(field)
             value = arguments[tuple(sig.pysig.parameters).index(field.name)]
             location = _field_pointer(context, builder, record,
                                       layout.offset(field.name), target_type)

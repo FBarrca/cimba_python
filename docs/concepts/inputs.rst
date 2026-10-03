@@ -84,6 +84,11 @@ The default after ``=`` is optional for ``Input`` (a class default source)
 and required for ``Series`` (its ``step``/``origin``). A ``Series`` declared
 with ``cb.Series(step=...)`` still needs a source bound before running.
 
+Declare ``values: cb.Input[float] | None`` to allow an unbound input.
+It behaves as an empty source: ``remaining()`` is zero and ``next()`` fails
+the trial. Bind a source to consume values normally, or include ``None``
+in a source sweep.
+
 The four kinds of source
 ------------------------
 

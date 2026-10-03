@@ -210,9 +210,13 @@ static void inspect_inputs(trial_resources *resources)
             header->status = CPY_TRIAL_ENDED;
         else
             header->status = CPY_TRIAL_FAILED;
-        snprintf(header->error, sizeof(header->error),
-                 "%s exhausted after %llu values", item->name,
-                 (unsigned long long)slot->cursor);
+        if (slot->kind == CPY_INPUT_EMPTY)
+            snprintf(header->error, sizeof(header->error),
+                     "%s: optional input is unbound", item->name);
+        else
+            snprintf(header->error, sizeof(header->error),
+                     "%s exhausted after %llu values", item->name,
+                     (unsigned long long)slot->cursor);
         return;
     }
     for (spawned_model *node = resources->spawned; node != NULL;
@@ -224,10 +228,14 @@ static void inspect_inputs(trial_resources *resources)
             header->status = slot->status == CPY_INPUT_EXHAUSTED ?
                 CPY_TRIAL_EXHAUSTED : slot->status == CPY_INPUT_ENDED ?
                 CPY_TRIAL_ENDED : CPY_TRIAL_FAILED;
-            snprintf(header->error, sizeof(header->error),
-                     "%s exhausted after %llu values",
-                     node->inputs[i].name,
-                     (unsigned long long)slot->cursor);
+            if (slot->kind == CPY_INPUT_EMPTY)
+                snprintf(header->error, sizeof(header->error),
+                         "%s: optional input is unbound", node->inputs[i].name);
+            else
+                snprintf(header->error, sizeof(header->error),
+                         "%s exhausted after %llu values",
+                         node->inputs[i].name,
+                         (unsigned long long)slot->cursor);
             return;
         }
     }

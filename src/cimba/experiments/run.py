@@ -12,14 +12,16 @@ import numpy as np
 
 from cimba.compiler import ensure
 from cimba.engine.abi import (
-    ENTITY_DESCRIPTOR, HOOK_DESCRIPTOR, INPUT_DESCRIPTOR, INPUT_SLOT,
+    ENTITY_DESCRIPTOR, HOOK_DESCRIPTOR, INPUT_DESCRIPTOR, INPUT_EMPTY, INPUT_SLOT,
     PROCESS_DESCRIPTOR, TRIAL_DESCRIPTOR, TRIAL_HEADER,
 )
 from cimba.engine.runtime import (
     distribution_rows, read_captures, run_blocks, seed_input,
 )
 from cimba.inputs import dist
-from cimba.inputs.sources import DistributionSource, GeneratedRows, Source, TraceSource, trace_rng
+from cimba.inputs.sources import (
+    DistributionSource, EmptySource, GeneratedRows, Source, TraceSource, trace_rng,
+)
 from cimba.layout import TrialImageLayout
 from cimba.modeling import Condition, Container, Dataset, Model, PriorityStore, Resource, Store, Sweep
 from cimba.results import InputRecord, InstanceResults, Results, RunMeta, Samples, Signal
@@ -565,7 +567,9 @@ class Experiment:
                             slot["origin"] = field.origin
                             slot["last_bucket"] = -1
                             slot["policy"] = _POLICIES[cast(Source, value).on_exhausted]
-                            if isinstance(value, DistributionSource):
+                            if isinstance(value, EmptySource):
+                                slot["kind"] = INPUT_EMPTY
+                            elif isinstance(value, DistributionSource):
                                 slot["kind"] = 1
                                 slot["distribution"] = _DISTRIBUTIONS[value.method]
                                 parameters = dict(value.parameters)
@@ -735,6 +739,8 @@ class Experiment:
                     def rows(p, r, model=instance.model, name=field.name,
                              consumed_for_field=consumed):
                         chosen = self.design.points[p].bindings[model, name]
+                        if isinstance(chosen, EmptySource):
+                            return np.empty(0, dtype=np.float64)
                         if isinstance(chosen, TraceSource):
                             return chosen.values
                         if isinstance(chosen, GeneratedRows):

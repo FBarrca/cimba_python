@@ -18,8 +18,8 @@ Model
 
    Assigning attributes is validated: a :func:`sweep` is accepted only by
    ``Param``, ``Input``, ``Series`` and child-model fields. ``Input``/``Series``
-   fields accept only sources or sweeps of sources; a child sweep must
-   contain models of the field's type.
+   fields accept sources or sweeps of sources; optional inputs also accept
+   ``None``. A child sweep must contain models of the field's type.
 
    .. method:: describe()
 
@@ -53,6 +53,8 @@ Field types
 
    A sequence input of ``float``, ``int`` or ``bool``. Bind a source on the
    class (default) or the instance.
+   ``Input[T] | None`` allows no binding: ``remaining()`` is zero, while
+   ``next()`` fails the trial.
 
    .. method:: next()
 
@@ -267,6 +269,7 @@ All verbs are *compiled*.
    Create a dynamic model instance, set its fields, run its ``on_start``
    hooks, schedule its processes, and return a handle to it. Fields without
    a default must be supplied; input fields take an input of the caller.
+   Optional inputs may be omitted or passed as ``None`` to bind an empty source.
 
 .. function:: release(model)
 

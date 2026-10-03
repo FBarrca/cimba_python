@@ -34,6 +34,17 @@ class Source(Protocol):
     def describe(self) -> dict[str, Any]: ...
 
 
+@dataclass(frozen=True, eq=False)
+class EmptySource(Input[Any]):
+    """The finite, empty binding of an unbound optional Input field."""
+
+    on_exhausted: str = "fail"
+
+    def describe(self) -> dict[str, Any]:
+        return {"version": 1, "method": "empty", "length": 0,
+                "on_exhausted": self.on_exhausted}
+
+
 @runtime_checkable
 class RowSource(Source, Protocol):
     @property

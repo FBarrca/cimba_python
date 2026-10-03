@@ -9,7 +9,7 @@ from typing import Any
 
 import numpy as np
 
-from cimba.inputs.sources import DistributionSource
+from cimba.inputs.sources import DistributionSource, EmptySource
 from cimba.modeling import Model, Sweep
 from cimba.schema import Assembly
 
@@ -52,6 +52,8 @@ class Design:
                     value = instance.values[field.name]
                     if isinstance(value, Sweep):
                         value = value.values[levels[value.axis]]
+                    if field.kind == "input" and field.optional and value is None:
+                        value = EmptySource()
                     if isinstance(value, DistributionSource):
                         parameters = tuple(
                             (key, parameter.values[levels[parameter.axis]]

@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from itertools import count
 from math import inf
-from typing import Any, Generic, TypeVar, get_args, get_origin, get_type_hints
+from types import UnionType
+from typing import Any, Generic, TypeVar, Union, get_args, get_origin, get_type_hints
 
 T = TypeVar("T")
 M = TypeVar("M", bound="Model")
@@ -337,6 +338,13 @@ class Model(metaclass=ModelMeta):
             except (NameError, AttributeError):
                 annotations.update(getattr(cls, "__annotations__", {}))
         declaration = annotations.get(name)
+        optional = False
+        if get_origin(declaration) in (UnionType, Union):
+            members = [member for member in get_args(declaration)
+                       if member is not type(None)]
+            if len(members) == 1:
+                optional = len(members) != len(get_args(declaration))
+                declaration = members[0]
         origin = get_origin(declaration) or declaration
         if origin is Param:
             pass
@@ -346,9 +354,15 @@ class Model(metaclass=ModelMeta):
                 raise TypeError(f"{type(self).__name__}.{name} sweep must contain "
                                 f"{origin.__name__} models")
         elif origin in (Input, Series):
+            if origin is Input and optional and value is None:
+                object.__setattr__(self, name, value)
+                return
             if not isinstance(value, (Source, Sweep)):
                 raise TypeError(f"{type(self).__name__}.{name} expects an input source or sweep")
-            if isinstance(value, Sweep) and not all(isinstance(x, Source) for x in value.values):
+            if isinstance(value, Sweep) and not all(
+                isinstance(x, Source) or (origin is Input and optional and x is None)
+                for x in value.values
+            ):
                 raise TypeError(f"{type(self).__name__}.{name} sweep must contain sources")
         elif isinstance(value, Sweep):
             raise TypeError(f"{type(self).__name__}.{name} is not a Param, input or child model")

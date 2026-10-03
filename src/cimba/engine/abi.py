@@ -6,6 +6,7 @@ import numpy as np
 from typing import Any
 
 ABI_VERSION = 2
+INPUT_EMPTY = 3
 POINTER = np.uintp
 
 INPUT_SLOT = np.dtype([
