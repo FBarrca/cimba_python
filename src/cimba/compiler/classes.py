@@ -18,7 +18,7 @@ from cimba.schema import ClassSchema
 from . import handles  # register record handle operations
 from . import spawning  # register dynamic Model class typing and spawn lowering
 from .entries import EntryModule
-from .views import register_views
+from .views import register_reachable_views
 from .functions import function_signature
 
 
@@ -63,7 +63,7 @@ def ensure(schema: ClassSchema) -> CompiledClass:
     an explicit cache clear.
     """
     layout = RecordLayout.of(schema)
-    register_views(schema)
+    register_reachable_views(schema)
     record_type = from_dtype(layout.dtype)
     native = EntryModule(schema.cls.__qualname__)
     for name, signature, is_process in _signatures(schema, record_type):

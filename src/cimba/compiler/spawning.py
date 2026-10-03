@@ -21,6 +21,7 @@ from .numba_compat import (
     AbstractTemplate, cgutils, infer_global, lower_builtin, lower_constant,
     models, register_model, signature, typeof_impl,
 )
+from .views import register_reachable_views
 
 register("cpy_model_allocate")
 register("cpy_model_start")
@@ -107,6 +108,7 @@ class SpawnTemplate(AbstractTemplate):
             "model_class", inspect.Parameter.POSITIONAL_OR_KEYWORD)]
         parameters.extend(inspect.Parameter(
             name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in kws)
+        register_reachable_views(schema)
         record_type = from_dtype(RecordLayout.of(schema).dtype)
         return signature(record_type, *args, *kws.values()).replace(
             pysig=inspect.Signature(parameters))

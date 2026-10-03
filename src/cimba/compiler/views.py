@@ -16,8 +16,8 @@ from numba.extending import (
     intrinsic, make_attribute_wrapper, overload,
 )
 
-from cimba.layout import RecordLayout
-from cimba.modeling import Ref
+from cimba.layout import MODEL_RECORD_CLASSES, RecordLayout
+from cimba.modeling import Model, Ref
 from cimba.schema import ClassSchema
 from cimba.engine.symbols import register
 from .numba_compat import (
@@ -163,11 +163,47 @@ class ModelViewAttributes(AttributeTemplate):
         entry = _view_fields.get((record, attr))
         if entry is not None:
             return entry[0]
+        descriptor = record.fields.get("class_descriptor")
+        owner = MODEL_RECORD_CLASSES.get(descriptor.title) if descriptor else None
+        if owner is not None:
+            schema = ClassSchema.of(owner)
+            if (attr in schema.events + schema.predicates or
+                    any(field.name == attr and field.kind in
+                        {"child", "ref", "collection"} for field in schema.fields)):
+                raise TypeError(f"no view registered for {owner.__name__}.{attr}")
         # ``@function`` methods: resolved here because this template runs
         # before Numba's own record-field lookup (see compiler.functions).
         if function_resolver is not None:
             return function_resolver(self.context, record, attr)
         return None
+
+
+def register_reachable_views(schema: ClassSchema) -> None:
+    """Register the declared model graph before typing any method.
+
+    References may form cycles and name bases with no instances in the tree.
+    Register views only; compiling implementations is still ``ensure``'s job.
+    """
+    pending = [schema]
+    seen = set()
+    while pending:
+        current = pending.pop()
+        if current.cls in seen:
+            continue
+        seen.add(current.cls)
+        register_views(current)
+        for field in current.fields:
+            if field.kind not in {"child", "ref", "collection"}:
+                continue
+            target = field.value_type
+            if field.kind == "collection" and get_origin(target) is Ref:
+                target = get_args(target)[0]
+            pending.append(ClassSchema.of(target))
+        # Model parameters and results can expose bases without tree instances.
+        for _, signature in current.signatures:
+            for target in (*signature.types, signature.returns):
+                if isinstance(target, type) and issubclass(target, Model):
+                    pending.append(ClassSchema.of(target))
 
 
 @lru_cache(maxsize=512)
@@ -251,10 +287,14 @@ def register_views(schema: ClassSchema) -> None:
         view_type = (EVENT_HANDLE if name in schema.events
                      else PREDICATE_HANDLE)
         key = (parent_type, name)
-        if key in _view_fields:
-            raise TypeError(f"{schema.cls.__name__}.{name}: callback name "
-                            "conflicts with a field")
-        _view_fields[key] = (view_type, index, None)
+        entry = (view_type, index, None)
+        previous = _view_fields.get(key)
+        if previous is not None:
+            if previous != entry:
+                raise TypeError(f"{schema.cls.__name__}.{name}: callback name "
+                                "conflicts with a field")
+            continue
+        _view_fields[key] = entry
 
         def register_callback_lowering(record_type, callback_name,
                                        callback_type, slot):

@@ -106,7 +106,22 @@ class RecordLayout:
                 members.append((field.name, handle))
             else:
                 members.append((field.name, POINTER))
-        return cls(schema, np.dtype(members, align=True))
+        record = cls(schema, np.dtype(members, align=True))
+        # Base-typed views load fields by the base's offsets and scalar types.
+        # Reject redeclarations or multiple inheritance that would break that
+        # contract rather than silently reading the wrong bytes.
+        fields = record.dtype.fields
+        assert fields is not None
+        for base in schema.cls.__mro__[1:]:
+            if not issubclass(base, Model) or base is Model:
+                continue
+            inherited = cls.of(ClassSchema.of(base)).dtype
+            assert inherited.names is not None and inherited.fields is not None
+            for name in inherited.names[1:]:
+                if fields[name][:2] != inherited.fields[name][:2]:  # pyright: ignore[reportArgumentType]
+                    raise TypeError(f"{schema.cls.__name__}.{name}: native layout "
+                                    f"must preserve the field declared by {base.__name__}")
+        return record
 
     def offset(self, field_name: str) -> int:
         fields = self.dtype.fields

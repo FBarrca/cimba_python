@@ -20,7 +20,7 @@ from .numba_compat import cgutils, infer_getattr, make_overload_method_template
 from .views import (
     EventHandleType, PredicateHandleType, PROCESS_HANDLE,
     ProcessHandleType, SCHEDULED_HANDLE, ScheduledHandleType,
-    register_views,
+    register_reachable_views,
 )
 
 for _name in ("cmb_process_hold", "cmb_time", "cpy_buffer_put",
@@ -533,7 +533,7 @@ def _queue_handle(record) -> bool:
 def _model_store_target(record):
     for marker, model_class in STORE_MODEL_TARGETS.items():
         if marker in record.fields:
-            register_views(ClassSchema.of(model_class))
+            register_reachable_views(ClassSchema.of(model_class))
             return model_class
     return None
 
