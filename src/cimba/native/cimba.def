@@ -2,6 +2,7 @@ EXPORTS
     cpy_model_is_dynamic
     cimba_version
     cimba_run
+    cimba_threads_num
     cimba_threads_use
     cimba_trial_abandon
     cmb_random_hwseed

@@ -595,6 +595,8 @@ size_t cpy_trial_header_sizeof(void) { return sizeof(cpy_trial_header); }
 
 uint64_t cpy_run(void *blocks, uint64_t count, size_t block_size, uint32_t workers)
 {
-    if (workers > 0) cimba_threads_use(workers);
+    /* The engine keeps the thread count process-wide, so set it on every run:
+     * 0 restores one worker per core after an earlier explicit count. */
+    cimba_threads_use(workers);
     return cimba_run(blocks, count, block_size, run_trial);
 }

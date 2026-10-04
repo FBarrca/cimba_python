@@ -1,8 +1,11 @@
 """Native end-to-end behavior of the new object-addressed experiment path."""
 
+import ctypes
+
 import numpy as np
 
 from cimba import inputs
+from cimba.engine.library import load
 from cimba.experiments import Experiment, Window
 from cimba.modeling import (
     Container, Dataset, Input, Model, Output, Param, Resource, Series,
@@ -51,6 +54,18 @@ def test_native_trial_is_worker_invariant_and_source_agnostic():
                         window=Window(duration=20), seed=123).run(workers=2)
     assert not replay.failed.any()
     assert replay[model].gaps.source[0]["method"] == "trace"
+
+
+def test_unset_workers_use_every_core_after_an_explicit_count():
+    library = load()
+    library.cimba_threads_num.restype = ctypes.c_uint32
+    experiment = Experiment(_Queue(), replications=2, window=Window(duration=10), seed=5)
+    experiment.run(workers=None)
+    every_core = library.cimba_threads_num()
+    experiment.run(workers=1)
+    assert library.cimba_threads_num() == 1
+    experiment.run(workers=None)
+    assert library.cimba_threads_num() == every_core
 
 
 class _Finite(Model):
