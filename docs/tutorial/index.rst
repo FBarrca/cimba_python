@@ -8,8 +8,9 @@ handful of new ideas, and explains *why* the code is shaped the way it is. By
 the end you will have used every major feature of Cimba Python on problems
 that look like real work.
 
-The chapters follow the upstream `Cimba C tutorial`_, so if you know the C
-library you will recognize the models. Every chapter has a matching,
+The first six chapters follow the upstream `Cimba C tutorial`_, so if you
+know the C library you will recognize the models. The seventh uses simulation
+optimization to tune policy parameters. Every chapter has a matching,
 self-contained script in the repository's ``tutorial/`` directory. The code on
 these pages is pulled straight from those scripts, so what you read is exactly
 what runs.
@@ -51,6 +52,10 @@ what runs.
      - Data-driven simulation: time-indexed ``Series`` inputs, joint
        bootstraps, checking an input model before trusting it, provenance, and
        comparing input models head to head.
+   * - :doc:`7 <optimization>`
+     - Tuning a policy
+     - Letting Cimba find good parameter values, reading an honest estimate,
+       comparing tuned policies, and searching a whole number of agents.
 
 If you only have half an hour, read chapter 1 and then chapter 6.
 
@@ -64,3 +69,4 @@ If you only have half an hour, read chapter 1 and then chapter 6.
    harbor
    assembly
    inventory
+   optimization

@@ -3,6 +3,25 @@ Experiments and results
 
 .. currentmodule:: cimba
 
+Parameter search
+----------------
+
+.. function:: decision(low, high, *, step=None, log=False)
+   :no-index:
+
+   Give a scalar ``Param`` an allowed range for optimization, including both
+   bounds. The field's annotation determines whether values are real,
+   integer or boolean. See :doc:`optimize` for domain rules, linking fields
+   and deriving values with ``map``.
+
+.. class:: Optimization(model, *, minimize=None, maximize=None, replications=32, window=None, seed=0)
+   :no-index:
+
+   Search for parameter values that minimize or maximize a per-trial
+   objective. After search, choose among finalists on fresh trials, then
+   estimate that choice on independent trials. See :doc:`optimize` for the
+   API and :doc:`../guides/optimizing` for a working recipe.
+
 Sweeps
 ------
 

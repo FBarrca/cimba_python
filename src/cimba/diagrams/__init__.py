@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import get_origin
 
-from cimba.modeling import Model, Ref, Sweep
+from cimba.modeling import Decision, Model, Ref, Sweep
 from cimba.schema import Assembly
 
 from .graph import Edge, Graph, Group, Node
@@ -21,8 +21,11 @@ from .processes import process_graph
 def structure(model: Model) -> Graph:
     """The configured object tree: solid edges own, dotted edges reference."""
     assembly = Assembly.of(model, strict=False)
-    nodes = tuple(Node(instance.label, f"{instance.label}: {instance.schema.cls.__name__}",
-                       "instance") for instance in assembly.instances)
+    nodes = tuple(Node(instance.label, "\n".join([
+        f"{instance.label}: {instance.schema.cls.__name__}",
+        *(f"{field.name} ∈ {instance.values[field.name].describe()}"
+          for field in instance.schema.fields if isinstance(instance.values[field.name], Decision))]),
+        "instance") for instance in assembly.instances)
     label = {instance.model: instance.label for instance in assembly.instances}
     edges = []
     for instance in assembly.instances:

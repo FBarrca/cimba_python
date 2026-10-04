@@ -64,14 +64,14 @@ Where to start
    * - :doc:`quickstart`
      - Install, run your first model, and read its results in five minutes.
    * - :doc:`tutorial/index`
-     - A guided tour. Six chapters build from a single queue to a data-driven
-       supply chain, one idea at a time.
+     - A guided tour. Seven chapters cover modeling, data-driven simulation
+       and policy optimization, one idea at a time.
    * - :doc:`concepts/index`
-     - The mental model: models, processes, entities, inputs, experiments and
-       results, each explained on its own page.
+     - The mental model: models, processes, entities, inputs, experiments,
+       results and optimization, each explained on its own page.
    * - :doc:`guides/index`
      - Short recipes for specific jobs: replay recorded data, validate an
-       input model, compare designs, debug a failed trial.
+       input model, compare designs, tune parameters, debug a failed trial.
    * - :doc:`reference/index`
      - Every class, method and distribution, with signatures and semantics.
    * - :doc:`architecture/index`

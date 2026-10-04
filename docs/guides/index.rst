@@ -16,6 +16,9 @@ Short, focused recipes. Each one assumes you know the basics from the
    * - :doc:`policies`
      - Swap decision logic with polymorphic ``@cb.function`` methods and
        compare policies in one experiment.
+   * - :doc:`optimizing`
+     - Tune parameter values, size the search batches, and read the chosen
+       solution's independent estimate.
    * - :doc:`diagrams`
      - Draw a model's structure and its process interactions.
    * - :doc:`captures`
@@ -34,6 +37,7 @@ Short, focused recipes. Each one assumes you know the basics from the
    input_models
    comparing
    policies
+   optimizing
    diagrams
    captures
    debugging

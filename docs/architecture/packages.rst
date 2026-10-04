@@ -182,12 +182,38 @@ The orchestrator, and the only package that sees everything:
 * ``design.py`` expands sweeps (in ``Param`` fields, distribution
   parameters, sources and child models) into design points, and derives
   trial seeds with ``SeedSequence``;
-* ``run.py`` holds ``Experiment`` and ``Window``. It validates sources
-  against the window, plans memory chunks, generates rows for row sources
-  once per replication, allocates and binds trial blocks, calls the native
-  runner, reruns exhausted trials with extended rows, and assembles
-  ``Results``. For swept child models it runs one model tree per option and
-  merges the parts.
+* ``run.py`` holds ``Experiment`` and ``Window`` and delegates execution to
+  a reusable snapshot. When child models are swept, it runs each selected
+  model tree separately and merges the results.
+* ``snapshot.py`` keeps the assembly and trial layout, prepares compiled
+  callbacks and descriptor tables on first use, and reuses them across batches.
+  It validates input sources, divides trials into memory-sized chunks, binds
+  trial blocks, calls the native runner, and builds ``Results``. Generated
+  input rows are cached within the memory limit; exhausted extendable inputs
+  are regenerated and their trials rerun. Ordinary experiments, focused
+  reruns and optimization all use this execution path.
+
+``cimba.optimize``: simulation optimization
+-------------------------------------------
+
+This package searches parameter values using the experiment runner. It
+handles the search and its statistical stages without compiling model code
+or calling the native library directly:
+
+* ``space.py`` reads decision domains from field annotations, converts solver
+  coordinates to parameter values, and creates explicit design points.
+* ``study.py`` evaluates candidates on common seeds and caches their objective
+  samples. It applies failure policies, checks the budget, calls progress
+  callbacks and builds batch reports. After search, it selects among finalists
+  and estimates the choice on independent seeds.
+* ``de.py`` validates DE settings, creates the initial population, and calls
+  SciPy with a vectorized objective. Its internal ``search`` method sends a
+  whole generation to the study's evaluator.
+* ``outcome.py`` defines the immutable estimates, candidate evaluations,
+  finalist comparisons and report tables returned to the caller.
+
+The solver interface is internal. The public API currently exposes only
+differential evolution.
 
 .. _arch-pkg-results:
 
@@ -239,8 +265,9 @@ The dependency graph
 
 .. code-block:: text
 
-   cimba (facade) ──► modeling, experiments, results, analysis, inputs, random
+   cimba (facade) ──► modeling, experiments, results, analysis, inputs, random, optimize
 
+   optimize    ──► experiments, results, analysis, schema, modeling, inputs, scipy
    experiments ──► compiler, layout, schema, inputs, modeling, results, engine
    compiler    ──► layout, schema, modeling, engine          (never inputs/experiments/results)
    layout      ──► schema, modeling, engine.abi
@@ -262,3 +289,6 @@ Rules enforced by the test suite (``tests/test_architecture.py``):
 * Only ``compiler/numba_compat.py`` imports ``numba.core``.
 * No module name starts with an underscore.
 * Every name in the Windows export list exists in the native library.
+* ``optimize`` imports no ``numba``, ``llvmlite``, ``ctypes``,
+  ``multiprocessing`` or ``subprocess``. Other packages do not import
+  ``optimize``, except for the facade that exposes its public names.
