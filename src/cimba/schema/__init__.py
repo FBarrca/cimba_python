@@ -5,20 +5,39 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from functools import lru_cache
+from math import isfinite
+from numbers import Real
 from types import UnionType
 from types import MappingProxyType
 from collections.abc import Mapping
-from typing import Any, Union, get_args, get_origin, get_type_hints
+from typing import Any, Union, cast, get_args, get_origin, get_type_hints
 
 from cimba.inputs.sources import EmptySource, Source
 from cimba.modeling import (
-    Condition, Container, Dataset, Entity, Input, Model, Output, Param,
+    Condition, Container, Dataset, Decision, Entity, Input, Model, Output, Param,
     PriorityStore, Ref, Resource, Series, State, Store, Sweep,
 )
 
 
 class ModelDefinitionError(ValueError):
     pass
+
+
+def scalar_value(field: Field, value, path: str):
+    """Validate before NumPy can silently truncate a scalar binding."""
+    kind = field.value_type
+    if kind not in (float, int, bool):
+        raise ModelDefinitionError(f"{path}: expected a float, int or bool field")
+    if not isinstance(value, Real):
+        raise ModelDefinitionError(f"{path}: expected a {kind.__name__} value")
+    if kind is int and (not isfinite(value) or value % 1 != 0):
+        raise ModelDefinitionError(f"{path}: expected an integral value")
+    if kind is int and not -(1 << 63) <= cast(Any, value) < (1 << 63):
+        raise ModelDefinitionError(f"{path}: integer value is outside int64 range")
+    if kind is bool and value not in (0, 1):
+        raise ModelDefinitionError(f"{path}: expected a boolean value")
+    # Runtime numeric ABCs are broader than typing's conversion protocols.
+    return kind(cast(Any, value))
 
 
 @dataclass(frozen=True)
@@ -238,6 +257,12 @@ class Assembly:
     instances: tuple[Instance, ...]
     by_object: MappingProxyType
 
+    def decisions(self):
+        """Decision bindings in tree and field order, preserving object identity."""
+        return tuple((instance, field, instance.values[field.name])
+                     for instance in self.instances for field in instance.schema.fields
+                     if isinstance(instance.values[field.name], Decision))
+
     @classmethod
     def of(cls, root: Model, *, strict: bool = True,
            picks: Mapping[tuple[Model, str], Model] | None = None) -> "Assembly":
@@ -263,6 +288,8 @@ class Assembly:
             children: list[tuple[Model, str]] = []
             for field in schema.fields:
                 value = model.__dict__.get(field.name, field.default)
+                if isinstance(value, Decision) and field.kind != "param":
+                    raise ModelDefinitionError(f"{label}.{field.name}: a decision requires a Param field")
                 if (field.kind in {"child", "collection"} and value is not None and
                         field.name not in model.__dict__ and
                         not (field.kind == "collection" and

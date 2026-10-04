@@ -186,6 +186,38 @@ Sweeps exist to compare configurations and input models. Common seeds per
 replication, combined with per-input streams, make those comparisons paired
 and sharp. ``seeding="independent"`` remains available.
 
+Simulation optimization
+~~~~~~~~~~~~~~~~~~~~~~~
+
+**Decisions replace parameter values.** A decision is assigned to an existing
+``Param`` field, and its annotation determines the domain. This keeps the
+same object addressing and model validation used by experiments. Objectives
+return individual trial values so failure handling, paired comparisons and
+confidence intervals remain available after evaluation.
+
+**Reuse the experiment runner.** The ``optimize`` package supplies candidate
+values and seeds to a reusable experiment snapshot. Compilation and native
+execution stay in their existing layers; experiments have no dependency on
+the search package. SciPy is already a core dependency, and its DE solver
+supports both real and integer domains. The public API therefore needs one
+settings object rather than a general optimizer plugin interface.
+
+**Evaluate generations together.** SciPy's vectorized objective and deferred
+updates deliver a full generation at once. Cimba runs the new distinct
+candidates as a batch and parallelizes their trials with native threads.
+No process pool or per-trial Python callback is needed.
+
+**Keep search samples fixed; estimate the choice independently.** Common
+search seeds make comparisons paired and cached evaluations exact. Fresh
+selection seeds choose among finalists, then another seed stream estimates
+the chosen configuration. The reported estimate has influenced neither
+stage of the choice.
+
+**Use a fixed default population.** The multiplier is 15 on every machine,
+so worker count does not change the default search. ``popsize="fill"`` is an
+explicit choice to size the population from the available workers. Recording
+its resolved integer lets the caller reproduce that population elsewhere.
+
 Current limitations
 -------------------
 

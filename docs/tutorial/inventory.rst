@@ -316,7 +316,8 @@ What you learned
 Where next
 ----------
 
-You've now seen every major feature. From here:
+The next chapter, :doc:`optimization`, searches for better policy parameters
+and estimates the performance of the chosen settings. For other directions:
 
 * :doc:`../concepts/index` explains each idea more precisely, including edge
   cases the tutorial glossed over.

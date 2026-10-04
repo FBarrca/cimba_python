@@ -29,6 +29,9 @@ that, read in any order.
    * - :doc:`results`
      - Reading results through objects, samples, input records, captured
        signals, failures, and the analysis helpers.
+   * - :doc:`optimization`
+     - How decisions and objectives define a search, why candidates share
+       seeds, and how fresh trials select and estimate a solution.
    * - :doc:`compiled_code`
      - What you can write inside process and hook methods, and why.
    * - :doc:`glossary`
@@ -44,5 +47,6 @@ that, read in any order.
    inputs
    experiments
    results
+   optimization
    compiled_code
    glossary

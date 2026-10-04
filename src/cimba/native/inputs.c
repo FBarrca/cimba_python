@@ -106,6 +106,13 @@ void cpy_input_seed(cpy_input_slot *slot, uint64_t seed)
     slot->last_bucket = -1;
 }
 
+void cpy_inputs_seed(void *slots, size_t stride, const uint64_t *seeds,
+                     uint64_t count)
+{
+    for (uint64_t i = 0; i < count; ++i)
+        cpy_input_seed((cpy_input_slot *)((char *)slots + i * stride), seeds[i]);
+}
+
 static double distribution_next(cpy_input_slot *slot)
 {
     const double *p = slot->parameters;

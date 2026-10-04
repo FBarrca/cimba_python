@@ -120,6 +120,8 @@ CPY_EXPORT uint32_t cpy_abi_version(void);
 CPY_EXPORT size_t cpy_input_slot_sizeof(void);
 CPY_EXPORT size_t cpy_trial_header_sizeof(void);
 CPY_EXPORT void cpy_input_seed(cpy_input_slot *slot, uint64_t seed);
+CPY_EXPORT void cpy_inputs_seed(void *slots, size_t stride,
+                                const uint64_t *seeds, uint64_t count);
 CPY_EXPORT double cpy_input_next(cpy_input_slot *slot);
 CPY_EXPORT double cpy_series_at(cpy_input_slot *slot, double time);
 CPY_EXPORT double cpy_series_now(cpy_input_slot *slot);

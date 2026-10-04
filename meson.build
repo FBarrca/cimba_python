@@ -77,6 +77,7 @@ py.install_sources('src/cimba/engine/__init__.py', 'src/cimba/engine/abi.py',
 py.install_sources('src/cimba/experiments/__init__.py',
                    'src/cimba/experiments/design.py',
                    'src/cimba/experiments/run.py',
+                   'src/cimba/experiments/snapshot.py',
                    subdir: 'cimba/experiments')
 py.install_sources('src/cimba/engine/library.py', 'src/cimba/engine/symbols.py',
                    'src/cimba/engine/runtime.py',
@@ -92,6 +93,11 @@ py.install_sources('src/cimba/compiler/__init__.py',
                    'src/cimba/compiler/functions.py', subdir: 'cimba/compiler')
 py.install_sources('src/cimba/results/__init__.py', subdir: 'cimba/results')
 py.install_sources('src/cimba/analysis/__init__.py', subdir: 'cimba/analysis')
+py.install_sources('src/cimba/optimize/__init__.py',
+                   'src/cimba/optimize/space.py',
+                   'src/cimba/optimize/study.py',
+                   'src/cimba/optimize/de.py',
+                   'src/cimba/optimize/outcome.py', subdir: 'cimba/optimize')
 py.install_sources('src/cimba/diagrams/__init__.py',
                    'src/cimba/diagrams/graph.py',
                    'src/cimba/diagrams/processes.py',

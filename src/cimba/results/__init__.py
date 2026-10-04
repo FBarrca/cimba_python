@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Any
 
 import numpy as np
+from numpy.lib.mixins import NDArrayOperatorsMixin
 
 
 def _frozen_provenance(value):
@@ -19,15 +20,24 @@ def _frozen_provenance(value):
     return value
 
 
-@dataclass(frozen=True)
-class Samples:
+@dataclass(frozen=True, eq=False)
+class Samples(NDArrayOperatorsMixin):
     values: np.ndarray
 
     def __post_init__(self):
         self.values.flags.writeable = False
 
-    def __array__(self, dtype=None):
+    def __array__(self, dtype=None, copy=None):
+        if copy:
+            return np.array(self.values, dtype=dtype, copy=True)
         return np.asarray(self.values, dtype=dtype)
+
+    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+        inputs = tuple(x.values if isinstance(x, Samples) else x for x in inputs)
+        if "out" in kwargs:
+            kwargs["out"] = tuple(x.values if isinstance(x, Samples) else x
+                                  for x in kwargs["out"])
+        return getattr(ufunc, method)(*inputs, **kwargs)
 
     def __getitem__(self, index):
         return self.values[index]
@@ -92,7 +102,7 @@ class InstanceResults:
 class RunMeta(Mapping):
     def __init__(self, values: Mapping):
         self._values = MappingProxyType({
-            name: RunMeta(value) if isinstance(value, Mapping) else value
+            name: RunMeta(value) if isinstance(value, Mapping) else _frozen_provenance(value)
             for name, value in values.items()})
 
     def __getitem__(self, name) -> Any:

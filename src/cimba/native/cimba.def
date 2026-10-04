@@ -225,6 +225,7 @@ EXPORTS
     cpy_abi_version
     cpy_input_slot_sizeof
     cpy_input_seed
+    cpy_inputs_seed
     cpy_input_next
     cpy_series_at
     cpy_series_now

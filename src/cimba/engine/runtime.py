@@ -29,6 +29,19 @@ def seed_input(address: int, seed: int) -> None:
     library.cpy_input_seed(address, seed)
 
 
+def seed_inputs(slots: np.ndarray, seeds: np.ndarray) -> None:
+    """Seed a strided column of slots in one native call."""
+    seeds = np.ascontiguousarray(seeds, dtype=np.uint64)
+    if slots.ndim != 1 or seeds.shape != slots.shape:
+        raise ValueError("input slots and seeds must be matching vectors")
+    library = load()
+    library.cpy_inputs_seed.argtypes = (ctypes.c_void_p, ctypes.c_size_t,
+                                      ctypes.c_void_p, ctypes.c_uint64)
+    library.cpy_inputs_seed.restype = None
+    library.cpy_inputs_seed(slots.ctypes.data, slots.strides[0],
+                            seeds.ctypes.data, len(slots))
+
+
 def read_captures(headers: np.ndarray, entity_count: int):
     """Detach captured native arrays before their owning trial blocks leave scope."""
     library = load()

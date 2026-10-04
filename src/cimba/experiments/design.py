@@ -10,8 +10,8 @@ from typing import Any
 import numpy as np
 
 from cimba.inputs.sources import DistributionSource, EmptySource
-from cimba.modeling import Model, Sweep
-from cimba.schema import Assembly
+from cimba.modeling import Decision, Model, Sweep
+from cimba.schema import Assembly, ModelDefinitionError, scalar_value
 
 
 @dataclass(frozen=True)
@@ -28,6 +28,10 @@ class Design:
 
     @classmethod
     def of(cls, assembly: Assembly) -> "Design":
+        for instance, field, _ in assembly.decisions():
+            raise ModelDefinitionError(
+                f"{instance.label}.{field.name}: a decision has no value; "
+                "run cb.Optimization or assign a value")
         axes: dict[int, Sweep] = {}
         for instance in assembly.instances:
             for field in instance.schema.fields:
@@ -62,11 +66,17 @@ class Design:
                         )
                         value = replace(value, parameters=parameters)
                     bindings[(instance.model, field.name)] = value
+                    if field.kind in {"param", "state", "constant"}:
+                        scalar_value(field, value, f"{instance.label}.{field.name}")
             points.append(DesignPoint(len(points), MappingProxyType(levels),
                                       MappingProxyType(bindings)))
         return cls(MappingProxyType(axes), tuple(points))
 
-    def levels(self, sweep: Sweep) -> tuple[Any, ...]:
+    def levels(self, sweep: Sweep | Decision) -> tuple[Any, ...]:
+        if isinstance(sweep, Decision):
+            if sweep.root not in self.axes:
+                raise KeyError("decision does not belong to this design")
+            return tuple(sweep.value(point.levels[sweep.root]) for point in self.points)
         if sweep.axis not in self.axes:
             raise KeyError("sweep does not belong to this design")
         return tuple(sweep.values[point.levels[sweep.axis]] for point in self.points)

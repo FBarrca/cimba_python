@@ -2,9 +2,9 @@ Reference
 =========
 
 Precise signatures and semantics for the public API. The stable public
-packages are ``cimba``, ``cimba.inputs``, ``cimba.random`` and
-``cimba.analysis`` (plus the small ``cimba.diagrams`` helper). Everything else
-is internal and may change between releases.
+packages are ``cimba``, ``cimba.inputs``, ``cimba.random``, ``cimba.analysis``
+and ``cimba.optimize`` (plus the small ``cimba.diagrams`` helper). Everything
+else is internal and may change between releases.
 
 .. list-table::
    :widths: 30 70
@@ -20,6 +20,9 @@ is internal and may change between releases.
        ``InputRecord``, ``Signal`` and errors.
    * - :doc:`analysis`
      - ``cimba.analysis``, ``cimba.random`` and ``cimba.diagrams``.
+   * - :doc:`optimize`
+     - Decisions, study methods, differential-evolution settings, estimates
+       and search reports.
    * - :doc:`api`
      - Auto-generated listing from the source docstrings.
 
@@ -30,4 +33,5 @@ is internal and may change between releases.
    inputs
    experiments
    analysis
+   optimize
    api

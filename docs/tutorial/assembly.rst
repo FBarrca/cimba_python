@@ -214,5 +214,5 @@ What you learned
 * Independent sweeps cross into a full factorial design, and sweeping input
   *sources* is as easy as sweeping parameters.
 
-The last chapter, :doc:`inventory`, turns to what makes Cimba Python
+The next chapter, :doc:`inventory`, turns to what makes Cimba Python
 different: driving a model with real data.

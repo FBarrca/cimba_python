@@ -13,10 +13,17 @@ typedef void *(*cpy_process_callback)(struct cmb_process *, void *);
 typedef void (*cpy_hook_callback)(void *);
 extern void cpy_logger_apply_flags(void);
 
+typedef struct spawned_process {
+    cpy_process_callback callback;
+    void *record;
+    struct cmb_process **slot;
+} spawned_process;
+
 typedef struct spawned_model {
     struct spawned_model *next;
     void *record;
     struct cmb_process **processes;
+    spawned_process *contexts;
     uint64_t *start_events;
     uint64_t process_count;
     const cpy_hook_descriptor *ends;
@@ -59,6 +66,29 @@ static void deferred_process_start(void *subject, void *object)
 {
     (void)object;
     cmb_process_start(subject);
+}
+
+static void retire_spawned_process(void *subject, void *object)
+{
+    struct cmb_process *process = subject;
+    struct cmb_process **slot = object;
+    if (*slot == NULL) return;
+    /* An event runs on the dispatcher stack, after the process has exited.
+     * Model records remain alive for references and end hooks; their finished
+     * process stacks can return to the engine's pool immediately. */
+    if (cmb_process_status(process) == CMB_PROCESS_RUNNING) return;
+    cmb_process_terminate(process);
+    cmb_process_destroy(process);
+    *slot = NULL;
+}
+
+static void *run_spawned_process(struct cmb_process *process, void *argument)
+{
+    spawned_process *context = argument;
+    void *result = context->callback(process, context->record);
+    cmb_event_schedule(retire_spawned_process, process, context->slot,
+                       cmb_time(), 0);
+    return result;
 }
 
 void *cpy_model_allocate(size_t size, const void *class_descriptor)
@@ -117,16 +147,21 @@ void cpy_model_start(void *record, const cpy_process_descriptor *processes,
                              sizeof(*node->processes));
     node->start_events = calloc(node->process_count ? node->process_count : 1,
                                 sizeof(*node->start_events));
-    if (node->processes == NULL || node->start_events == NULL)
+    node->contexts = calloc(node->process_count ? node->process_count : 1,
+                            sizeof(*node->contexts));
+    if (node->processes == NULL || node->start_events == NULL || node->contexts == NULL)
         cimba_trial_abandon();
     uint64_t index = 0;
     for (uint64_t i = 0; i < process_count; ++i) {
         const cpy_process_descriptor *item = &processes[i];
         for (uint64_t copy = 0; copy < item->copies; ++copy) {
             struct cmb_process *process = cmb_process_create();
+            spawned_process *context = &node->contexts[index];
+            context->callback = (cpy_process_callback)item->callback;
+            context->record = record;
+            context->slot = &node->processes[index];
             cmb_process_initialize(process, item->name,
-                                   (cpy_process_callback)item->callback,
-                                   record, item->priority);
+                                   run_spawned_process, context, item->priority);
             node->processes[index] = process;
             node->start_events[index] = cmb_event_schedule(
                 deferred_process_start, process, NULL, cmb_time(),
@@ -205,10 +240,13 @@ void cpy_model_release(void *record)
     node->released = 1;
     for (uint64_t i = 0; i < node->process_count; ++i) {
         struct cmb_process *process = node->processes[i];
+        if (process == NULL) continue;
         if (node->start_events[i] &&
             cmb_event_is_scheduled(node->start_events[i]))
             cmb_event_cancel(node->start_events[i]);
         stop_model_process(process, current);
+        cmb_event_schedule(retire_spawned_process, process, &node->processes[i],
+                           cmb_time(), 0);
     }
     if (current != NULL)
         for (uint64_t i = 0; i < node->process_count; ++i)
@@ -234,6 +272,7 @@ static void free_spawned_nodes(trial_resources *resources, int normal)
             }
         }
         free(node->processes);
+        free(node->contexts);
         free(node->start_events);
         for (uint64_t i = 0; i < node->input_count; ++i)
             cpy_input_release((cpy_input_slot *)((char *)node->record +

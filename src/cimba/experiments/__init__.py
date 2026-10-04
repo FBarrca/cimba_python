@@ -2,6 +2,7 @@
 
 from .design import Design, DesignPoint, trial_seed
 from .run import Experiment, ExperimentConfigError, TrialsFailed, Window
+from .snapshot import Snapshot
 
 __all__ = ["Design", "DesignPoint", "Experiment", "ExperimentConfigError",
            "TrialsFailed", "Window", "trial_seed"]

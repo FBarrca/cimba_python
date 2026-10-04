@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from itertools import count
-from math import inf
+from math import inf, isclose, isfinite
+from numbers import Real
 from types import UnionType
 from typing import Any, Generic, TypeVar, Union, cast, get_args, get_origin, get_type_hints
 
@@ -80,6 +81,59 @@ def sweeps(*columns):
         raise ValueError("linked sweeps must have equal lengths")
     axis = next(_axis_ids)
     return tuple(Sweep(tuple(column), axis) for column in columns)
+
+
+@dataclass(frozen=True, eq=False)
+class Decision:
+    """A parameter domain; identity links fields to the same search dimension."""
+
+    low: float
+    high: float
+    step: float | None = None
+    log: bool = False
+    parent: Decision | None = None
+    transform: Any = None
+
+    def __post_init__(self):
+        if not all(isinstance(x, Real) and isfinite(x) for x in (self.low, self.high)):
+            raise ValueError("decision bounds must be finite numbers")
+        if self.low >= self.high:
+            raise ValueError("decision needs low < high")
+        if self.step is not None:
+            if not isinstance(self.step, Real) or not isfinite(self.step) or self.step <= 0:
+                raise ValueError("decision step must be finite and positive")
+            intervals = (self.high - self.low) / self.step
+            if not isfinite(intervals) or not isclose(intervals, round(intervals), rel_tol=0, abs_tol=1e-9):
+                raise ValueError("decision step must divide the range")
+            if self.log:
+                raise ValueError("decision step and log are mutually exclusive")
+        if self.log and self.low <= 0:
+            raise ValueError("log decision needs low > 0")
+
+    @property
+    def root(self) -> Decision:
+        return self if self.parent is None else self.parent.root
+
+    def value(self, base):
+        return base if self.parent is None else self.transform(self.parent.value(base))
+
+    def map(self, function) -> Decision:
+        if not callable(function):
+            raise TypeError("decision.map expects a callable")
+        return Decision(self.low, self.high, self.step, self.log, self, function)
+
+    def describe(self) -> str:
+        domain = f"[{self.low}, {self.high}]"
+        if self.step is not None:
+            domain += f", step={self.step}"
+        if self.log:
+            domain += ", log"
+        return ("mapped " if self.parent is not None else "") + domain
+
+
+def decision(low, high, *, step=None, log=False) -> Decision:
+    """Choose a Param's value in inclusive bounds during an Optimization."""
+    return Decision(low, high, step, log)
 
 
 class Entity:
@@ -363,6 +417,8 @@ class Model(metaclass=ModelMeta):
                 optional = len(members) != len(get_args(declaration))
                 declaration = members[0]
         origin = get_origin(declaration) or declaration
+        if isinstance(value, Decision) and origin is not Param:
+            raise TypeError(f"{type(self).__name__}.{name}: a decision requires a Param field")
         children: tuple[Model, ...] = ()
         if origin is Param:
             pass

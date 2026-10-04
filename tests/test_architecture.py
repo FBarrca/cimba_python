@@ -38,6 +38,12 @@ def test_package_layers_and_module_names():
                            for edge in forbidden_compiler), path
             assert not any(name.endswith(".Assembly")
                            for name in imports), path
+        if package == "optimize":
+            forbidden = {"numba", "llvmlite", "ctypes", "multiprocessing", "subprocess"}
+            assert not any(name.split(".")[0] in forbidden for name in imports), path
+        elif path != PACKAGE / "__init__.py":
+            assert not any(name == "cimba.optimize" or name.startswith("cimba.optimize.")
+                           for name in imports), path
 
 
 def test_windows_export_list_names_exist_in_native_library():
