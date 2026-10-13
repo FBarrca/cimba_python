@@ -121,6 +121,30 @@ Entity methods are *compiled*, except ``capture()`` and the constructors.
 
       *Host.* Keep the level history; read as a :class:`Signal`.
 
+   Amounts must be ``int``; a ``float`` amount is a compile-time error.
+
+.. class:: FractionalContainer(initial=0.0)
+
+   A level with ``float`` amounts and unlimited capacity. Each trial starts
+   with ``initial`` (a finite nonnegative number).
+
+   .. method:: put(amount)
+   .. method:: get(amount)
+
+      Add or remove ``amount``. ``get`` takes what is present and blocks until
+      the rest arrives. Amounts must be finite and nonnegative.
+
+   .. method:: level()
+   .. method:: mean_level()
+   .. method:: max_level()
+
+      Current level; time-weighted mean and maximum over the measurement
+      window.
+
+   .. method:: capture()
+
+      *Host.* Keep the level history; read as a :class:`Signal`.
+
 .. class:: Store(*, capacity=1_000_000_000)
 
    A FIFO store of values, declared ``Store[int]``, ``Store[float]`` or

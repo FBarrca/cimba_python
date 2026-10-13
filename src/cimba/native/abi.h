@@ -10,7 +10,7 @@
 #define CPY_EXPORT __attribute__((visibility("default")))
 #endif
 
-enum { CPY_ABI_VERSION = 2 };
+enum { CPY_ABI_VERSION = 3 };
 enum { CPY_INPUT_DISTRIBUTION = 1, CPY_INPUT_ROWS = 2, CPY_INPUT_EMPTY = 3 };
 enum { CPY_POLICY_FAIL = 1, CPY_POLICY_WRAP = 2,
        CPY_POLICY_END_TRIAL = 3, CPY_POLICY_EXTEND = 4 };
@@ -68,6 +68,7 @@ typedef struct cpy_entity_descriptor {
     uint32_t reserved;
     uint64_t capacity;
     uint64_t initial;          /* initial level of a Container */
+    double initial_amount;     /* initial level of a FractionalContainer */
     char name[32];
 } cpy_entity_descriptor;
 
@@ -114,7 +115,8 @@ enum { CPY_TRIAL_PENDING = 0, CPY_TRIAL_RUNNING = 1,
        CPY_TRIAL_EXHAUSTED = 4, CPY_TRIAL_ENDED = 5 };
 enum { CPY_ENTITY_CONTAINER = 1, CPY_ENTITY_RESOURCE = 2,
        CPY_ENTITY_DATASET = 3, CPY_ENTITY_STORE = 4,
-       CPY_ENTITY_PRIORITY_STORE = 5, CPY_ENTITY_CONDITION = 6 };
+       CPY_ENTITY_PRIORITY_STORE = 5, CPY_ENTITY_CONDITION = 6,
+       CPY_ENTITY_FRACTIONAL = 7 };
 
 CPY_EXPORT uint32_t cpy_abi_version(void);
 CPY_EXPORT size_t cpy_input_slot_sizeof(void);

@@ -16,6 +16,9 @@ from compiled code.
      - a counter of identical units
      - customers waiting (when identity doesn't matter), work in progress,
        stock levels
+   * - :class:`~cimba.FractionalContainer`
+     - a level of a divisible quantity
+     - fluid in a tank, material in a silo, energy in a battery
    * - :class:`Store[T] <cimba.Store>`
      - a FIFO queue of values
      - jobs, parts, orders, messages
@@ -53,6 +56,28 @@ blocking until that many are there. Amounts are integers.
 A container starts empty, or with ``Container(initial=n)`` units in every
 trial. For a level that depends on parameters, ``put`` it in an
 ``@cb.on_start`` hook instead.
+
+Passing a ``float`` amount is a compile-time error rather than a silent
+truncation; use a :class:`~cimba.FractionalContainer` for fractional amounts.
+
+FractionalContainer
+-------------------
+
+A level of a divisible quantity, with the same methods as ``Container`` but
+``float`` amounts: ``put(0.75)``, ``get(1.2)``, and a ``float`` ``level()``.
+It starts empty or with ``FractionalContainer(initial=x)``.
+
+``get(x)`` behaves as it does on a ``Container``: it takes what is there and
+waits for the rest, so ``get(5.0)`` with 3.0 present takes the 3.0 and blocks
+until 2.0 more has been put. Getters are served in priority order, then first
+come, first served. An interrupted ``get`` keeps what it already took.
+Capacity is unlimited, so ``put`` never blocks.
+
+Amounts must be finite and nonnegative; anything else fails the trial.
+Arithmetic is ordinary floating point: after ``put(0.3)`` and two ``get(0.1)``,
+the level is ``0.09999999999999998``, exactly as in Python, so a third
+``get(0.1)`` waits for a tiny remainder. Prefer amounts that don't depend on
+cancelling out exactly, or round in your model where it matters.
 
 Store and PriorityStore
 -----------------------

@@ -120,6 +120,10 @@ EXPORTS
     cpy_buffer_report_file
     cpy_buffer_level
     cpy_buffer_space
+    cpy_fractional_put
+    cpy_fractional_get
+    cpy_fractional_level
+    cpy_fractional_history
     cmb_resource_create
     cmb_resource_initialize
     cmb_resource_terminate

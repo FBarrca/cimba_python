@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from itertools import count
-from math import inf
+from math import inf, isfinite
 from types import UnionType
 from typing import Any, Generic, TypeVar, Union, cast, get_args, get_origin, get_type_hints
 
@@ -91,7 +91,10 @@ class Entity:
 
 
 class Container(Entity):
-    """A counted level. ``initial`` units are present when each trial starts."""
+    """A counted level of whole units. ``initial`` units are present when each trial starts.
+
+    Amounts are ``int``; use :class:`FractionalContainer` for fractional amounts.
+    """
 
     def __init__(self, initial: int = 0):
         if isinstance(initial, bool) or int(initial) != initial or initial < 0:
@@ -99,10 +102,10 @@ class Container(Entity):
         super().__init__()
         self.initial = int(initial)
 
-    def put(self, amount: float) -> None:
+    def put(self, amount: int) -> None:
         raise NotInCompiledCode("Container.put() requires compiled model code")
 
-    def get(self, amount: float) -> None:
+    def get(self, amount: int) -> None:
         raise NotInCompiledCode("Container.get() requires compiled model code")
 
     def mean_level(self) -> float:
@@ -113,6 +116,32 @@ class Container(Entity):
 
     def level(self) -> int:
         raise NotInCompiledCode("Container.level() requires compiled model code")
+
+
+class FractionalContainer(Entity):
+    """A level with fractional amounts. ``initial`` is present when each trial starts."""
+
+    def __init__(self, initial: float = 0.0):
+        if isinstance(initial, bool) or not isinstance(initial, (int, float)) or \
+                not isfinite(initial) or initial < 0:
+            raise ValueError("FractionalContainer.initial must be a finite nonnegative number")
+        super().__init__()
+        self.initial = float(initial)
+
+    def put(self, amount: float) -> None:
+        raise NotInCompiledCode("FractionalContainer.put() requires compiled model code")
+
+    def get(self, amount: float) -> None:
+        raise NotInCompiledCode("FractionalContainer.get() requires compiled model code")
+
+    def mean_level(self) -> float:
+        raise NotInCompiledCode("FractionalContainer.mean_level() requires compiled model code")
+
+    def max_level(self) -> float:
+        raise NotInCompiledCode("FractionalContainer.max_level() requires compiled model code")
+
+    def level(self) -> float:
+        raise NotInCompiledCode("FractionalContainer.level() requires compiled model code")
 
 
 class Store(Entity, Generic[T]):

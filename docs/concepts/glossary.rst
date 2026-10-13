@@ -43,8 +43,9 @@ Glossary
       field.
 
    Entity
-      A native synchronization object: ``Container``, ``Store``,
-      ``PriorityStore``, ``Resource``, ``Condition`` or ``Dataset``.
+      A native synchronization object: ``Container``,
+      ``FractionalContainer``, ``Store``, ``PriorityStore``, ``Resource``,
+      ``Condition`` or ``Dataset``.
 
    Process
       A method decorated with ``@cb.process``, running as a stackful

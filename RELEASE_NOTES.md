@@ -1,3 +1,12 @@
+# Unreleased
+
+- Add `FractionalContainer`, a level with `float` amounts. `get` takes what
+  is present and waits for the rest, like `Container`; capacity is unlimited.
+- **Breaking:** `Container.put()` and `get()` take `int` amounts. A `float`
+  amount used to be truncated silently (`put(0.7)` added nothing) and is now a
+  compile-time error.
+- The native ABI version is now 3.
+
 # Cimba Python 0.7.4
 
 Released 2026-10-03.
