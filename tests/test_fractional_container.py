@@ -2,6 +2,7 @@
 
 import math
 
+import numpy as np
 import pytest
 
 import cimba as cb
@@ -133,6 +134,8 @@ def test_invalid_amounts_fail_the_trial(amount):
 
 def test_initial_must_be_finite_and_nonnegative():
     assert cb.FractionalContainer(initial=2).initial == 2.0
+    assert cb.FractionalContainer(initial=np.float32(0.5)).initial == 0.5  # pyright: ignore[reportArgumentType]
+    assert cb.FractionalContainer(initial=np.int64(3)).initial == 3.0  # pyright: ignore[reportArgumentType]
     for bad in (-0.5, math.nan, math.inf, True, "1"):
         with pytest.raises(ValueError):
             cb.FractionalContainer(initial=bad)  # pyright: ignore[reportArgumentType]

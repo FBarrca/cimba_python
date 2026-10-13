@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from itertools import count
 from math import inf, isfinite
+from numbers import Real
 from types import UnionType
 from typing import Any, Generic, TypeVar, Union, cast, get_args, get_origin, get_type_hints
 
@@ -122,7 +123,7 @@ class FractionalContainer(Entity):
     """A level with fractional amounts. ``initial`` is present when each trial starts."""
 
     def __init__(self, initial: float = 0.0):
-        if isinstance(initial, bool) or not isinstance(initial, (int, float)) or \
+        if isinstance(initial, bool) or not isinstance(initial, Real) or \
                 not isfinite(initial) or initial < 0:
             raise ValueError("FractionalContainer.initial must be a finite nonnegative number")
         super().__init__()
