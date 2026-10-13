@@ -1,4 +1,6 @@
-# Unreleased
+# Cimba Python 0.7.5
+
+Released 2026-10-13.
 
 - Add `FractionalContainer`, a level with `float` amounts. `get` takes what
   is present and waits for the rest, like `Container`; capacity is unlimited.
