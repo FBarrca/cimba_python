@@ -23,7 +23,10 @@ from cimba.inputs.sources import (
     DistributionSource, EmptySource, GeneratedRows, Source, TraceSource, trace_rng,
 )
 from cimba.layout import TrialImageLayout
-from cimba.modeling import Condition, Container, Dataset, Model, PriorityStore, Resource, Store, Sweep
+from cimba.modeling import (
+    Condition, Container, Dataset, FractionalContainer, Model, PriorityStore, Resource, Store,
+    Sweep,
+)
 from cimba.results import InputRecord, InstanceResults, Results, RunMeta, Samples, Signal
 from cimba.schema import Assembly, ModelDefinitionError
 from .design import Design, DesignPoint, trial_seed
@@ -203,10 +206,13 @@ class Experiment:
                 label = f"{instance.label}.{field.name}"
                 if field.kind == "entity":
                     entity = instance.values[field.name]
-                    initial = 0
+                    initial, initial_amount = 0, 0.0
                     if field.value_type is Container:
                         kind, capacity = 1, 1_000_000_000
                         initial = entity.initial
+                    elif field.value_type is FractionalContainer:
+                        kind, capacity = 7, 0
+                        initial_amount = entity.initial
                     elif field.value_type is Resource:
                         kind, capacity = 2, entity.capacity
                     elif field.value_type is Dataset:
@@ -221,7 +227,8 @@ class Experiment:
                         raise ExperimentConfigError(f"{label}: native handle not implemented")
                     entities.append((placement.offset, offset, kind,
                                      int(entity.captured),
-                                     capacity, initial, _native_name(label)))
+                                     capacity, initial, initial_amount,
+                                     _native_name(label)))
                 elif field.kind in {"input", "series"}:
                     inputs.append((placement.offset, offset,
                                    label.encode("utf-8")[:95]))

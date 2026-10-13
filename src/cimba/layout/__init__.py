@@ -12,7 +12,9 @@ import numpy as np
 from cimba.engine.abi import (
     INPUT_SLOT, INPUT_SLOT_BOOL, INPUT_SLOT_INT, POINTER, TRIAL_HEADER,
 )
-from cimba.modeling import Condition, Container, Dataset, Model, PriorityStore, Resource, Store
+from cimba.modeling import (
+    Condition, Container, Dataset, FractionalContainer, Model, PriorityStore, Resource, Store,
+)
 from cimba.schema import Assembly, ClassSchema
 
 
@@ -27,6 +29,7 @@ def _scalar_dtype(annotation: Any) -> Any:
 
 
 CONTAINER_HANDLE = np.dtype([("container_handle", POINTER)], align=True)
+FRACTIONAL_HANDLE = np.dtype([("fractional_handle", POINTER)], align=True)
 RESOURCE_HANDLE = np.dtype([("resource_handle", POINTER)], align=True)
 DATASET_HANDLE = np.dtype([("dataset_handle", POINTER)], align=True)
 CONDITION_HANDLE = np.dtype([("condition_handle", POINTER)], align=True)
@@ -73,6 +76,8 @@ class RecordLayout:
                 members.append((f"{field.name}_length", np.uint64))
             elif field.kind == "entity" and field.value_type is Container:
                 members.append((field.name, CONTAINER_HANDLE))
+            elif field.kind == "entity" and field.value_type is FractionalContainer:
+                members.append((field.name, FRACTIONAL_HANDLE))
             elif field.kind == "entity" and field.value_type is Resource:
                 members.append((field.name, RESOURCE_HANDLE))
             elif field.kind == "entity" and field.value_type is Dataset:

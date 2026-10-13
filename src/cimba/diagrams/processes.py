@@ -20,7 +20,7 @@ from typing import Any, get_args, get_origin
 
 import cimba.modeling as modeling
 from cimba.modeling import (
-    Condition, Container, Dataset, Model, PriorityStore, Resource, Store, Sweep,
+    Condition, Container, Dataset, FractionalContainer, Model, PriorityStore, Resource, Store, Sweep,
 )
 from cimba.schema import Assembly, ClassSchema
 
@@ -31,6 +31,8 @@ from .graph import Edge, Graph, Group, Node
 _ENTITY_METHODS: dict[tuple[type, str], tuple[str, str]] = {
     (Container, "put"): ("out", "put"),
     (Container, "get"): ("in", "get"),
+    (FractionalContainer, "put"): ("out", "put"),
+    (FractionalContainer, "get"): ("in", "get"),
     (Store, "put"): ("out", "put"),
     (Store, "get"): ("in", "get"),
     (PriorityStore, "put"): ("out", "put"),

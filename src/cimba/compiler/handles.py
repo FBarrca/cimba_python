@@ -26,7 +26,10 @@ from .views import (
 
 for _name in ("cmb_process_hold", "cmb_time", "cpy_buffer_put",
               "cpy_buffer_get", "cpy_buffer_mean_level", "cpy_buffer_level",
-              "cpy_buffer_history", "cpy_timeseries_max", "cimba_trial_abandon",
+              "cpy_buffer_history", "cpy_timeseries_max", "cpy_timeseries_mean",
+              "cimba_trial_abandon",
+              "cpy_fractional_put", "cpy_fractional_get",
+              "cpy_fractional_level", "cpy_fractional_history",
               "cmb_resourcepool_acquire", "cmb_resourcepool_preempt",
               "cmb_resourcepool_held", "cmb_resourcepool_release",
               "cpy_resourcepool_available",
@@ -64,8 +67,18 @@ _native_container_level = types.ExternalFunction(
     "cpy_buffer_level", types.uint64(types.intp))
 _native_container_history = types.ExternalFunction(
     "cpy_buffer_history", types.intp(types.intp))
+_native_fractional_put = types.ExternalFunction(
+    "cpy_fractional_put", types.int64(types.intp, types.float64))
+_native_fractional_get = types.ExternalFunction(
+    "cpy_fractional_get", types.int64(types.intp, types.float64))
+_native_fractional_level = types.ExternalFunction(
+    "cpy_fractional_level", types.float64(types.intp))
+_native_fractional_history = types.ExternalFunction(
+    "cpy_fractional_history", types.intp(types.intp))
 _native_timeseries_max = types.ExternalFunction(
     "cpy_timeseries_max", types.float64(types.intp))
+_native_timeseries_mean = types.ExternalFunction(
+    "cpy_timeseries_mean", types.float64(types.intp))
 _native_abandon = types.ExternalFunction("cimba_trial_abandon", types.void())
 _native_resource_acquire = types.ExternalFunction(
     "cmb_resourcepool_acquire", types.int64(types.intp, types.uint64))
@@ -521,7 +534,22 @@ def _container_handle(record) -> bool:
     return isinstance(record, types.Record) and "container_handle" in record.fields
 
 
-_QUEUE_FIELDS = ("container_handle", "store_int_handle",
+def _fractional_handle(record) -> bool:
+    return isinstance(record, types.Record) and "fractional_handle" in record.fields
+
+
+def _level_handle(record) -> bool:
+    return _container_handle(record) or _fractional_handle(record)
+
+
+def _whole_amount(amount, method):
+    """Container amounts are whole units; a float would be truncated."""
+    if not isinstance(amount, (types.Integer, types.Omitted)):
+        raise TypeError(f"Container.{method}() takes an int amount, got {amount}; "
+                        "use FractionalContainer for fractional amounts")
+
+
+_QUEUE_FIELDS = ("container_handle", "fractional_handle", "store_int_handle",
                  "store_float_handle", "priority_int_handle",
                  "priority_float_handle", "store_model_handle",
                  "priority_model_handle")
@@ -570,8 +598,13 @@ def _model_pointer_cast(record_type):
 @_record_method("put", _queue_handle)
 def queue_put(record, value, priority=0):
     if _container_handle(record):
+        _whole_amount(value, "put")
         def implementation(record, value, priority=0):
-            _native_container_put(record.container_handle, int(value))
+            _native_container_put(record.container_handle, value)
+        return implementation
+    if _fractional_handle(record):
+        def implementation(record, value, priority=0):
+            _native_fractional_put(record.fractional_handle, float(value))
         return implementation
     if "store_int_handle" in record.fields:
         def implementation(record, value, priority=0):
@@ -660,9 +693,14 @@ def queue_length(record):
 @_record_method("get", _queue_handle)
 def queue_get(record, amount=0):
     if _container_handle(record):
+        _whole_amount(amount, "get")
         def get_container(record, amount=0):
-            _native_container_get(record.container_handle, int(amount))
+            _native_container_get(record.container_handle, amount)
         return get_container
+    if _fractional_handle(record):
+        def get_fractional(record, amount=0):
+            _native_fractional_get(record.fractional_handle, float(amount))
+        return get_fractional
     if "store_int_handle" in record.fields:
         def get_store_int(record, amount=0):
             return _store_get_int(record.store_int_handle)
@@ -695,28 +733,42 @@ def queue_get(record, amount=0):
         return get_priority_model
 
 
-@_record_method("mean_level", _container_handle)
+@_record_method("mean_level", _level_handle)
 def container_mean_level(record):
     if _container_handle(record):
         def implementation(record):
             return _native_container_mean(record.container_handle)
         return implementation
+    if _fractional_handle(record):
+        def implementation(record):
+            return _native_timeseries_mean(
+                _native_fractional_history(record.fractional_handle))
+        return implementation
 
 
-@_record_method("max_level", _container_handle)
+@_record_method("max_level", _level_handle)
 def container_max_level(record):
     if _container_handle(record):
         def implementation(record):
             return _native_timeseries_max(
                 _native_container_history(record.container_handle))
         return implementation
+    if _fractional_handle(record):
+        def implementation(record):
+            return _native_timeseries_max(
+                _native_fractional_history(record.fractional_handle))
+        return implementation
 
 
-@_record_method("level", _container_handle)
+@_record_method("level", _level_handle)
 def container_level(record):
     if _container_handle(record):
         def implementation(record):
             return _native_container_level(record.container_handle)
+        return implementation
+    if _fractional_handle(record):
+        def implementation(record):
+            return _native_fractional_level(record.fractional_handle)
         return implementation
 
 

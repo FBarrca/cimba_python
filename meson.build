@@ -101,6 +101,7 @@ py.install_sources('src/cimba/diagrams/__init__.py',
 cimba_native_lib = shared_library(
     'cimba_py',
     'src/cimba/native/nbshim.c',
+    'src/cimba/native/fractional.c',
     'src/cimba/native/inputs.c',
     'src/cimba/native/trial.c',
     'src/cimba/native/verbs.c',

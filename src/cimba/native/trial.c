@@ -8,6 +8,7 @@
 #include "cimba.h"
 #include "cmb_priorityqueue.h"
 #include "abi.h"
+#include "fractional.h"
 
 typedef void *(*cpy_process_callback)(struct cmb_process *, void *);
 typedef void (*cpy_hook_callback)(void *);
@@ -331,6 +332,8 @@ static void record_start(void *subject, void *object)
         const uint32_t kind = resources->descriptor->entities[i].kind;
         if (kind == CPY_ENTITY_CONTAINER)
             cmb_buffer_recording_start(resources->entities[i]);
+        else if (kind == CPY_ENTITY_FRACTIONAL)
+            cpy_fractional_recording_start(resources->entities[i]);
         else if (kind == CPY_ENTITY_RESOURCE)
             cmb_resourcepool_start_recording(resources->entities[i]);
         else if (kind == CPY_ENTITY_DATASET)
@@ -352,6 +355,8 @@ static void record_stop(void *subject, void *object)
         const uint32_t kind = resources->descriptor->entities[i].kind;
         if (kind == CPY_ENTITY_CONTAINER)
             cmb_buffer_recording_stop(resources->entities[i]);
+        else if (kind == CPY_ENTITY_FRACTIONAL)
+            cpy_fractional_recording_stop(resources->entities[i]);
         else if (kind == CPY_ENTITY_RESOURCE)
             cmb_resourcepool_stop_recording(resources->entities[i]);
         else if (kind == CPY_ENTITY_STORE)
@@ -414,6 +419,8 @@ static void copy_captures(trial_resources *resources)
         const struct cmb_timeseries *history = NULL;
         if (kind == CPY_ENTITY_CONTAINER)
             history = cmb_buffer_history(resources->entities[i]);
+        else if (kind == CPY_ENTITY_FRACTIONAL)
+            history = cpy_fractional_history(resources->entities[i]);
         else if (kind == CPY_ENTITY_RESOURCE)
             history = cmb_resourcepool_get_history(resources->entities[i]);
         else if (kind == CPY_ENTITY_STORE)
@@ -470,6 +477,11 @@ static void run_trial(void *block)
                 uint64_t amount = item->initial;
                 cmb_buffer_put(container, &amount);
             }
+            entity = container;
+        } else if (item->kind == CPY_ENTITY_FRACTIONAL) {
+            struct cpy_fractional *container = cpy_fractional_create();
+            cpy_fractional_initialize(container, item->name);
+            container->level = item->initial_amount;
             entity = container;
         } else if (item->kind == CPY_ENTITY_RESOURCE) {
             struct cmb_resourcepool *resource = cmb_resourcepool_create();
@@ -563,6 +575,9 @@ static void run_trial(void *block)
         if (kind == CPY_ENTITY_CONTAINER) {
             cmb_buffer_terminate(resources->entities[i]);
             cmb_buffer_destroy(resources->entities[i]);
+        } else if (kind == CPY_ENTITY_FRACTIONAL) {
+            cpy_fractional_terminate(resources->entities[i]);
+            cpy_fractional_destroy(resources->entities[i]);
         } else if (kind == CPY_ENTITY_RESOURCE) {
             cmb_resourcepool_terminate(resources->entities[i]);
             cmb_resourcepool_destroy(resources->entities[i]);

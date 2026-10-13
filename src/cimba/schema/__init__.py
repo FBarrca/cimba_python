@@ -12,7 +12,7 @@ from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from cimba.inputs.sources import EmptySource, Source
 from cimba.modeling import (
-    Condition, Container, Dataset, Entity, Input, Model, Output, Param,
+    Condition, Container, Dataset, Entity, FractionalContainer, Input, Model, Output, Param,
     PriorityStore, Ref, Resource, Series, State, Store, Sweep,
 )
 
@@ -146,7 +146,7 @@ class ClassSchema:
                     kind = "series"
                 elif origin is Ref:
                     kind = "ref"
-                elif origin in (Container, Store, PriorityStore, Resource,
+                elif origin in (Container, FractionalContainer, Store, PriorityStore, Resource,
                                 Condition, Dataset) or (
                     isinstance(origin, type) and issubclass(origin, Entity)
                 ):
