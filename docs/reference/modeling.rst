@@ -129,10 +129,13 @@ Entity methods are *compiled*, except ``capture()`` and the constructors.
    with ``initial`` (a finite nonnegative number).
 
    .. method:: put(amount)
-   .. method:: get(amount)
+   .. method:: get(amount) -> float
 
       Add or remove ``amount``. ``get`` takes what is present and blocks until
-      the rest arrives. Amounts must be finite and nonnegative.
+      the rest arrives, then returns the amount actually obtained. This
+      equals ``amount`` unless the wait was interrupted, or the level was
+      only within tolerance of ``amount`` (see below) and a hair short of it.
+      Amounts must be finite and nonnegative.
 
    .. method:: level()
    .. method:: mean_level()

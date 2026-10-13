@@ -1,3 +1,18 @@
+# Cimba Python 0.7.6
+
+Released 2026-10-13.
+
+- `FractionalContainer.get()` now tolerates floating-point rounding error:
+  a `get` succeeds once the level is within `math.isclose`-style tolerance of
+  the amount requested, instead of waiting for a gap that is only rounding
+  drift (e.g. `put(0.3)` then two `get(0.1)` no longer blocks a third
+  `get(0.1)`). A real shortfall still waits, however small.
+- **Breaking:** `FractionalContainer.get()` now returns the amount actually
+  obtained (a `float`), instead of `None`. This can be less than requested
+  when tolerance let the call through early, or when the wait was
+  interrupted. Check the return value against the amount requested if your
+  model needs to detect either case.
+
 # Cimba Python 0.7.5
 
 Released 2026-10-13.

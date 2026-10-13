@@ -132,7 +132,7 @@ class FractionalContainer(Entity):
     def put(self, amount: float) -> None:
         raise NotInCompiledCode("FractionalContainer.put() requires compiled model code")
 
-    def get(self, amount: float) -> None:
+    def get(self, amount: float) -> float:
         raise NotInCompiledCode("FractionalContainer.get() requires compiled model code")
 
     def mean_level(self) -> float:

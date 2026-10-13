@@ -34,7 +34,7 @@ void cpy_fractional_recording_start(struct cpy_fractional *fp);
 void cpy_fractional_recording_stop(struct cpy_fractional *fp);
 
 CIMBA_PY_EXPORT int64_t cpy_fractional_put(void *fp, double amount);
-CIMBA_PY_EXPORT int64_t cpy_fractional_get(void *fp, double amount);
+CIMBA_PY_EXPORT int64_t cpy_fractional_get(void *fp, double *amntp);
 CIMBA_PY_EXPORT double cpy_fractional_level(const void *fp);
 CIMBA_PY_EXPORT void *cpy_fractional_history(void *fp);
 

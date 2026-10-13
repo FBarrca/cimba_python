@@ -69,8 +69,6 @@ _native_container_history = types.ExternalFunction(
     "cpy_buffer_history", types.intp(types.intp))
 _native_fractional_put = types.ExternalFunction(
     "cpy_fractional_put", types.int64(types.intp, types.float64))
-_native_fractional_get = types.ExternalFunction(
-    "cpy_fractional_get", types.int64(types.intp, types.float64))
 _native_fractional_level = types.ExternalFunction(
     "cpy_fractional_level", types.float64(types.intp))
 _native_fractional_history = types.ExternalFunction(
@@ -233,6 +231,28 @@ def record_address(typing_context, value):
 
 
 @intrinsic
+def native_fractional_get(typing_context, handle, amount):
+    """Call cpy_fractional_get(handle, &amount), returning the amount
+    actually obtained. The native call takes a pointer: *amntp carries the
+    request in and the obtained amount out."""
+    if not isinstance(handle, types.Integer) or not isinstance(amount, types.Float):
+        raise TypeError("fractional get requires a handle and a float amount")
+    register("cpy_fractional_get")
+
+    def codegen(context, builder, signature, arguments):
+        double = ir.DoubleType()
+        slot = cgutils.alloca_once_value(builder, arguments[1])
+        fnty = ir.FunctionType(ir.IntType(64),
+                               [context.get_value_type(types.intp), double.as_pointer()])
+        fn = cgutils.get_or_insert_function(builder.module, fnty,
+                                            "cpy_fractional_get")
+        builder.call(fn, [arguments[0], slot])
+        return builder.load(slot)
+
+    return types.float64(handle, amount), codegen
+
+
+@intrinsic
 def native_input_next(typing_context, address):
     if not isinstance(address, types.Integer):
         raise TypeError("input address must be an integer")
@@ -280,6 +300,7 @@ def native_series_now(typing_context, address):
 
 # Numba intrinsics are invoked with compiled arguments, not their Python
 # typing-function signatures exposed by static analysis.
+_native_fractional_get = type_cast(Any, native_fractional_get)
 _input_next_draw = type_cast(Any, native_input_next)
 _series_at_draw = type_cast(Any, native_series_at)
 _series_now_draw = type_cast(Any, native_series_now)
@@ -699,7 +720,7 @@ def queue_get(record, amount=0):
         return get_container
     if _fractional_handle(record):
         def get_fractional(record, amount=0):
-            _native_fractional_get(record.fractional_handle, float(amount))
+            return _native_fractional_get(record.fractional_handle, float(amount))
         return get_fractional
     if "store_int_handle" in record.fields:
         def get_store_int(record, amount=0):

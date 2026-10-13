@@ -70,14 +70,30 @@ It starts empty or with ``FractionalContainer(initial=x)``.
 ``get(x)`` behaves as it does on a ``Container``: it takes what is there and
 waits for the rest, so ``get(5.0)`` with 3.0 present takes the 3.0 and blocks
 until 2.0 more has been put. Getters are served in priority order, then first
-come, first served. An interrupted ``get`` keeps what it already took.
-Capacity is unlimited, so ``put`` never blocks.
+come, first served. ``get`` returns the amount actually obtained, which can
+be less than ``x`` (see below); an interrupted ``get`` keeps what it already
+took and that amount is what it returns. Capacity is unlimited, so ``put``
+never blocks.
 
 Amounts must be finite and nonnegative; anything else fails the trial.
-Arithmetic is ordinary floating point: after ``put(0.3)`` and two ``get(0.1)``,
-the level is ``0.09999999999999998``, exactly as in Python, so a third
-``get(0.1)`` waits for a tiny remainder. Prefer amounts that don't depend on
-cancelling out exactly, or round in your model where it matters.
+Arithmetic is ordinary floating point, so ``put(0.3)`` followed by two
+``get(0.1)`` calls leaves the level at ``0.09999999999999998``, not exactly
+``0.1``. A ``get`` is satisfied once the level is within a small tolerance of
+the amount requested (the same tolerance as :func:`math.isclose`'s defaults,
+with a tiny absolute floor near zero), so a third ``get(0.1)`` here succeeds
+immediately rather than waiting for a gap that is only rounding error. A real
+shortfall, however small, still waits: the tolerance only absorbs the error
+that floating-point arithmetic itself introduces, not a difference the model
+created.
+
+When tolerance lets a ``get`` through early, it still only removes what is
+actually present, which can be a hair less than requested — the level never
+goes negative to make up the difference. Check the returned amount against
+what you asked for if your model needs to know: ``got = tank.get(x); if got
+< x: ...``. This matters most at large magnitudes, where the tolerance (and
+ordinary floating-point rounding) scale up together: a ``get(1_000_000.0)``
+against a level of ``999999.9999`` succeeds and returns that smaller amount,
+not ``1_000_000.0``.
 
 Store and PriorityStore
 -----------------------

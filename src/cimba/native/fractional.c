@@ -83,6 +83,23 @@ static void check_amount(const double amount)
     if (!isfinite(amount) || amount < 0.0) cimba_trial_abandon();
 }
 
+/* Same defaults as Python's math.isclose(), plus an absolute floor so values
+ * near zero still compare sanely. A level that is "enough" only within this
+ * tolerance is treated as enough: the gap is smaller than the rounding error
+ * ordinary float64 arithmetic already made getting there, on either a tiny
+ * level (0.3 - 0.1 - 0.1 - 0.1 is 1e-17 short of 0.1) or a huge one (summing
+ * to 1e18 can be off by ~1e2). Blocking on a gap that size would be waiting
+ * for a difference the model never actually created. */
+#define CPY_FRACTIONAL_REL_TOL 1e-9
+#define CPY_FRACTIONAL_ABS_TOL 1e-9
+
+static bool close_enough(const double have, const double want)
+{
+    const double scale = fmax(fabs(have), fabs(want));
+    const double tol = fmax(CPY_FRACTIONAL_ABS_TOL, CPY_FRACTIONAL_REL_TOL * scale);
+    return fabs(have - want) <= tol;
+}
+
 int64_t cpy_fractional_put(void *vp, const double amount)
 {
     struct cpy_fractional *fp = vp;
@@ -94,25 +111,48 @@ int64_t cpy_fractional_put(void *vp, const double amount)
     return CMB_PROCESS_SUCCESS;
 }
 
-int64_t cpy_fractional_get(void *vp, const double amount)
+/*
+ * cpy_fractional_get - Request and, if necessary, wait for an amount of the
+ * level.
+ *
+ * On entry, *amntp is the amount requested. On return, *amntp is the amount
+ * actually obtained: equal to the request on success, but it may be less
+ * when the level was only "enough" within tolerance (see close_enough), or
+ * when the wait was interrupted before the rest arrived. Check *amntp
+ * against the amount asked for if the model cares about exact conservation.
+ *
+ * The return value CMB_PROCESS_SUCCESS (0) indicates that all went well. If
+ * the call was interrupted, the return value is the interrupt signal
+ * received, some value other than CMB_PROCESS_SUCCESS.
+ */
+int64_t cpy_fractional_get(void *vp, double *amntp)
 {
     struct cpy_fractional *fp = vp;
+    const double amount = *amntp;
     check_amount(amount);
     double remaining = amount;
+    double obtained = 0.0;
     while (true) {
-        if (fp->level >= remaining) {
-            /* Grab what we need */
-            fp->level -= remaining;
+        if (fp->level >= remaining || close_enough(fp->level, remaining)) {
+            /* Grab what we need. If the level is only "enough" within
+             * tolerance, it may be a hair under remaining: take all of it
+             * rather than wait for a gap that is rounding error, not a
+             * shortfall the model created. */
+            const double grab = fmin(fp->level, remaining);
+            fp->level -= grab;
+            obtained += grab;
             record_sample(fp);
             if (fp->level > 0.0) {
                 /* In case someone else can use any leftovers */
                 cmb_resourceguard_signal(&(fp->front_guard));
             }
+            *amntp = obtained;
             return CMB_PROCESS_SUCCESS;
         }
         if (fp->level > 0.0) {
             /* Grab what is there. remaining stays positive: for doubles,
              * a - b == 0 only when a == b. */
+            obtained += fp->level;
             remaining -= fp->level;
             fp->level = 0.0;
             record_sample(fp);
@@ -120,7 +160,10 @@ int64_t cpy_fractional_get(void *vp, const double amount)
         /* An interrupted wait keeps what it already took, as cmb_buffer does */
         const int64_t sig = cmb_resourceguard_wait(&(fp->front_guard),
                                                    fractional_has_content, NULL);
-        if (sig != CMB_PROCESS_SUCCESS) return sig;
+        if (sig != CMB_PROCESS_SUCCESS) {
+            *amntp = obtained;
+            return sig;
+        }
     }
 }
 
