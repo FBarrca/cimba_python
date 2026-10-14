@@ -1,4 +1,6 @@
-# Unreleased
+# Cimba Python 0.8.0
+
+Released 2026-10-15.
 
 - **Breaking:** `cb.State` is removed. Annotate per-trial values as plain
   `T`: `on_hand: cb.State[float] = 0.0` becomes `on_hand: float = 0.0`.
