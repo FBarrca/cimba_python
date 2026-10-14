@@ -29,8 +29,10 @@ void cpy_fractional_initialize(struct cpy_fractional *fp, const char *name,
 void cpy_fractional_terminate(struct cpy_fractional *fp);
 void cpy_fractional_destroy(struct cpy_fractional *fp);
 
-/* Why an amount failed this thread's trial, or NULL; reading clears it */
-const char *cpy_fractional_failure(void);
+/* Fails this thread's trial with reason as its error; defined in trial.c.
+ * The reason lives in the trial, not in thread-local storage: the library's
+ * static TLS must fit glibc's small surplus for dlopen'd modules. */
+void cpy_trial_fail(const char *reason);
 
 CIMBA_PY_EXPORT double cpy_fractional_put(void *fp, double amount);
 CIMBA_PY_EXPORT double cpy_fractional_get(void *fp, double amount);

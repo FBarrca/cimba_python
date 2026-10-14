@@ -1,6 +1,5 @@
 /* FractionalContainer: a cmb_buffer counting fixed-point quanta. */
 #include <math.h>
-#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -12,25 +11,14 @@
  * rather than letting cmb_buffer_put wait for space that never comes. */
 #define CPY_FRACTIONAL_UNLIMITED UINT64_MAX
 
-/* The failure is reported by the trial, which runs on the same thread */
-static _Thread_local char failure[160];
-static _Thread_local bool has_failure;
-
-const char *cpy_fractional_failure(void)
-{
-    const bool had = has_failure;
-    has_failure = false;
-    return had ? failure : NULL;
-}
-
 /* Fails the trial with "<name>: <verb>(<amount>) <reason>" */
 static void fail(const struct cpy_fractional *fp, const char *verb,
                  const double amount, const char *reason)
 {
+    char failure[160];
     snprintf(failure, sizeof failure, "%s: %s(%.17g) %s",
              fp->buffer.base.name, verb, amount, reason);
-    has_failure = true;
-    cimba_trial_abandon();
+    cpy_trial_fail(failure);
 }
 
 struct cpy_fractional *cpy_fractional_create(void)

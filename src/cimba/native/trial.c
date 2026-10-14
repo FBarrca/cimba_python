@@ -45,9 +45,21 @@ typedef struct trial_resources {
     int random_initialized;
     int recording_started;
     int recording_stopped;
+    int failed;
 } trial_resources;
 
 static _Thread_local trial_resources *active_trial;
+
+void cpy_trial_fail(const char *reason)
+{
+    trial_resources *resources = active_trial;
+    if (resources != NULL) {
+        snprintf(resources->header->error, sizeof(resources->header->error),
+                 "%s", reason);
+        resources->failed = 1;
+    }
+    cimba_trial_abandon();
+}
 
 void cpy_end_trial(void)
 {
@@ -248,8 +260,6 @@ static void free_spawned_nodes(trial_resources *resources, int normal)
 
 static void inspect_inputs(trial_resources *resources)
 {
-    /* Read first: reading also clears it for this thread's next trial */
-    const char *reason = cpy_fractional_failure();
     cpy_trial_header *header = resources->header;
     const cpy_trial_descriptor *descriptor = resources->descriptor;
     for (uint64_t i = 0; i < descriptor->input_count; ++i) {
@@ -293,8 +303,10 @@ static void inspect_inputs(trial_resources *resources)
         }
     }
     header->status = CPY_TRIAL_FAILED;
-    snprintf(header->error, sizeof(header->error), "%s",
-             reason != NULL ? reason : "native trial aborted");
+    /* A failure with a reason already wrote it to header->error */
+    if (!resources->failed)
+        snprintf(header->error, sizeof(header->error), "%s",
+                 "native trial aborted");
 }
 
 static void release_inputs(trial_resources *resources)
