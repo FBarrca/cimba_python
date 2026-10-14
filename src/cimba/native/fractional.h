@@ -34,6 +34,7 @@ const char *cpy_fractional_failure(void);
 
 CIMBA_PY_EXPORT double cpy_fractional_put(void *fp, double amount);
 CIMBA_PY_EXPORT double cpy_fractional_get(void *fp, double amount);
+CIMBA_PY_EXPORT double cpy_fractional_round(const void *fp, double amount);
 CIMBA_PY_EXPORT double cpy_fractional_level(const void *fp);
 CIMBA_PY_EXPORT double cpy_fractional_mean_level(void *fp);
 CIMBA_PY_EXPORT double cpy_fractional_max_level(void *fp);

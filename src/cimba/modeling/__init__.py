@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from itertools import count
-from math import inf, isfinite, isnan
+from math import copysign, inf, isfinite, isnan
 from numbers import Integral, Real
 from types import UnionType
 from typing import Any, Generic, TypeVar, Union, cast, get_args, get_origin, get_type_hints
@@ -138,7 +138,9 @@ class FractionalContainer(Entity):
     are rounded half away from zero to that many places once, and every put
     and get after that is exact, so the level never drifts from what was put
     in minus what was taken out. ``initial`` is present when each trial
-    starts, and ``put`` waits while the level is at ``capacity``.
+    starts, and ``put`` waits while the level is at ``capacity``. ``round``
+    rounds an amount computed outside the level the same way, so it compares
+    exactly with the level.
     """
 
     def __init__(self, initial: float = 0.0, *, capacity: float = inf, decimals: int = 6):
@@ -167,6 +169,10 @@ class FractionalContainer(Entity):
 
     def get(self, amount: float) -> float:
         raise NotInCompiledCode("FractionalContainer.get() requires compiled model code")
+
+    def round(self, amount: float) -> float:
+        quanta = fractional_quanta(abs(amount), self.decimals)
+        return copysign(quanta / 10 ** self.decimals, amount)
 
     def mean_level(self) -> float:
         raise NotInCompiledCode("FractionalContainer.mean_level() requires compiled model code")

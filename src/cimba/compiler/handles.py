@@ -27,7 +27,8 @@ from .views import (
 for _name in ("cmb_process_hold", "cmb_time", "cpy_buffer_put",
               "cpy_buffer_get", "cpy_buffer_mean_level", "cpy_buffer_level",
               "cpy_buffer_history", "cpy_timeseries_max", "cimba_trial_abandon",
-              "cpy_fractional_put", "cpy_fractional_get", "cpy_fractional_level",
+              "cpy_fractional_put", "cpy_fractional_get", "cpy_fractional_round",
+              "cpy_fractional_level",
               "cpy_fractional_mean_level", "cpy_fractional_max_level",
               "cmb_resourcepool_acquire", "cmb_resourcepool_preempt",
               "cmb_resourcepool_held", "cmb_resourcepool_release",
@@ -70,6 +71,8 @@ _native_fractional_put = types.ExternalFunction(
     "cpy_fractional_put", types.float64(types.intp, types.float64))
 _native_fractional_get = types.ExternalFunction(
     "cpy_fractional_get", types.float64(types.intp, types.float64))
+_native_fractional_round = types.ExternalFunction(
+    "cpy_fractional_round", types.float64(types.intp, types.float64))
 _native_fractional_level = types.ExternalFunction(
     "cpy_fractional_level", types.float64(types.intp))
 _native_fractional_mean = types.ExternalFunction(
@@ -755,6 +758,13 @@ def container_max_level(record):
         def implementation(record):
             return _native_fractional_max(record.fractional_handle)
         return implementation
+
+
+@_record_method("round", _fractional_handle)
+def fractional_round(record, amount):
+    def implementation(record, amount):
+        return _native_fractional_round(record.fractional_handle, float(amount))
+    return implementation
 
 
 @_record_method("level", _level_handle)

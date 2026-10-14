@@ -273,6 +273,37 @@ def test_amounts_are_rounded_to_decimals():
     assert outcome.tiny_at.values.tolist() == [[1.0]]
 
 
+class Rounding(cb.Model):
+    tank: cb.FractionalContainer = cb.FractionalContainer(decimals=2)
+    float_sum: cb.Output[float]
+    half_up: cb.Output[float]
+    half_down: cb.Output[float]
+    matches_level: cb.Output[bool]
+
+    @cb.process
+    def look(self):
+        self.float_sum = self.tank.round(0.1 + 0.2)
+        self.half_up = self.tank.round(0.005)
+        self.half_down = self.tank.round(-0.005)
+        self.tank.put(1.006)
+        self.matches_level = self.tank.round(1.006) == self.tank.level()
+
+
+def test_round_rounds_as_the_level_does():
+    model = Rounding()
+    results = cb.Experiment(model, window=cb.Window(duration=1.0)).run(workers=1)
+    assert not results.failed.any(), results.failure_reasons
+    outcome = results[model]
+    assert outcome.float_sum.values.tolist() == [[0.3]]
+    # Half away from zero, either sign.
+    assert outcome.half_up.values.tolist() == [[0.01]]
+    assert outcome.half_down.values.tolist() == [[-0.01]]
+    assert outcome.matches_level.values.tolist() == [[True]]
+    # The host rounds alike.
+    assert model.tank.round(0.1 + 0.2) == 0.3
+    assert model.tank.round(-0.005) == -0.01
+
+
 class Micrograms(cb.Model):
     """Small units are not swallowed by any tolerance: 2e-10 is not 1e-9."""
 

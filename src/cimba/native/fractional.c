@@ -113,6 +113,14 @@ double cpy_fractional_get(void *vp, const double amount)
     return (double)obtained / fp->scale;
 }
 
+/* Rounds an amount of either sign half away from zero to the container's
+ * decimals, as every put and get rounds it. */
+double cpy_fractional_round(const void *vp, const double amount)
+{
+    const struct cpy_fractional *fp = vp;
+    return round(amount * fp->scale) / fp->scale;
+}
+
 double cpy_fractional_level(const void *vp)
 {
     const struct cpy_fractional *fp = vp;

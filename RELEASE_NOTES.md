@@ -12,6 +12,9 @@
   room for the rest, as on a `Container`. The default is unlimited.
 - `FractionalContainer.put()` returns the amount added, as `get()` returns
   the amount obtained.
+- `FractionalContainer.round()` rounds an amount as the level rounds it, so
+  model code can keep sums and ratios on the level's decimals:
+  `tank.round(0.1 + 0.2) == 0.3`.
 - A bad `FractionalContainer` amount fails the trial with a reason naming the
   container, such as `plant.silo: put(-1) is not a finite nonnegative amount`.
 - The native ABI version is now 4.

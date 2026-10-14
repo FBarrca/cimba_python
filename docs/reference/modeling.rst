@@ -49,8 +49,8 @@ Field types
 
 .. class:: Output[T]
 
-   A per-trial result, initially ``nan`` (``float``) or ``0``. Collected as
-   :class:`Samples`.
+   A per-trial result. It starts each trial at its default, if it has one,
+   otherwise at ``nan`` (``float``) or ``0``. Collected as :class:`Samples`.
 
 .. class:: Ref[M]
 
@@ -139,6 +139,13 @@ Entity methods are *compiled*, except ``capture()`` and the constructors.
       the amount moved: the rounded ``amount``, or less if the wait was
       interrupted. Amounts must be finite and nonnegative, and an unlimited
       level must stay below 2\ :sup:`64` quanta.
+
+   .. method:: round(amount) -> float
+
+      ``amount``, of either sign, rounded half away from zero to ``decimals``
+      places as ``put`` and ``get`` round it. Round an amount computed
+      outside the level -- a sum, a ratio, a share -- so it compares exactly
+      with ``level()``: ``round(0.1 + 0.2) == 0.3``.
 
    .. method:: level()
    .. method:: mean_level()
