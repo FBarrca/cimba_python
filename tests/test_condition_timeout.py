@@ -9,7 +9,7 @@ import cimba as cb
 
 class TimedWait(cb.Model):
     gate: cb.Condition
-    ready: cb.State[bool] = False
+    ready: bool = False
     activation: cb.Param[float] = 2.0
     timeout: cb.Param[float] = 5.0
     satisfied: cb.Output[bool]
@@ -110,7 +110,7 @@ def test_interruption_cancels_the_wait_timer():
 
 class CompetingWaiters(cb.Model):
     gate: cb.Condition
-    tickets: cb.State[int] = 0
+    tickets: int = 0
     successes: cb.Output[int]
     timed_out_at: cb.Output[float]
 

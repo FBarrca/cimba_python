@@ -192,4 +192,4 @@ Errors
    * - ``cimba.modeling.NotInCompiledCode``
      - a compiled-only call is made on the host.
    * - ``TypeError``
-     - an assignment of the wrong kind (for example a sweep on a ``State``).
+     - an assignment of the wrong kind (for example a sweep on a plain field).

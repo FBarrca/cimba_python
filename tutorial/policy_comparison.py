@@ -60,7 +60,7 @@ class PeriodicReview(Policy):
 
     level: cb.Param[float] = 130.0
     period: cb.Param[float] = 7.0
-    due: cb.State[bool] = False
+    due: bool = False
 
     @cb.process
     def clock(self):
@@ -80,7 +80,7 @@ class Delivery(cb.Model):
     """An order on its way: it arrives after a random lead time."""
 
     store: cb.Ref["Store"]
-    quantity: cb.State[float]
+    quantity: float
 
     @cb.process
     def arrive(self):
@@ -93,8 +93,8 @@ class Store(cb.Model):
     policy: Policy
     demand: cb.Input[float] = inputs.dist.gamma(shape=2.0, scale=6.0)
     lead_time: cb.Input[float] = inputs.dist.uniform(low=2.0, high=5.0)
-    on_hand: cb.State[float] = 80.0
-    position: cb.State[float] = 80.0
+    on_hand: float = 80.0
+    position: float = 80.0
     daily_demand: cb.Dataset
     daily_sales: cb.Dataset
     daily_stock: cb.Dataset

@@ -96,9 +96,9 @@ and, through their ``harbor`` reference, compete for the facilities.
 Options
 ~~~~~~~
 
-``process_graph(model, state=True)``
-   Also draw writes to ``Param``/``State``/``Output`` fields, as cylinders.
-   Useful to spot state written from more places than expected.
+``process_graph(model, fields=True)``
+   Also draw writes to plain, ``Param`` and ``Output`` fields, as cylinders.
+   Useful to spot a field written from more places than expected.
 
 ``process_graph(model, hooks=True)``
    Include ``on_start``/``on_end`` hooks as actors.

@@ -18,9 +18,9 @@ PLOT_DIR = Path(__file__).with_name("tut_5_1_plots")
 
 
 class Part(cb.Model):
-    part_id: cb.State[int]
-    arrival_system: cb.State[float]
-    station_entry: cb.State[float]
+    part_id: int
+    arrival_system: float
+    station_entry: float
 
 
 class FinishedParts(cb.Model):
@@ -79,7 +79,7 @@ class Station(cb.Model):
 class AssemblyLine(cb.Model):
     duration: cb.Param[float] = SIMULATION_TIME
     arrival_gap: cb.Input[float] = inputs.dist.exponential(mean=INTERARRIVAL_TIME)
-    generated_parts: cb.State[int] = 0
+    generated_parts: int = 0
     system: cb.Container
     cycle_time: cb.Dataset
     finished_parts: FinishedParts

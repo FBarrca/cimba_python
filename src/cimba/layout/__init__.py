@@ -62,7 +62,7 @@ class RecordLayout:
         MODEL_RECORD_CLASSES[marker] = schema.cls
         members: list[tuple] = [((marker, "class_descriptor"), POINTER)]
         for field in schema.fields:
-            if field.kind in {"param", "state", "output", "constant"}:
+            if field.kind in {"param", "field", "output"}:
                 members.append((field.name, _scalar_dtype(field.value_type)))
             elif field.kind in {"input", "series"}:
                 handle = {float: INPUT_SLOT, int: INPUT_SLOT_INT,

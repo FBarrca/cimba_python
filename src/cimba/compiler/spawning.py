@@ -69,9 +69,8 @@ class SpawnTemplate(AbstractTemplate):
         schema = ClassSchema.of(args[0].model_class)
         fields = {field.name: field for field in schema.fields}
         unsupported = [field.name for field in schema.fields
-                       if field.kind not in {"param", "state", "output",
-                                             "constant", "ref", "input",
-                                             "series"}]
+                       if field.kind not in {"param", "field", "output",
+                                             "ref", "input", "series"}]
         if unsupported:
             raise TypeError(f"{schema.cls.__name__}: dynamic models do not "
                             f"support these fields: {', '.join(unsupported)}")
@@ -88,7 +87,7 @@ class SpawnTemplate(AbstractTemplate):
                 if source_type != _input_type(field):
                     raise TypeError(f"{schema.cls.__name__}.{field.name}: "
                                     "spawn requires an existing input handle")
-            if field.kind in {"state", "param", "constant"}:
+            if field.kind in {"field", "param"}:
                 if field.default is None and field.name not in kws:
                     raise TypeError(f"{schema.cls.__name__}.{field.name}: "
                                     "spawn value required")

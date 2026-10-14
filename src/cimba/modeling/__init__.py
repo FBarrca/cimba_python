@@ -31,7 +31,6 @@ class NotInCompiledCode(RuntimeError):
 
 
 type Param[T] = T
-type State[T] = T
 type Output[T] = T
 type Ref[M] = M
 

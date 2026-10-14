@@ -102,7 +102,7 @@ not be bound yet. See :doc:`../guides/diagrams`.
    (labelled ``path: Class``), solid edges to children and list items, dotted
    edges for references. Returns a :class:`Graph`.
 
-.. function:: process_graph(model, *, state=False, hooks=False)
+.. function:: process_graph(model, *, fields=False, hooks=False)
 
    Interactions inferred from the source of every process and event,
    resolved against the configured objects. Nodes: processes, entities,
@@ -111,7 +111,7 @@ not be bound yet. See :doc:`../guides/diagrams`.
    labelled with the operation (``put``, ``get``, ``acquire``, ``release``,
    ``preempt``, ``enqueue``, ``cancel``, ``wait``, ``signal``, ``record``,
    ``next``, ``now``, ``at``, ``spawn``, ``schedule``, and ``write`` with
-   ``state=True``) and point the way things flow. ``hooks=True`` adds
+   ``fields=True``) and point the way things flow. ``hooks=True`` adds
    ``on_start``/``on_end`` hooks as actors. Returns a :class:`Graph`.
 
 .. function:: mermaid(model)
@@ -153,7 +153,7 @@ not be bound yet. See :doc:`../guides/diagrams`.
 
    ``key`` (a canonical path such as ``harbor.facilities.tugs`` or
    ``Ship.voyage``), ``label``, ``kind`` (``instance``, ``process``,
-   ``hook``, ``event``, ``entity``, ``input``, ``state`` or ``model``) and
+   ``hook``, ``event``, ``entity``, ``input``, ``field`` or ``model``) and
    ``group``.
 
 .. class:: Edge

@@ -558,10 +558,13 @@ class Experiment:
                     value = point.bindings[instance.model, field.name]
                     for r in range(reps):
                         i = point.index * reps + r
-                        if field.kind in {"param", "state", "constant"}:
+                        if field.kind in {"param", "field"}:
                             record[field.name][i] = value
                         elif field.kind == "output":
+                            # An output starts at its declared value, or nan
+                            # (0 for int and bool) when it has none.
                             record[field.name][i] = (
+                                value if value is not None else
                                 np.nan if field.value_type is float else 0)
                         elif field.kind in {"child", "ref"} and value is not None:
                             record[field.name][i] = (blocks.ctypes.data +

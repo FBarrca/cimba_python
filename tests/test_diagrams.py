@@ -110,7 +110,7 @@ def test_aliases_helpers_references_and_list_indices():
 class Job(cb.Model):
     shop: cb.Ref["Shop"]
     size: cb.Input[float]
-    done: cb.State[float] = 0.0
+    done: float = 0.0
 
     @cb.process
     def run(self):
@@ -125,7 +125,7 @@ class Shop(cb.Model):
     machine: cb.Resource = cb.Resource(capacity=2)
     finished: cb.Store[Job]
     gate: cb.Condition
-    open: cb.State[bool] = False
+    open: bool = False
 
     @cb.predicate
     def is_open(self):
@@ -168,7 +168,7 @@ def test_spawned_models_events_conditions_state_and_hooks():
     assert ("shop.gate", "wait", "shop.jobs") in edges
     assert not any(label == "write" for _, label, _ in edges)
 
-    detailed = process_graph(shop, state=True, hooks=True)
+    detailed = process_graph(shop, fields=True, hooks=True)
     edges = {(e.source, e.label, e.target) for e in detailed.edges}
     assert ("shop.sink", "write", "Job.done") in edges          # model from a typed store
     assert ("shop.report", "write", "shop.open") in edges

@@ -41,7 +41,7 @@ _MERMAID_SHAPES = {
     "hook": ('(["', '"])'),
     "event": ('{{"', '"}}'),
     "input": ('[/"', '"/]'),
-    "state": ('[("', '")]'),
+    "field": ('[("', '")]'),
     "model": ('[["', '"]]'),
 }
 _DOT_SHAPES = {
@@ -50,7 +50,7 @@ _DOT_SHAPES = {
     "hook": "box, style=\"rounded,dashed\"",
     "event": "hexagon",
     "input": "parallelogram",
-    "state": "cylinder",
+    "field": "cylinder",
     "model": "component",
 }
 

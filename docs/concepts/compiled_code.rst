@@ -14,8 +14,8 @@ What ``self`` is
 Inside a compiled method, ``self`` is a **typed view** of one trial's record
 for that model instance, not the Python object. Through it you can:
 
-* read and write ``Param``, ``State`` and ``Output`` fields and constants
-  (``self.on_hand -= shipped``);
+* read and write plain, ``Param`` and ``Output`` fields
+  (``self.on_hand -= shipped``, ``self.served += 1``);
 * call entity methods (``self.queue.get(1)``);
 * read inputs (``self.demand.now()``);
 * follow children, references and lists
@@ -50,7 +50,7 @@ What you can use
 
    class Facility(cb.Model):
        base_stock: cb.Param[float] = 100.0
-       on_hand: cb.State[float] = 0.0
+       on_hand: float = 0.0
 
        @cb.function
        def reorder_quantity(self) -> float:

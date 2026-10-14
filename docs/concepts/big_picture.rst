@@ -100,8 +100,8 @@ One vocabulary
        *root* model; it may contain other models.
    * - **Field**
      - A typed, per-instance value declared by annotation: ``Param``,
-       ``State``, ``Output``, ``Input``, ``Series``, ``Ref``, an entity, a
-       child model, a list, or a plain constant.
+       ``Output``, ``Input``, ``Series``, ``Ref``, an entity, a child
+       model, a list, or a plain ``float``/``int``/``bool``.
    * - **Entity**
      - A native synchronization object: ``Container``, ``Store``,
        ``PriorityStore``, ``Resource``, ``Condition``, ``Dataset``.

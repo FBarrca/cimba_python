@@ -15,8 +15,8 @@ class MM1Bench(cb.Model):
     interarrival: cb.Input[float] = inputs.dist.exponential(mean=1 / 0.9)
     service_time: cb.Input[float] = inputs.dist.exponential(mean=1)
     arrivals: cb.Store[float]
-    completed: cb.State[int] = 0
-    total_system_time: cb.State[float] = 0.0
+    completed: int = 0
+    total_system_time: float = 0.0
     mean_system_time: cb.Output[float]
 
     @cb.process

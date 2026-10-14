@@ -4,7 +4,7 @@ import cimba as cb
 
 
 class Triggered(cb.Model):
-    ready: cb.State[bool] = False
+    ready: bool = False
     gate: cb.Condition
     woke_at: cb.Output[float]
 
@@ -35,24 +35,19 @@ def test_event_signals_condition():
 
 
 class Cancelled(cb.Model):
-    fired: cb.State[bool] = False
     pending: cb.Output[bool]
     cancelled: cb.Output[bool]
     fired_out: cb.Output[bool]
 
     @cb.event
     def fire(self):
-        self.fired = True
+        self.fired_out = True
 
     @cb.process
     def start(self):
         event = cb.schedule(self.fire, 1.0)
         self.pending = event.pending()
         self.cancelled = event.cancel()
-
-    @cb.on_end
-    def finish(self):
-        self.fired_out = self.fired
 
 
 def test_scheduled_handle_cancellation():

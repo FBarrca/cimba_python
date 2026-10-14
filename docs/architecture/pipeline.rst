@@ -40,7 +40,7 @@ The class path
       │ upstream*           Ref | None                │  pointer (may be 0)
       │ base_stock          float64                   │  Param
       │ …                                             │
-      │ on_hand             float64                   │  State
+      │ on_hand             float64                   │  plain field
       │ service_level       float64                   │  Output
       │ orders              → store handle            │  entity (filled by trial.c)
       │ demand              InputSlot (fixed size)    │  Series
@@ -131,8 +131,8 @@ Where the paths meet: inside ``run()``
      derive trial seeds  (SeedSequence([seed, r]) or [seed, r, point])
      generate rows for every row source, once per replication,
        vectorized; shared by all design points
-     allocate trial blocks; fill headers, params, constants,
-       initial state, references, list tables, input slots
+     allocate trial blocks; fill headers, params,
+       initial values, references, list tables, input slots
      cpy_run(blocks, n, size, workers) via ctypes, GIL released ──►  per trial:
                                                                       create entities
                                                                       on_start hooks

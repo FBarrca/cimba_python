@@ -4,7 +4,7 @@
 =========================
 
 Larger models are built from parts: the physical plant, the environment, the
-flow of work. Each part has its own state and processes, and the parts need to
+flow of work. Each part has its own fields and processes, and the parts need to
 see each other. This chapter builds a harbor from four cooperating models and
 introduces the most flexible way to wait in Cimba: **waiting for a
 condition**.
@@ -249,8 +249,8 @@ What you learned
 
 * Build models from parts: child models for ownership, ``Ref`` for
   everything else, and ``__init__`` to turn domain arguments into fields.
-* ``Condition.wait_until(predicate)`` + ``signal()`` waits for arbitrary
-  combinations of state; ``@cb.event`` + ``cb.schedule`` runs one-off
+* ``Condition.wait_until(predicate)`` + ``signal()`` waits until any
+  predicate holds; ``@cb.event`` + ``cb.schedule`` runs one-off
   timed actions.
 * ``@cb.process(priority=...)`` orders simultaneous events.
 * ``Store[M]`` passes typed model handles between processes.

@@ -140,7 +140,7 @@ class FastWorker(Worker):
 
 
 class Job(cb.Model):
-    size: cb.State[float] = 1.0
+    size: float = 1.0
 
     @cb.function
     def weight(self) -> float:
@@ -150,10 +150,9 @@ class Job(cb.Model):
 class Crew(cb.Model):
     workers: list[Worker]
     jobs: cb.Store[Job]
-    finished: cb.State[int] = 0
-    total_weight: cb.State[float] = 0.0
+    finished: int = 0
     done_at: cb.Output[float]
-    weight: cb.Output[float]
+    weight: cb.Output[float] = 0.0
 
     def __init__(self):
         self.workers = [Worker(), FastWorker()]
@@ -164,13 +163,12 @@ class Crew(cb.Model):
     def dispatch(self):
         for _ in range(2):
             job = cb.spawn(Job, size=4.0)
-            self.total_weight += job.weight()          # function on a spawned model
+            self.weight += job.weight()          # function on a spawned model
             self.jobs.put(job)
 
     @cb.on_end
     def finish(self):
         self.done_at = cb.now()
-        self.weight = self.total_weight
 
 
 def test_functions_in_list_items_and_spawned_models():
@@ -280,10 +278,9 @@ def test_distribution_inputs_inside_functions():
 class Store(cb.Model):
     policy: Policy
     demand: cb.Input[float] = inputs.dist.exponential(mean=10.0)
-    on_hand: cb.State[float] = 50.0
-    position: cb.State[float] = 50.0
-    ordered: cb.State[float] = 0.0
-    total_ordered: cb.Output[float]
+    on_hand: float = 50.0
+    position: float = 50.0
+    total_ordered: cb.Output[float] = 0.0
     first_demand: cb.Output[float]
 
     @cb.process
@@ -297,28 +294,19 @@ class Store(cb.Model):
             self.position -= demand
             quantity = self.policy.order_quantity(self.on_hand, self.position)
             self.position += quantity
-            self.ordered += quantity
-
-    @cb.on_end
-    def finish(self):
-        self.total_ordered = self.ordered
+            self.total_ordered += quantity
 
 
 class Audited(Policy):
     """A policy with its own process: it must only run where it is selected."""
 
-    audits: cb.State[int] = 0
     audit_count: cb.Output[int]
 
     @cb.process
     def audit(self):
         while True:
             cb.hold(7.0)
-            self.audits += 1
-
-    @cb.on_end
-    def report(self):
-        self.audit_count = self.audits
+            self.audit_count += 1
 
 
 def test_sweeping_a_child_model_runs_one_option_per_trial():

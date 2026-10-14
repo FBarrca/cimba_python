@@ -85,7 +85,7 @@ Typical causes
        its hard limit (``fitted.wild``). Look for a loop that reads an input
        far more often than intended.
    * - ``ModelDefinitionError`` when creating the experiment
-     - A missing parameter, source, initial state or reference, a reference
+     - A missing parameter, source, field value or reference, a reference
        to a model outside the tree, or a model used twice. The message names
        the path.
    * - ``ModelCompileError`` from ``run()``

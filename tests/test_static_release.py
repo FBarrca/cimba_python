@@ -7,9 +7,8 @@ from cimba.compiler import ModelCompileError
 
 
 class Job(cb.Model):
-    completed: cb.State[bool] = False
-    ticks: cb.State[int] = 0
-    after_release: cb.State[bool] = False
+    completed: bool = False
+    after_release: bool = False
     reported: cb.Output[bool]
     total: cb.Output[int]
 
@@ -24,12 +23,11 @@ class Job(cb.Model):
     def work(self):
         while True:
             cb.hold(1.0)
-            self.ticks += 1
+            self.total += 1
 
     @cb.on_end
     def report(self):
         self.reported = self.completed and not self.after_release
-        self.total = self.ticks
 
 
 class Owner(cb.Model):

@@ -1,5 +1,17 @@
 # Unreleased
 
+- **Breaking:** `cb.State` is removed. Annotate per-trial values as plain
+  `T`: `on_hand: cb.State[float] = 0.0` becomes `on_hand: float = 0.0`.
+  Plain annotated scalars were documented as constants but were always
+  writable per-trial values; a static model must now give each one a
+  value, on the class or in `__init__`.
+- **Breaking:** plain fields are reported as kind `"field"` by `describe()`
+  and in diagrams, and `process_graph(model, state=True)` is now
+  `process_graph(model, fields=True)` (the docs directive option `:state:`
+  is now `:fields:`).
+- An `Output` starts each trial at its default, if it has one
+  (`units: cb.Output[float] = 0.0`), so processes can count into it
+  directly. Without one it starts as `nan` (`float`) or `0`, as before.
 - **Breaking:** `FractionalContainer` keeps its level in fixed point, with
   `decimals` decimal places (default 6). Amounts are rounded half away from
   zero to that many places once, and every put and get after that is exact,

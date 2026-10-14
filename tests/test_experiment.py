@@ -56,6 +56,24 @@ def test_native_trial_is_worker_invariant_and_source_agnostic():
     assert replay[model].gaps.source[0]["method"] == "trace"
 
 
+class _Counter(Model):
+    counted: Output[float] = 0.0
+    unset: Output[float]
+
+    @process
+    def count(self):
+        for _ in range(3):
+            hold(1.0)
+            self.counted += 2.0
+
+
+def test_output_starts_each_trial_at_its_default():
+    model = _Counter()
+    results = Experiment(model, replications=3).run()
+    np.testing.assert_array_equal(results[model].counted.values, [[6.0] * 3])
+    assert np.isnan(results[model].unset.values).all()
+
+
 def test_unset_workers_use_every_core_after_an_explicit_count():
     library = load()
     library.cimba_threads_num.restype = ctypes.c_uint32

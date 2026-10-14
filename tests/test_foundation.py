@@ -6,7 +6,7 @@ import pytest
 from cimba import inputs
 from cimba.experiments import Design, trial_seed
 from cimba.layout import RecordLayout, TrialImageLayout
-from cimba.modeling import Input, Model, Output, Param, Ref, Series, State, sweep, sweeps
+from cimba.modeling import Input, Model, Output, Param, Ref, Series, sweep, sweeps
 from cimba.schema import Assembly, ClassSchema, ModelDefinitionError
 
 
@@ -51,7 +51,7 @@ def test_joint_members_preserve_alignment():
 
 class Base(Model):
     level: Param[float] = 1.0
-    total: State[float] = 0.0
+    total: float = 0.0
 
 
 class Node(Base):
@@ -128,3 +128,15 @@ def test_optional_and_collection_refs_are_links_not_children():
     assert len(assembly.instances) == 3
     assert ClassSchema.of(LinkedNode).fields[0].kind == "ref"
     assert assembly.by_object[root.nodes[0]].values["parent"] is root
+
+
+def test_plain_annotated_scalar_is_state_and_needs_a_value():
+    class Counter(Model):
+        count: float
+
+    with pytest.raises(ModelDefinitionError, match="counter.count: initial value missing"):
+        Assembly.of(Counter())
+    counter = Counter()
+    counter.count = 0.0
+    assert ClassSchema.of(Counter).fields[0].kind == "field"
+    Assembly.of(counter)

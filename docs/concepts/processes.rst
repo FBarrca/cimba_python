@@ -130,13 +130,14 @@ Hooks
 
 ``@cb.on_start``
    Runs once per model instance before any process starts. Use it to set
-   initial state that depends on parameters
+   starting values that depend on parameters
    (``self.on_hand = self.initial_inventory``) or to put initial stock into
    entities.
 
 ``@cb.on_end``
-   Runs once per model instance after the event loop finishes. Use it to read
-   entity statistics into outputs.
+   Runs once per model instance after the event loop finishes. Use it for
+   results computed at the end: entity statistics, averages and ratios.
+   Counters need no hook; processes count into the output directly.
 
 For static models, hooks run **bottom-up**: children before their parents.
 So a parent's ``on_end`` can aggregate outputs its children have just
@@ -173,13 +174,13 @@ for domain stop conditions such as "after the 1,000th customer".
 Conditions and predicates
 -------------------------
 
-A :class:`~cimba.Condition` lets a process wait for any combination of
-state. Two pieces are involved:
+A :class:`~cimba.Condition` lets a process wait until any predicate over
+the model holds. Two pieces are involved:
 
 .. code-block:: python
 
    class Gate(cb.Model):
-       ready: cb.State[bool] = False
+       ready: bool = False
        gate: cb.Condition
 
        @cb.predicate
@@ -201,8 +202,8 @@ state. Two pieces are involved:
   bool. Pass it *without calling it*: ``wait_until(self.is_ready)``. A
   predicate on another model works too: ``wait_until(self.plant.is_open)``.
 * ``signal()`` makes the condition re-evaluate its waiters' predicates and
-  wake those that are true. Conditions don't watch state by themselves:
-  whoever changes relevant state must signal.
+  wake those that are true. Conditions don't watch fields by themselves:
+  whoever changes a field a predicate reads must signal.
 * ``wait_until`` checks the predicate before blocking and returns a bool.
   Use ``if self.gate.wait_until(self.is_ready, timeout=5.0): ...`` to wait at
   most five time units.
@@ -234,7 +235,7 @@ Process handles and timers
 --------------------------
 
 ``cb.this_process()`` returns a :class:`~cimba.Process` handle for the running
-process. ``handle.pointer`` is an integer you can store in a ``State[int]``,
+process. ``handle.pointer`` is an integer you can store in an ``int`` field,
 and ``cb.Process(pointer)`` rebuilds the handle elsewhere, for example in the
 process that needs to wake it.
 
@@ -269,7 +270,8 @@ Dynamic models: spawn and release
 
 1. memory for its record is allocated from the trial;
 2. fields are set from keyword arguments, falling back to class defaults
-   (every field without a default must be given);
+   (every plain or ``Param`` field without a default must be given; an
+   ``Output`` without one starts at ``nan`` or ``0``);
 3. input fields must be passed an input of the spawning model; the new model
    gets an independent cursor and a new random stream derived from the trial
    seed and the spawn order. Optional inputs may be omitted or passed as
@@ -279,8 +281,8 @@ Dynamic models: spawn and release
 6. a handle to the new model is returned.
 
 ``cb.release(model)`` stops a static or spawned model's processes, ending
-the caller if it releases its own model. Static models keep their state and
-``on_end`` hooks; spawned models are retired and skip those hooks. Children
+the caller if it releases its own model. Static models keep their field values
+and ``on_end`` hooks; spawned models are retired and skip those hooks. Children
 continue independently. Memory is reclaimed when the trial ends.
 
 ``cb.is_dynamic(model)`` returns whether an instance was created by
@@ -288,12 +290,12 @@ continue independently. Memory is reclaimed when the trial ends.
 for spawned models after release. Like ``spawn`` and ``release``, it is
 available only in compiled model code.
 
-Track domain state to prevent repeated release:
+Track it in a field to prevent repeated release:
 
 .. code-block:: python
 
    class Document(cb.Model):
-       closed: cb.State[bool] = False
+       closed: bool = False
 
        @cb.function
        def close(self) -> None:
@@ -302,7 +304,7 @@ Track domain state to prevent repeated release:
            self.closed = True
            cb.release(self)
 
-Here, closing either kind of document stops its model processes. The state
+Here, closing either kind of document stops its model processes. The ``closed``
 guard avoids releasing the same instance twice, which would fail the trial.
 
 .. note::

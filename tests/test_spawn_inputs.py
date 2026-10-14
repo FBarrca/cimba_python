@@ -12,23 +12,18 @@ class Child(cb.Model):
 
     @cb.process
     def use_input(self):
-        self.owner.total += self.value.next()
+        self.owner.outcome += self.value.next()
         cb.release(self)
 
 
 class Parent(cb.Model):
     value: cb.Input[float]
-    total: cb.State[float] = 0.0
-    outcome: cb.Output[float]
+    outcome: cb.Output[float] = 0.0
 
     @cb.process
     def make_children(self):
         for _ in range(3):
             cb.spawn(Child, owner=self, value=self.value)
-
-    @cb.on_end
-    def measure(self):
-        self.outcome = self.total
 
 
 def test_spawned_inputs_have_independent_cursors():
@@ -61,23 +56,18 @@ class SeriesChild(cb.Model):
     @cb.process
     def use_series(self):
         cb.hold(1.0)
-        self.owner.total += self.demand.now()
+        self.owner.outcome += self.demand.now()
         cb.release(self)
 
 
 class SeriesParent(cb.Model):
     demand: cb.Series[float] = cb.Series(step=1.0)
-    total: cb.State[float] = 0.0
-    outcome: cb.Output[float]
+    outcome: cb.Output[float] = 0.0
 
     @cb.process
     def make_children(self):
         for _ in range(3):
             cb.spawn(SeriesChild, owner=self, demand=self.demand)
-
-    @cb.on_end
-    def measure(self):
-        self.outcome = self.total
 
 
 def test_spawned_series_preserves_time_indexing():
@@ -95,22 +85,17 @@ class LongChild(cb.Model):
     @cb.process
     def consume(self):
         for _ in range(1050):
-            self.owner.total += self.value.next()
+            self.owner.outcome += self.value.next()
         cb.release(self)
 
 
 class LongParent(cb.Model):
     value: cb.Input[float]
-    total: cb.State[float] = 0.0
-    outcome: cb.Output[float]
+    outcome: cb.Output[float] = 0.0
 
     @cb.process
     def make_child(self):
         cb.spawn(LongChild, owner=self, value=self.value)
-
-    @cb.on_end
-    def measure(self):
-        self.outcome = self.total
 
 
 def test_spawned_row_input_extends_and_replays():

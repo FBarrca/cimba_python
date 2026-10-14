@@ -97,9 +97,9 @@ Three new kinds of field appear:
    A **parameter**: a value fixed for the whole trial. Each rodent sets its own
    in ``__init__``. Parameters can also be *swept* in an experiment.
 
-``process_pointer: cb.State[int] = 0``
-   **State**: a per-trial value that processes may change. It starts at the
-   given initial value in every trial.
+``process_pointer: int = 0``
+   A **plain field**: a per-trial value that processes may change. It starts
+   at ``0`` in every trial.
 
 The game creates the rodents in its constructor and keeps them in a
 **collection**, a plain ``list`` annotated as ``list[Rodent]``:
@@ -181,7 +181,7 @@ Interrupting another process
 ----------------------------
 
 The cat has to reach a *specific* rodent's process. Each rodent stores its
-process handle's pointer in its state as soon as it starts
+process handle's pointer in a field as soon as it starts
 (``self.process_pointer = me.pointer``), and the cat rebuilds a handle from
 it:
 
@@ -226,8 +226,10 @@ Running the game
 .. literalinclude:: ../../tutorial/tut_2_1.py
    :pyobject: CheeseGame.game_stats
 
-The ``on_end`` hook copies the counters into outputs. Integer outputs work the
-same way as float ones.
+The counters are outputs that the rodents and the cat count into directly
+(``self.game.mice_grabbed += amount``): an integer output starts every trial
+at ``0``. The ``on_end`` hook computes the one result that needs the whole
+trial, the mean cheese in use.
 
 .. literalinclude:: ../../tutorial/tut_2_1.py
    :pyobject: main
@@ -253,8 +255,9 @@ What you learned
 
 * ``Resource(capacity=n)`` models a pool; ``acquire`` waits, ``preempt``
   takes from lower-priority holders.
-* ``Ref[M]`` points to another model; ``list[M]`` holds child models;
-  ``Param`` is fixed per trial and ``State`` changes during it.
+* ``Ref[M]`` points to another model; ``list[M]`` holds child models.
+* A ``Param`` is fixed per trial, a plain field changes during it, and an
+  ``Output`` is a field that is also a result: count into it directly.
 * Every blocking call returns a **signal** that says why the process woke up.
 * ``cb.this_process()`` and ``cb.Process(pointer)`` give you handles to set
   priorities and interrupt other processes.

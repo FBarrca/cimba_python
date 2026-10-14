@@ -20,20 +20,15 @@ Glossary
 
    Field
       A typed, per-instance value declared by an annotation on a model class.
+      A plain ``float``, ``int`` or ``bool`` field (``on_hand: float = 0.0``)
+      starts from its value in every trial and compiled code may change it.
 
    Param
       ``cb.Param[T]``: a value fixed for a trial. It can be swept.
 
-   State
-      ``cb.State[T]``: a value that changes during a trial and starts from
-      its initial value in every trial.
-
    Output
-      ``cb.Output[T]``: a per-trial result, collected as :term:`Samples`.
-
-   Constant
-      A plain annotated scalar field (``lane: int = 0``), fixed per instance
-      and never swept.
+      ``cb.Output[T]``: a field whose value at the end of each trial is
+      collected as :term:`Samples`.
 
    Ref
       ``cb.Ref[M]``: a reference to another model instance in the tree.

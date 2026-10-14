@@ -10,25 +10,20 @@ from cimba.modeling import NotInCompiledCode
 
 class Child(cb.Model):
     parent: cb.Ref["Parent"]
-    value: cb.State[int]
+    value: int
 
     @cb.process
     def act(self):
-        self.parent.total += self.value
+        self.parent.result += self.value
 
 
 class Parent(cb.Model):
-    total: cb.State[int] = 0
     result: cb.Output[int]
 
     @cb.process
     def create(self):
         cb.spawn(Child, parent=self, value=5)
         cb.hold(1.0)
-
-    @cb.on_end
-    def finish(self):
-        self.result = self.total
 
 
 def test_spawned_model_runs_trial_local_process():
@@ -39,7 +34,7 @@ def test_spawned_model_runs_trial_local_process():
 
 class Order(cb.Model):
     warehouse: cb.Ref["Warehouse"]
-    quantity: cb.State[int]
+    quantity: int
 
     @cb.process
     def deliver(self):
@@ -72,11 +67,10 @@ class CancelledChild(cb.Model):
     @cb.process
     def act(self):
         cb.hold(0.5)
-        self.parent.total += 1
+        self.parent.result += 1
 
 
 class ReleaseParent(cb.Model):
-    total: cb.State[int] = 0
     result: cb.Output[int]
 
     @cb.process
@@ -84,10 +78,6 @@ class ReleaseParent(cb.Model):
         child = cb.spawn(CancelledChild, parent=self)
         cb.release(child)
         cb.hold(1.0)
-
-    @cb.on_end
-    def finish(self):
-        self.result = self.total
 
 
 def test_release_stops_spawned_process():
@@ -126,9 +116,9 @@ def test_spawned_model_cleanup_after_abandon_and_next_run():
 
 
 class LifecycleDocument(cb.Model):
-    closed: cb.State[bool] = False
-    dynamic_at_start: cb.State[bool] = False
-    ran: cb.State[bool] = False
+    closed: bool = False
+    dynamic_at_start: bool = False
+    ran: bool = False
 
     @cb.on_start
     def start(self):

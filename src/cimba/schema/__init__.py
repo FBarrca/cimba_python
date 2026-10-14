@@ -13,7 +13,7 @@ from typing import Any, Union, get_args, get_origin, get_type_hints
 from cimba.inputs.sources import EmptySource, Source
 from cimba.modeling import (
     Condition, Container, Dataset, Entity, FractionalContainer, Input, Model, Output, Param,
-    PriorityStore, Ref, Resource, Series, State, Store, Sweep,
+    PriorityStore, Ref, Resource, Series, Store, Sweep,
 )
 
 
@@ -136,8 +136,6 @@ class ClassSchema:
                 default = getattr(model_class, name, None)
                 if origin is Param:
                     kind = "param"
-                elif origin is State:
-                    kind = "state"
                 elif origin is Output:
                     kind = "output"
                 elif origin is Input:
@@ -156,7 +154,8 @@ class ClassSchema:
                 elif isinstance(origin, type) and issubclass(origin, Model):
                     kind = "child"
                 else:
-                    kind = "constant"
+                    # A plain annotated scalar: a per-trial value.
+                    kind = "field"
                 step = default.step if type(default) is Series else None
                 initial_origin = default.origin if type(default) is Series else 0.0
                 value_type = annotation if kind == "entity" else (
@@ -303,8 +302,8 @@ class Assembly:
                         raise ModelDefinitionError(f"{label}.{field.name}: Series step missing")
                 elif field.kind == "param" and value is None and strict:
                     raise ModelDefinitionError(f"{label}.{field.name}: parameter missing")
-                elif field.kind == "state" and value is None and strict:
-                    raise ModelDefinitionError(f"{label}.{field.name}: initial state missing")
+                elif field.kind == "field" and value is None and strict:
+                    raise ModelDefinitionError(f"{label}.{field.name}: initial value missing")
                 elif field.kind == "child" and isinstance(value, Sweep):
                     chosen = (picks or {}).get((model, field.name))
                     if chosen is not None:

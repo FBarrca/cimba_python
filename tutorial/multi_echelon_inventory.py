@@ -30,7 +30,7 @@ INITIAL_INVENTORY = 0.9 * BASE_STOCK
 
 class Order(cb.Model):
     requester: cb.Ref["Facility"]
-    quantity: cb.State[float]
+    quantity: float
 
 
 class Facility(cb.Model):
@@ -41,14 +41,14 @@ class Facility(cb.Model):
     reorder_point: cb.Param[float]
     initial_inventory: cb.Param[float]
     base_lead_time: cb.Param[float]
-    on_hand: cb.State[float] = 0.0
-    inventory_position: cb.State[float] = 0.0
-    backorder: cb.State[float] = 0.0
-    total_demand: cb.State[float] = 0.0
-    total_shipped: cb.State[float] = 0.0
-    total_late_sales: cb.State[float] = 0.0
-    on_hand_total: cb.State[float] = 0.0
-    on_hand_samples: cb.State[int] = 0
+    on_hand: float = 0.0
+    inventory_position: float = 0.0
+    backorder: float = 0.0
+    total_demand: float = 0.0
+    total_shipped: float = 0.0
+    total_late_sales: float = 0.0
+    on_hand_total: float = 0.0
+    on_hand_samples: int = 0
     avg_on_hand: cb.Output[float]
     service_level: cb.Output[float]
     orders: cb.Store[Order]
@@ -155,7 +155,7 @@ class StockingFacility(Facility):
 class Shipment(cb.Model):
     network: cb.Ref["MultiEchelonInventory"]
     requester: cb.Ref[Facility]
-    quantity: cb.State[float]
+    quantity: float
 
     @cb.process
     def deliver(self):

@@ -17,11 +17,11 @@ HOURS_PER_YEAR = 24.0 * 7 * 52
 
 class Ship(cb.Model):
     harbor: cb.Ref["Harbor"]
-    size: cb.State[int]
-    tugs_needed: cb.State[int]
-    max_wind: cb.State[float]
-    min_depth: cb.State[float]
-    arrival: cb.State[float]
+    size: int
+    tugs_needed: int
+    max_wind: float
+    min_depth: float
+    arrival: float
 
     @cb.predicate
     def can_enter(self):
@@ -78,9 +78,9 @@ class SeaConditions(cb.Model):
     wind_source: cb.Input[float] = inputs.dist.rayleigh(scale=5.0)
     direction_source: cb.Input[float] = inputs.dist.pert(
         low=0.0, mode=225.0, high=360.0)
-    wind_mag: cb.State[float] = 0.0
-    wind_dir: cb.State[float] = 0.0
-    water_depth: cb.State[float] = 0.0
+    wind_mag: float = 0.0
+    wind_dir: float = 0.0
+    water_depth: float = 0.0
 
     def __init__(self, harbor, mean_wind):
         self.harbor = harbor

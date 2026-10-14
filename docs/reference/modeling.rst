@@ -38,19 +38,23 @@ Model
 Field types
 -----------
 
+A plain annotated ``float``, ``int`` or ``bool`` (``on_hand: float = 0.0``)
+is a per-trial value: it starts at its value in every trial and compiled code
+may change it. A static model needs a value, on the class or the instance.
+The wrappers below give a field a role on top of that.
+
 .. class:: Param[T]
 
    A trial-constant value of type ``float``, ``int`` or ``bool``. It can be
    set on the class, the instance, or as a sweep.
 
-.. class:: State[T]
-
-   A mutable per-trial value. Static models need an initial value.
-
 .. class:: Output[T]
 
-   A per-trial result. It starts each trial at its default, if it has one,
-   otherwise at ``nan`` (``float``) or ``0``. Collected as :class:`Samples`.
+   A per-trial value that is also a result: its value at the end of the
+   trial is collected as :class:`Samples`. It starts each trial at its
+   default, if it has one
+   (``revenue: cb.Output[float] = 0.0``), otherwise at ``nan`` (``float``) or
+   ``0`` (``int``, ``bool``), so processes can count into it directly.
 
 .. class:: Ref[M]
 
@@ -92,8 +96,8 @@ Field types
 Other annotations: a model class (child; it may be assigned a
 :func:`sweep` of model objects, giving one model tree per option),
 ``list[M]`` (owned children),
-``list[cb.Ref[M]]`` (references, items may be ``None``), and a plain
-``float``/``int``/``bool`` (constant). Unannotated attributes are host-only.
+and ``list[cb.Ref[M]]`` (references, items may be ``None``). Unannotated
+attributes are host-only.
 
 Entities
 --------

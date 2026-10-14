@@ -6,12 +6,7 @@ from cimba.diagrams import mermaid
 
 
 class Worker(cb.Model):
-    value: cb.State[float] = 1.0
-    total: cb.Output[float]
-
-    @cb.on_end
-    def finish(self):
-        self.total = self.value
+    value: cb.Output[float] = 1.0
 
 
 class Team(cb.Model):
@@ -36,7 +31,7 @@ def test_child_and_reference_views():
     team.selected = worker
     result = cb.Experiment(team, replications=2).run(workers=1)
     assert result[team].seen.values.tolist() == [[5.0, 5.0]]
-    assert result[worker].total.values.tolist() == [[5.0, 5.0]]
+    assert result[worker].value.values.tolist() == [[5.0, 5.0]]
 
 
 class Fleet(cb.Model):
@@ -58,8 +53,8 @@ def test_collection_views():
     fleet.selected = workers
     result = cb.Experiment(fleet).run(workers=1)
     assert result[fleet].count.values.tolist() == [[2.0]]
-    assert result[workers[0]].total.values.tolist() == [[4.0]]
-    assert result[workers[1]].total.values.tolist() == [[6.0]]
+    assert result[workers[0]].value.values.tolist() == [[4.0]]
+    assert result[workers[1]].value.values.tolist() == [[6.0]]
 
 
 class BadIndex(cb.Model):
@@ -122,12 +117,7 @@ def test_negative_collection_index_still_abandons_trial():
 
 
 class OtherWorker(cb.Model):
-    value: cb.State[float] = 2.0
-    total: cb.Output[float]
-
-    @cb.on_end
-    def finish(self):
-        self.total = self.value
+    value: cb.Output[float] = 2.0
 
 
 class OtherTeam(cb.Model):
@@ -158,16 +148,11 @@ def test_identical_record_shapes_keep_class_specific_views():
 
 
 class BaseNode(cb.Model):
-    base: cb.State[float] = 1.0
-    observed: cb.Output[float]
-
-    @cb.on_end
-    def finish(self):
-        self.observed = self.base
+    base: cb.Output[float] = 1.0
 
 
 class DerivedNode(BaseNode):
-    extra: cb.State[float] = 9.0
+    extra: float = 9.0
 
 
 class MixedNodes(cb.Model):
@@ -183,7 +168,7 @@ def test_base_view_over_polymorphic_collection_prefix():
     model = MixedNodes()
     model.nodes = nodes
     result = cb.Experiment(model).run(workers=1)
-    assert result[nodes[1]].observed.values[0, 0] == 7.0
+    assert result[nodes[1]].base.values[0, 0] == 7.0
 
 
 def test_structure_description_and_diagram():
@@ -200,7 +185,7 @@ def test_structure_description_and_diagram():
 
 class OptionalNode(cb.Model):
     upstream: cb.Ref["OptionalNode"] | None
-    value: cb.State[int] = 0
+    value: int = 0
 
     @cb.process
     def act(self):

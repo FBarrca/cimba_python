@@ -49,7 +49,7 @@ contains no logic apart from four host utilities: ``engine_version``,
 -----------------------------------------
 
 What users write *with*: the ``Model`` base class, the field markers
-(``Param``, ``State``, ``Output``, ``Ref``, ``Input``, ``Series``), the entity
+(``Param``, ``Output``, ``Ref``, ``Input``, ``Series``), the entity
 classes, the decorators and the verb stubs. On the host these are
 declarations and configuration only. Entity objects carry configuration
 (``capacity``, ``captured``), decorators tag methods with a role, and verb

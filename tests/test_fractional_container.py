@@ -207,8 +207,8 @@ class Flour(cb.Model):
     """Random deliveries and withdrawals: the books must balance exactly."""
 
     silo: cb.FractionalContainer = cb.FractionalContainer(initial=500.0, capacity=2000.0)
-    delivered: cb.State[float] = 0.0
-    used: cb.State[float] = 0.0
+    delivered: float = 0.0
+    used: float = 0.0
     balance: cb.Output[float]
     level: cb.Output[float]
 

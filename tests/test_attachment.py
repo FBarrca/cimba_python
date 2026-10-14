@@ -22,7 +22,7 @@ class Policy(cb.Model):
 
     @cb.process
     def apply(self):
-        self.owner.count += self.increment
+        self.owner.total += self.increment
         self.own_count += 1
 
 
@@ -32,12 +32,7 @@ class OtherPolicy(Policy):
 
 class Planner(cb.Model):
     method: Policy
-    count: cb.State[int] = 0
     total: cb.Output[int]
-
-    @cb.on_end
-    def report(self):
-        self.total = self.count
 
 
 def test_child_attachment_is_immediate_and_inherited():

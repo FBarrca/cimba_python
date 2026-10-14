@@ -57,7 +57,7 @@ Sweeps
   polymorphic ``@cb.function`` methods, in one experiment (see
   :doc:`../guides/policies`).
 
-Assigning a sweep anywhere else (``State``, constants, references, entity
+Assigning a sweep anywhere else (plain fields, references, entity
 capacities) is a ``TypeError`` at that line. Those define the model's
 *structure*, which is fixed for an experiment. To compare structural
 variants, sweep a child model whose options differ, or build one model per
@@ -183,8 +183,8 @@ What happens inside ``run()``:
 2. Sweeps are expanded into design points and trial seeds are derived.
 3. Rows for resampled and fitted inputs are generated per replication,
    in chunks that fit in ``input_memory``.
-4. One memory block per trial is laid out and filled: parameters, initial
-   state, references, input slots.
+4. One memory block per trial is laid out and filled: parameters, the
+   starting values of plain fields and outputs, references, input slots.
 5. The native runner executes all trials on worker threads, with the GIL
    released.
 6. Trials that exhausted an extendable input are rerun with longer rows.

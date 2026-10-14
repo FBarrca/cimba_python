@@ -31,7 +31,7 @@ This table covers the most common changes:
    * - exhaustion tripwire outputs
      - ``on_exhausted=`` policies; resamples extend automatically
    * - ``sim.Param``/``Output``/``State``/``FloatState``/``Const``
-     - ``cb.Param[T]``, ``cb.Output[T]``, ``cb.State[T]``, plain constants
+     - ``cb.Param[T]``, ``cb.Output[T]``, plain annotated ``T``
    * - ``Queue``, opaque ``Store``, ``f2i``/``i2f``, ``Pool``
      - ``Container``, typed ``Store[T]``/``PriorityStore[T]``,
        ``Resource(capacity=n)``

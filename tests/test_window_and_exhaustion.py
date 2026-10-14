@@ -14,7 +14,6 @@ class Reader(cb.Model):
     values: cb.Input[float]
     days: cb.Series[float] = cb.Series(step=1.0)
     use_series: cb.Param[bool] = False
-    reads: cb.State[int] = 0
     count: cb.Output[int]
     ended_at: cb.Output[float]
 
@@ -26,11 +25,10 @@ class Reader(cb.Model):
                 self.days.now()
             else:
                 self.values.next()
-            self.reads += 1
+            self.count += 1
 
     @cb.on_end
     def finish(self):
-        self.count = self.reads
         self.ended_at = cb.now()
 
 
@@ -131,10 +129,9 @@ def test_window_end_stops_spawned_processes():
             def loop(self):
                 while True:
                     cb.hold(1.0)
-                    self.owner.ticks += 1
+                    self.owner.total += 1
 
         class Spawner(cb.Model):
-            ticks: cb.State[int] = 0
             total: cb.Output[int]
             ended_at: cb.Output[float]
 
@@ -146,7 +143,6 @@ def test_window_end_stops_spawned_processes():
 
             @cb.on_end
             def finish(self):
-                self.total = self.ticks
                 self.ended_at = cb.now()
 
         model = Spawner()

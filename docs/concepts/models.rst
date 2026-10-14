@@ -11,9 +11,8 @@ whole system, a station in it, or a customer passing through.
    class Station(cb.Model):
        service_time: cb.Input[float] = inputs.dist.exponential(mean=4.0)  # input
        speed: cb.Param[float] = 1.0                                        # parameter
-       busy_since: cb.State[float] = 0.0                                   # state
+       busy_since: float = 0.0                                             # plain field
        served: cb.Output[int]                                              # output
-       lane: int = 0                                                       # constant
        queue: cb.Store[Job]                                                # entity
        worker: cb.Resource = cb.Resource(capacity=2)                       # configured entity
        plant: cb.Ref["Plant"]                                              # reference
@@ -34,15 +33,17 @@ The kinds of field
      - A value fixed for a whole trial. Set it on the class, in ``__init__``
        or on the instance. It may be a ``cb.sweep``. Readable (and, rarely,
        writable) in compiled code.
-   * - ``x: cb.State[T] = v``
-     - state
-     - A value that processes change during a trial. It starts at ``v`` in
-       every trial, so an initial value is required for static models.
+   * - ``x: T = v``
+     - plain field
+     - A per-trial value. It starts at ``v`` in every trial and compiled code
+       may change it. A static model needs a value, on the class or set in
+       ``__init__``.
    * - ``x: cb.Output[T]``
      - output
-     - A per-trial result, usually written in an ``@cb.on_end`` hook. It
-       starts as ``nan`` (``float``) or ``0`` (``int``, ``bool``).
-       Collected into :class:`~cimba.Samples`.
+     - A per-trial value that is also a result: its value at the end of the
+       trial is collected into :class:`~cimba.Samples`. It starts at its
+       default, if it has one; otherwise at ``nan`` (``float``) or ``0``
+       (``int``, ``bool``).
    * - ``x: cb.Input[T]``
      - input
      - A sequence of real-world values, consumed with ``next()``. Its source
@@ -68,9 +69,6 @@ The kinds of field
    * - ``x: list[cb.Ref[OtherModel]]``
      - collection of references
      - A list of pointers, not ownership. Items may be ``None``.
-   * - ``x: int = 3``
-     - constant
-     - A plain annotated scalar: fixed for the model instance, never swept.
    * - (no annotation)
      - host-only
      - An ordinary Python attribute, such as a display name. Compiled code
@@ -80,6 +78,36 @@ Scalar field types (``T``) are ``float``, ``int`` and ``bool``. Strings,
 lists of numbers and other Python objects can't live in trial memory. Keep
 them as host-only attributes, or as module-level constants (NumPy arrays work
 well) that compiled code reads.
+
+Plain field or output?
+----------------------
+
+Make a value an ``Output`` if it is a result, and a plain field if only the
+logic needs it. A counter that is a result is an output that processes count
+into directly:
+
+.. code-block:: python
+
+   class Checkout(cb.Model):
+       served: cb.Output[int]                 # starts at 0
+       revenue: cb.Output[float] = 0.0        # starts at 0.0
+       mean_wait: cb.Output[float]            # nan unless something is recorded
+       waits: cb.Dataset
+
+       @cb.process
+       def serve(self):
+           ...
+           self.served += 1
+           self.revenue += price
+
+       @cb.on_end
+       def report(self):
+           if self.waits.sample_count() > 0:
+               self.mean_wait = self.waits.sample_mean()
+
+Keep ``@cb.on_end`` for results computed at the end: entity statistics,
+averages and ratios. A plain field copied into an output there is a sign the
+field should have been the output.
 
 Where values come from
 ----------------------
@@ -98,8 +126,8 @@ to ``capture()`` it.
 
 Assignments are checked on the spot. Assigning a sweep to anything but a
 ``Param``, an input or a child model is a ``TypeError`` at that line, and so is assigning
-something that isn't a source to an ``Input``. Missing values (a ``Param``
-with no value, an input with no source, a required ``Ref`` that is ``None``,
+something that isn't a source to an ``Input``. Missing values (a ``Param`` or
+plain field with no value, an input with no source, a required ``Ref`` that is ``None``,
 a reference to a model outside the tree) are reported when you create the
 ``Experiment``, with the instance's path in the message.
 
@@ -208,8 +236,8 @@ exist for the whole trial.
 **Dynamic** instances are created during a trial with
 ``cb.spawn(ModelClass, field=value, ...)``, like customers, orders, parts and
 ships, and removed with ``cb.release(model)``. They use the same model classes
-with one restriction: a dynamic model holds values (``Param``, ``State``,
-``Output``, constants), references, inputs, processes, hooks and functions,
+with one restriction: a dynamic model holds values (plain fields,
+``Param`` and ``Output``), references, inputs, processes, hooks and functions,
 but no entities or children. Give it a ``Ref`` to a static model that owns the
 shared queues and resources. See :doc:`processes` for the lifecycle.
 

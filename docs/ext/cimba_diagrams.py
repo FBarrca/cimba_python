@@ -5,7 +5,7 @@ Usage::
    .. cimba-diagram:: tutorial.tut_1_1:MM1
       :kind: process          # or "structure"
       :direction: LR          # Mermaid flowchart direction (default TD)
-      :state:                 # include Param/State/Output writes
+      :fields:                # include field writes
       :hooks:                 # include on_start/on_end hooks
       :caption: The M/M/1 model
       :layout: elk            # or dagre (Mermaid's default); elk is the default here
@@ -29,7 +29,7 @@ class CimbaDiagram(Directive):
     option_spec = {
         "kind": lambda value: directives.choice(value, ("process", "structure")),
         "direction": lambda value: directives.choice(value, ("td", "tb", "lr", "rl", "bt")).upper(),
-        "state": directives.flag,
+        "fields": directives.flag,
         "hooks": directives.flag,
         "caption": directives.unchanged,
         "layout": lambda value: directives.choice(value, ("elk", "dagre")),
@@ -44,7 +44,7 @@ class CimbaDiagram(Directive):
         if self.options.get("kind", "process") == "structure":
             graph = diagrams.structure(model)
         else:
-            graph = diagrams.process_graph(model, state="state" in self.options,
+            graph = diagrams.process_graph(model, fields="fields" in self.options,
                                            hooks="hooks" in self.options)
         text = graph.to_mermaid(self.options.get("direction", "TD"))
         lines = [".. mermaid::"]

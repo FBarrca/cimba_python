@@ -81,7 +81,7 @@ Where to start
 The ideas in one paragraph
 --------------------------
 
-A **model** is a Python class. Its annotated fields declare parameters, state,
+A **model** is a Python class. Its annotated fields declare values, parameters,
 outputs, simulation **entities** (queues, resources, stores) and **inputs**.
 Methods marked ``@cb.process`` run as concurrent simulated processes. An input
 says *what* the model consumes, such as inter-arrival times or daily demand, but

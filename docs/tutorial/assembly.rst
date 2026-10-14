@@ -19,7 +19,7 @@ The full script is ``tutorial/tut_5_1.py``.
 Parts that carry their own history
 ----------------------------------
 
-Each part is a small dynamic model with just enough state to measure its
+Each part is a small dynamic model with just enough fields to measure its
 journey:
 
 .. literalinclude:: ../../tutorial/tut_5_1.py

@@ -61,15 +61,15 @@ class _Spawned:
 
 @dataclass(frozen=True)
 class _Ref:
-    kind: str          # model, entity, input, state, collection, event
+    kind: str          # model, entity, input, field, collection, event
     owner: Any         # a static Model instance or a _Spawned
     name: str = ""
 
 
 class _Analysis:
-    def __init__(self, root: Model, *, state: bool, hooks: bool):
+    def __init__(self, root: Model, *, fields: bool, hooks: bool):
         self.assembly = Assembly.of(root, strict=False)
-        self.state = state
+        self.fields = fields
         self.hooks = hooks
         self.nodes: dict[str, Node] = {}
         self.edges: list[Edge] = []
@@ -263,8 +263,8 @@ class _Visitor(ast.NodeVisitor):
                 if field.kind == "ref":
                     return set(bound)
                 return set(bound) or {_Ref("input", owner, name)}
-            if field.kind in {"param", "state", "output", "constant"}:
-                return {_Ref("state", owner, name)}
+            if field.kind in {"param", "field", "output"}:
+                return {_Ref("field", owner, name)}
             return set()
         value = analysis.assembly.by_object[owner].values[name]
         if field.kind == "child" and isinstance(value, Sweep):
@@ -277,7 +277,7 @@ class _Visitor(ast.NodeVisitor):
             return {_Ref("entity", owner, name)}
         if field.kind in {"input", "series"}:
             return {_Ref("input", owner, name)}
-        return {_Ref("state", owner, name)}
+        return {_Ref("field", owner, name)}
 
     def store_item(self, ref: _Ref):
         if ref.kind != "entity":
@@ -322,13 +322,13 @@ class _Visitor(ast.NodeVisitor):
             self.aliases.setdefault(target.id, set()).update(refs)
 
     def write(self, target: ast.AST):
-        if not self.analysis.state:
+        if not self.analysis.fields:
             return
         if isinstance(target, ast.Subscript):
             target = target.value
         if isinstance(target, ast.Attribute):
             for ref in self.resolve(target):
-                if ref.kind == "state":
+                if ref.kind == "field":
                     self.analysis.edge(self.actor, self.analysis.node(ref), "write")
 
     def visit_Assign(self, node: ast.Assign):
@@ -467,17 +467,17 @@ def _source_name(value) -> str:
     return method.removeprefix("dist.")
 
 
-def process_graph(model: Model, *, state: bool = False, hooks: bool = False) -> Graph:
+def process_graph(model: Model, *, fields: bool = False, hooks: bool = False) -> Graph:
     """Infer how processes interact with entities, inputs and spawned models.
 
     Nodes are grouped by model instance (and by spawned model class). Edges
     point in the direction things flow: a process *puts* into a store, a store
     feeds the process that *gets*, an input feeds the process that reads it,
-    a process *spawns* a model. Pass ``state=True`` to add writes to
-    ``Param``/``State``/``Output`` fields and ``hooks=True`` to include
+    a process *spawns* a model. Pass ``fields=True`` to add writes to
+    plain, ``Param`` and ``Output`` fields and ``hooks=True`` to include
     ``on_start``/``on_end`` hooks as actors.
     """
-    return _Analysis(model, state=state, hooks=hooks).run()
+    return _Analysis(model, fields=fields, hooks=hooks).run()
 
 
 __all__ = ["process_graph"]

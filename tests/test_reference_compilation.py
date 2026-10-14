@@ -65,12 +65,12 @@ def test_base_reference_reads_inherited_fields_without_base_instances():
             self.total += amount
 
     class Base(cb.Model):
-        flag: cb.State[bool] = True
+        flag: bool = True
         part: cb.Ref[Part]
-        quantity: cb.State[int] = 7
+        quantity: int = 7
 
     class Derived(Base):
-        extra: cb.State[float] = 99.0
+        extra: float = 99.0
 
     class Caller(cb.Model):
         owner: cb.Ref[Base]
@@ -106,10 +106,10 @@ def test_missing_view_reports_the_model_field():
 
 def test_inheritance_cannot_change_the_native_type_of_a_base_field():
     class Base(cb.Model):
-        value: cb.State[bool] = True
+        value: bool = True
 
     class Changed(Base):
-        value: cb.State[float] = 1.0
+        value: float = 1.0
 
     with pytest.raises(TypeError, match="Changed.value: native layout must preserve"):
         RecordLayout.of(ClassSchema.of(Changed))
@@ -117,10 +117,10 @@ def test_inheritance_cannot_change_the_native_type_of_a_base_field():
 
 def test_incompatible_multiple_inheritance_cannot_shift_base_field_offsets():
     class Left(cb.Model):
-        left: cb.State[int] = 1
+        left: int = 1
 
     class Right(cb.Model):
-        right: cb.State[int] = 2
+        right: int = 2
 
     class Combined(Left, Right):
         pass
@@ -142,7 +142,7 @@ def test_model_argument_base_views_are_ready_before_compiling_functions():
         part: cb.Ref[Part]
 
     class Derived(Base):
-        extra: cb.State[int] = 5
+        extra: int = 5
 
     class Caller(cb.Model):
         item: Derived
@@ -190,7 +190,7 @@ def test_reference_on_spawn_result_is_ready_during_typing():
 
 def test_callback_views_can_be_registered_again_after_cache_eviction():
     class Callback(cb.Model):
-        ready: cb.State[bool] = False
+        ready: bool = False
         observed: cb.Output[bool]
 
         @cb.predicate

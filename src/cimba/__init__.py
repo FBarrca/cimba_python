@@ -3,7 +3,7 @@
 from . import analysis, inputs, random
 from .modeling import (
     Condition, Container, Dataset, FractionalContainer, Input, Model, Output, Param, PriorityStore,
-    Process, Ref, Resource, Scheduled, Series, State, Store, end_trial, event,
+    Process, Ref, Resource, Scheduled, Series, Store, end_trial, event,
     function, hold, is_dynamic, log, now, on_end, on_start, options, predicate, process, release, schedule,
     spawn, suspend, sweep, sweeps, this_process,
 )
@@ -13,7 +13,7 @@ from .results import Results, Samples, Signal
 __version__ = "0.7.3"
 
 __all__ = [
-    "Model", "Param", "State", "Output", "Input", "Series", "Ref",
+    "Model", "Param", "Output", "Input", "Series", "Ref",
     "Container", "FractionalContainer", "Store", "PriorityStore", "Resource", "Condition",
     "Dataset", "Process", "Scheduled", "process", "on_start", "on_end",
     "predicate", "event", "function", "hold", "now", "suspend", "spawn", "release",

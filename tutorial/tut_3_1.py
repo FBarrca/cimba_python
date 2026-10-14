@@ -88,15 +88,15 @@ PARK_OPEN = 16 * 60.0       # minutes
 
 class Visitor(cb.Model):
     park: cb.Ref["Park"]
-    patience: cb.State[float]
-    priority: cb.State[int]
-    entry_park: cb.State[float]
-    process_pointer: cb.State[int] = 0
-    entry_queue: cb.State[float] = 0.0
-    riding: cb.State[float] = 0.0
-    waiting: cb.State[float] = 0.0
-    walking: cb.State[float] = 0.0
-    rides: cb.State[int] = 0
+    patience: float
+    priority: int
+    entry_park: float
+    process_pointer: int = 0
+    entry_queue: float = 0.0
+    riding: float = 0.0
+    waiting: float = 0.0
+    walking: float = 0.0
+    rides: int = 0
 
     @cb.process
     def visit(self):
@@ -123,7 +123,7 @@ class Visitor(cb.Model):
             chosen = self.park.shortest_line(at)
             shortest = self.park.ride_queues[chosen].line.length()
             if shortest > self.patience * BALKING_THRESHOLD:
-                self.park.balks += 1
+                self.park.n_balks += 1
                 continue
 
             line = self.park.ride_queues[chosen].line
@@ -143,10 +143,10 @@ class Visitor(cb.Model):
                             chosen = replacement
                             line = self.park.ride_queues[chosen].line
                             ticket = line.enqueue(self, self.priority + 1)
-                            self.park.jockeys += 1
+                            self.park.n_jockeys += 1
                 elif signal == TIMER_RENEGING:
                     if line.cancel(ticket):
-                        self.park.reneges += 1
+                        self.park.n_reneges += 1
                     me.timers_clear()
                     break
                 else:
@@ -224,9 +224,6 @@ class Park(cb.Model):
     d_waiting: cb.Dataset
     d_walking: cb.Dataset
     d_rides: cb.Dataset
-    balks: cb.State[int] = 0
-    jockeys: cb.State[int] = 0
-    reneges: cb.State[int] = 0
     avg_rides: cb.Output[float]
     avg_time_in_park: cb.Output[float]
     avg_riding: cb.Output[float]
@@ -283,9 +280,6 @@ class Park(cb.Model):
         self.avg_waiting = self.d_waiting.sample_mean()
         self.avg_walking = self.d_walking.sample_mean()
         self.n_visitors = self.d_park.sample_count()
-        self.n_balks = self.balks
-        self.n_jockeys = self.jockeys
-        self.n_reneges = self.reneges
 
 
 def main() -> None:

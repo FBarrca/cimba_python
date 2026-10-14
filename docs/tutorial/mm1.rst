@@ -448,7 +448,7 @@ What you learned
 ----------------
 
 * A model is a class; annotated fields declare **inputs**, **entities**,
-  **outputs**, and later **params**, **state**, children and references.
+  **outputs**, and later **params**, plain fields, children and references.
 * ``@cb.process`` methods are concurrent simulated processes. Blocking calls
   such as ``cb.hold`` and ``get`` suspend them, anywhere in the code.
 * ``@cb.on_start`` and ``@cb.on_end`` hooks run before and after the event

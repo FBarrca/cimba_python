@@ -6,7 +6,7 @@
 So far the "customers" in our models were anonymous: a number in a container.
 Many questions need individuals. How long did *this* visitor spend in the
 park? Did gold-card holders wait less? How many people gave up and left a
-line? For that, each visitor needs its own state and its own behavior. And
+line? For that, each visitor needs its own data and its own behavior. And
 visitors come and go during the day, so they can't be built up front like the
 rest of the model.
 
@@ -66,13 +66,13 @@ handle to the new model, so you can put it in a store or set more fields.
 
 The keyword arguments must cover every field without a default. Here that's
 the ``park`` reference and the ``patience``, ``priority`` and ``entry_park``
-states. Fields with a class default, like ``rides = 0``, take it.
+fields. Fields with a class default, like ``rides = 0``, take it.
 
 .. admonition:: What a dynamic model may contain
    :class: note
 
-   Spawned models hold values and behavior: ``Param``, ``State``,
-   ``Output``, constants, ``Ref`` fields, inputs, processes and hooks. They
+   Spawned models hold values and behavior: plain, ``Param``,
+   ``Output`` and ``Ref`` fields, inputs, processes and hooks. They
    can't own entities or child models. Put shared queues and resources on a
    static model and give the spawned model a ``Ref`` to it, as ``Visitor``
    does with ``park``.
@@ -113,7 +113,7 @@ Each ride line is a :class:`~cimba.PriorityStore` of visitors:
 putting anything else in it is a *compile-time* error. ``get()`` returns the
 highest-priority item that has waited longest, blocking while the store is
 empty. So in the ride server, ``visitor`` is a full view of the visitor model,
-and the server can update its ``waiting`` and ``riding`` state directly.
+and the server can update its ``waiting`` and ``riding`` fields directly.
 
 Joining a line with ``put(item, priority)`` is fire-and-forget. A visitor who
 may *leave* the line needs a ticket, so model-valued priority stores offer
