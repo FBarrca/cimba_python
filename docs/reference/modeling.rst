@@ -123,26 +123,22 @@ Entity methods are *compiled*, except ``capture()`` and the constructors.
 
    Amounts must be ``int``; a ``float`` amount is a compile-time error.
 
-.. class:: FractionalContainer(initial=0.0, *, decimals=3, digits=13, strict=False)
+.. class:: FractionalContainer(initial=0.0, *, capacity=inf, decimals=6)
 
-   A fixed-point decimal level with ``decimals`` places and unlimited
-   capacity apart from ``digits``. Each trial starts with ``initial`` (a
-   finite nonnegative number). ``decimals``
-   is an ``int`` from 0 to ``digits``; ``digits`` is from 1 to 18. Amounts
-   are rounded half away from zero to ``decimals`` places, or rejected when
-   ``strict``.
+   A level with ``float`` amounts, kept in fixed point with ``decimals``
+   decimal places (an ``int`` from 0 to 12). Each trial starts with
+   ``initial``, a finite nonnegative number no greater than ``capacity``.
 
-   .. method:: put(amount)
+   .. method:: put(amount) -> float
    .. method:: get(amount) -> float
 
-      Add or remove ``amount``. ``get`` takes what is present and blocks until
-      the rest arrives, then returns the amount obtained: the rounded request,
-      or less if the wait was interrupted. Amounts must be finite and
-      nonnegative.
-
-   .. method:: round(amount) -> float
-
-      ``amount`` rounded half away from zero to ``decimals`` places.
+      Add or remove ``amount``, rounded half away from zero to ``decimals``
+      places. ``put`` fills
+      to ``capacity`` and blocks until there is room for the rest; ``get``
+      takes what is present and blocks until the rest arrives. Both return
+      the amount moved: the rounded ``amount``, or less if the wait was
+      interrupted. Amounts must be finite and nonnegative, and an unlimited
+      level must stay below 2\ :sup:`64` quanta.
 
    .. method:: level()
    .. method:: mean_level()

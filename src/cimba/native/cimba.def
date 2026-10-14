@@ -122,9 +122,9 @@ EXPORTS
     cpy_buffer_space
     cpy_fractional_put
     cpy_fractional_get
-    cpy_fractional_round
     cpy_fractional_level
-    cpy_fractional_history
+    cpy_fractional_mean_level
+    cpy_fractional_max_level
     cmb_resource_create
     cmb_resource_initialize
     cmb_resource_terminate

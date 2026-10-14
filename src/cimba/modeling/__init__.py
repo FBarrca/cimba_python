@@ -3,15 +3,26 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import ROUND_HALF_UP, Decimal
 from itertools import count
-from math import inf, isfinite
-from numbers import Real
+from math import inf, isfinite, isnan
+from numbers import Integral, Real
 from types import UnionType
 from typing import Any, Generic, TypeVar, Union, cast, get_args, get_origin, get_type_hints
 
 T = TypeVar("T")
 M = TypeVar("M", bound="Model")
+
+# A FractionalContainer counts quanta in a uint64; its largest value means unlimited.
+FRACTIONAL_UNLIMITED = 2**64 - 1
+
+
+def fractional_quanta(amount: float, decimals: int) -> int:
+    """``amount`` in quanta of ``10**-decimals``, rounded half away from zero
+    as the native level rounds every amount."""
+    scaled = float(amount) * 10 ** decimals
+    whole = int(scaled)
+    return whole + (scaled - whole >= 0.5)
+
 _axis_ids = count()
 
 
@@ -120,59 +131,42 @@ class Container(Entity):
         raise NotInCompiledCode("Container.level() requires compiled model code")
 
 
-def _decimal_steps(amount: float, decimals: int) -> tuple[int, bool]:
-    """Steps of ``10**-decimals`` in ``amount``, rounded half away from zero.
-
-    Rounds the shortest decimal that reads back as the same float, as the
-    native level does, so ``2.675`` rounds to 2.68 at 2 decimals. Returns the
-    steps and whether rounding changed the amount.
-    """
-    exact = Decimal(repr(float(amount))).scaleb(decimals)
-    steps = exact.quantize(Decimal(1), rounding=ROUND_HALF_UP)
-    return int(steps), steps != exact
-
-
 class FractionalContainer(Entity):
-    """A fixed-point decimal level. ``initial`` is present when each trial starts.
+    """A level with fractional amounts, such as kilograms of flour in a silo.
 
-    The level is an exact decimal with ``decimals`` places and at most
-    ``digits`` digits. Amounts are rounded half away from zero to
-    ``decimals`` places, or rejected when ``strict``, and the level
-    arithmetic is exact.
+    The level is kept in fixed point with ``decimals`` decimal places. Amounts
+    are rounded half away from zero to that many places once, and every put
+    and get after that is exact, so the level never drifts from what was put
+    in minus what was taken out. ``initial`` is present when each trial
+    starts, and ``put`` waits while the level is at ``capacity``.
     """
 
-    def __init__(self, initial: float = 0.0, *, decimals: int = 3, digits: int = 13,
-                 strict: bool = False):
+    def __init__(self, initial: float = 0.0, *, capacity: float = inf, decimals: int = 6):
+        if isinstance(decimals, bool) or not isinstance(decimals, Integral) or \
+                not 0 <= decimals <= 12:
+            raise ValueError("FractionalContainer.decimals must be an int from 0 to 12")
         if isinstance(initial, bool) or not isinstance(initial, Real) or \
                 not isfinite(initial) or initial < 0:
             raise ValueError("FractionalContainer.initial must be a finite nonnegative number")
-        if isinstance(digits, bool) or not isinstance(digits, int) or not 1 <= digits <= 18:
-            raise ValueError("FractionalContainer.digits must be an int from 1 to 18")
-        if isinstance(decimals, bool) or not isinstance(decimals, int) or \
-                not 0 <= decimals <= digits:
-            raise ValueError("FractionalContainer.decimals must be an int from 0 to digits")
-        steps, rounded = _decimal_steps(initial, decimals)
-        if rounded and strict:
-            raise ValueError(f"FractionalContainer.initial {initial!r} has too many decimals; "
-                             f"only {decimals} decimal(s) permitted")
-        if steps > 10 ** digits - 1:
-            raise ValueError(f"FractionalContainer.initial {initial!r} exceeds "
-                             f"{digits} digit(s)")
+        if isinstance(capacity, bool) or not isinstance(capacity, Real) or \
+                isnan(capacity) or capacity <= 0:
+            raise ValueError("FractionalContainer.capacity must be a positive number or inf")
+        limit = inf if capacity == inf else fractional_quanta(capacity, decimals)
+        if limit != inf and not 0 < limit < FRACTIONAL_UNLIMITED:
+            raise ValueError(f"FractionalContainer.capacity must be at least 1e-{decimals} "
+                             f"and below {FRACTIONAL_UNLIMITED / 10 ** decimals:g}")
+        if fractional_quanta(initial, decimals) > min(limit, FRACTIONAL_UNLIMITED):
+            raise ValueError("FractionalContainer.initial must not exceed capacity")
         super().__init__()
-        self.decimals = decimals
-        self.digits = digits
-        self.strict = strict
         self.initial = float(initial)
-        self.initial_steps = steps
+        self.capacity = float(capacity)
+        self.decimals = int(decimals)
 
-    def put(self, amount: float) -> None:
+    def put(self, amount: float) -> float:
         raise NotInCompiledCode("FractionalContainer.put() requires compiled model code")
 
     def get(self, amount: float) -> float:
         raise NotInCompiledCode("FractionalContainer.get() requires compiled model code")
-
-    def round(self, amount: float) -> float:
-        raise NotInCompiledCode("FractionalContainer.round() requires compiled model code")
 
     def mean_level(self) -> float:
         raise NotInCompiledCode("FractionalContainer.mean_level() requires compiled model code")

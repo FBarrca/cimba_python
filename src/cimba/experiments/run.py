@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import ceil, isfinite
+from math import ceil, inf, isfinite
 from time import monotonic
 from types import MappingProxyType
 from typing import Any, cast, get_origin
@@ -24,8 +24,8 @@ from cimba.inputs.sources import (
 )
 from cimba.layout import TrialImageLayout
 from cimba.modeling import (
-    Condition, Container, Dataset, FractionalContainer, Model, PriorityStore, Resource, Store,
-    Sweep,
+    FRACTIONAL_UNLIMITED, Condition, Container, Dataset, FractionalContainer, Model,
+    PriorityStore, Resource, Store, Sweep, fractional_quanta,
 )
 from cimba.results import InputRecord, InstanceResults, Results, RunMeta, Samples, Signal
 from cimba.schema import Assembly, ModelDefinitionError
@@ -206,15 +206,20 @@ class Experiment:
                 label = f"{instance.label}.{field.name}"
                 if field.kind == "entity":
                     entity = instance.values[field.name]
-                    initial = 0
+                    initial, scale = 0, 0.0
                     if field.value_type is Container:
                         kind, capacity = 1, 1_000_000_000
                         initial = entity.initial
                     elif field.value_type is FractionalContainer:
-                        kind = 7
-                        capacity = (entity.decimals | entity.digits << 8 |
-                                    int(entity.strict) << 16)
-                        initial = entity.initial_steps
+                        # Fixed point: the native level counts 1/scale units
+                        kind, scale = 7, float(10 ** entity.decimals)
+                        initial = fractional_quanta(entity.initial, entity.decimals)
+                        capacity = FRACTIONAL_UNLIMITED if entity.capacity == inf \
+                            else fractional_quanta(entity.capacity, entity.decimals)
+                        # Rechecked: the attributes may have changed since construction
+                        if not 0 < capacity or initial > capacity:
+                            raise ExperimentConfigError(
+                                f"{label}: capacity must be positive and at least initial")
                     elif field.value_type is Resource:
                         kind, capacity = 2, entity.capacity
                     elif field.value_type is Dataset:
@@ -229,7 +234,7 @@ class Experiment:
                         raise ExperimentConfigError(f"{label}: native handle not implemented")
                     entities.append((placement.offset, offset, kind,
                                      int(entity.captured),
-                                     capacity, initial, 0.0,
+                                     capacity, initial, scale,
                                      _native_name(label)))
                 elif field.kind in {"input", "series"}:
                     inputs.append((placement.offset, offset,

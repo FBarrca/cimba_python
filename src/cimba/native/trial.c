@@ -333,10 +333,8 @@ static void record_start(void *subject, void *object)
     resources->recording_started = 1;
     for (uint64_t i = 0; i < resources->descriptor->entity_count; ++i) {
         const uint32_t kind = resources->descriptor->entities[i].kind;
-        if (kind == CPY_ENTITY_CONTAINER)
+        if (kind == CPY_ENTITY_CONTAINER || kind == CPY_ENTITY_FRACTIONAL)
             cmb_buffer_recording_start(resources->entities[i]);
-        else if (kind == CPY_ENTITY_FRACTIONAL)
-            cpy_fractional_recording_start(resources->entities[i]);
         else if (kind == CPY_ENTITY_RESOURCE)
             cmb_resourcepool_start_recording(resources->entities[i]);
         else if (kind == CPY_ENTITY_DATASET)
@@ -356,10 +354,8 @@ static void record_stop(void *subject, void *object)
     resources->recording_stopped = 1;
     for (uint64_t i = 0; i < resources->descriptor->entity_count; ++i) {
         const uint32_t kind = resources->descriptor->entities[i].kind;
-        if (kind == CPY_ENTITY_CONTAINER)
+        if (kind == CPY_ENTITY_CONTAINER || kind == CPY_ENTITY_FRACTIONAL)
             cmb_buffer_recording_stop(resources->entities[i]);
-        else if (kind == CPY_ENTITY_FRACTIONAL)
-            cpy_fractional_recording_stop(resources->entities[i]);
         else if (kind == CPY_ENTITY_RESOURCE)
             cmb_resourcepool_stop_recording(resources->entities[i]);
         else if (kind == CPY_ENTITY_STORE)
@@ -420,10 +416,8 @@ static void copy_captures(trial_resources *resources)
         if (!descriptor->entities[i].reserved) continue;
         const struct cmb_dataset *dataset = NULL;
         const struct cmb_timeseries *history = NULL;
-        if (kind == CPY_ENTITY_CONTAINER)
+        if (kind == CPY_ENTITY_CONTAINER || kind == CPY_ENTITY_FRACTIONAL)
             history = cmb_buffer_history(resources->entities[i]);
-        else if (kind == CPY_ENTITY_FRACTIONAL)
-            history = cpy_fractional_history(resources->entities[i]);
         else if (kind == CPY_ENTITY_RESOURCE)
             history = cmb_resourcepool_get_history(resources->entities[i]);
         else if (kind == CPY_ENTITY_STORE)
@@ -440,6 +434,11 @@ static void copy_captures(trial_resources *resources)
         capture[i].value = malloc(bytes);
         if (capture[i].value == NULL) cimba_trial_abandon();
         memcpy(capture[i].value, dataset->xa, bytes);
+        if (kind == CPY_ENTITY_FRACTIONAL) {
+            /* The history counts quanta; report it in units */
+            for (uint64_t j = 0; j < dataset->count; ++j)
+                capture[i].value[j] /= descriptor->entities[i].scale;
+        }
         if (history != NULL) {
             capture[i].time = malloc(bytes);
             if (capture[i].time == NULL) cimba_trial_abandon();
@@ -484,7 +483,11 @@ static void run_trial(void *block)
         } else if (item->kind == CPY_ENTITY_FRACTIONAL) {
             struct cpy_fractional *container = cpy_fractional_create();
             cpy_fractional_initialize(container, item->name, item->capacity,
-                                      item->initial);
+                                      item->scale);
+            if (item->initial) {
+                uint64_t amount = item->initial;
+                cmb_buffer_put(&(container->buffer), &amount);
+            }
             entity = container;
         } else if (item->kind == CPY_ENTITY_RESOURCE) {
             struct cmb_resourcepool *resource = cmb_resourcepool_create();

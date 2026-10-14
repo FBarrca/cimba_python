@@ -65,43 +65,39 @@ FractionalContainer
 
 A level of a divisible quantity, with the same methods as ``Container`` but
 ``float`` amounts: ``put(0.75)``, ``get(1.2)``, and a ``float`` ``level()``.
+It starts empty or with ``FractionalContainer(initial=x)``, and holds at most
+``capacity`` (unlimited by default):
 
 .. code-block:: python
 
-   tank: cb.FractionalContainer = cb.FractionalContainer(initial=0.5)
-
-The level is a fixed-point decimal: an exact count of ``10**-decimals``
-steps, ``digits`` digits wide. The default ``decimals=3, digits=13`` holds up
-to 9,999,999,999.999. ``digits`` can be at most 18.
-
-Each amount is rounded once, half away from zero, to ``decimals`` places, and
-the level arithmetic after that is exact: ``put(0.3)`` followed by three
-``get(0.1)`` leaves exactly 0. Rounding uses the decimal Python prints for the
-float, so ``2.675`` rounds to 2.68 at 2 decimals. ``put(0.0004)`` at 3
-decimals adds nothing: choose ``decimals`` for your smallest flow.
+   silo: cb.FractionalContainer = cb.FractionalContainer(initial=12_000.0,
+                                                         capacity=30_000.0)
 
 ``get(x)`` behaves as it does on a ``Container``: it takes what is there and
 waits for the rest, so ``get(5.0)`` with 3.0 present takes the 3.0 and blocks
-until 2.0 more has been put. Getters are served in priority order, then first
-come, first served. ``get`` returns the amount obtained, which is the rounded
-request unless the wait was interrupted; an interrupted ``get`` keeps and
-returns what it already took. Capacity is unlimited apart from ``digits``,
-so ``put`` never blocks.
+until 2.0 more has been put. ``put(x)`` is the mirror image: it fills the
+container to ``capacity`` and waits for room for the rest. Waiting processes
+are served in priority order, then first come, first served.
 
-``round(x)`` returns the amount ``x`` would become.
+The level is kept in fixed point, with ``decimals`` decimal places (6 by
+default, so milligrams when the unit is a kilogram). Each amount is rounded
+to that many places once, half away from zero, as it goes in or out; the level
+itself is never rounded. So the books always balance exactly: the level is the initial level
+plus everything put in minus everything taken out. ``put(0.3)`` followed by
+three ``get(0.1)`` calls leaves exactly ``0.0``, and ten thousand ``get(0.1)``
+calls drain a ``put(1000.0)`` to exactly ``0.0``, where plain ``float``
+arithmetic would leave a residue or wait for one that is missing.
 
-These fail the trial with a message naming the container:
+``put`` and ``get`` return the amount actually added or obtained. This is the
+amount rounded to ``decimals`` places, or less if the wait was interrupted:
+an interrupted ``put`` or ``get`` keeps what it already moved. Add up these
+return values to keep running totals that match the level.
 
-* a negative, NaN or infinite amount;
-* an amount or level past ``digits``;
-* with ``strict=True``, an amount with more decimals than allowed, e.g.
-  ``tank: 0.5 has too many decimals; only 0 decimal(s) permitted``. Use
-  ``strict=True`` for counted units such as pieces, and ``round(x)`` to bring
-  computed amounts to precision before passing them.
-
-``level()``, ``mean_level()``, ``max_level()`` and captured histories are
-``float``. Past about 15 significant digits they lose digits, but they only
-report the level and never change it.
+Amounts must be finite and nonnegative; anything else fails the trial, with
+a reason such as ``plant.silo: put(-1) is not a finite nonnegative amount``.
+The level can count up to 2\ :sup:`64` quanta, about 1.8e13 units with 6
+decimals; reaching that fails the trial. Use fewer ``decimals`` if you need
+larger levels, or more (up to 12) for finer amounts.
 
 Store and PriorityStore
 -----------------------

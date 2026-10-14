@@ -1,19 +1,20 @@
 # Unreleased
 
-- **Breaking:** `FractionalContainer` keeps an exact fixed-point level with
-  `decimals` places (default 3) and at most `digits` digits (default 13).
-  Amounts are rounded half away from zero to `decimals` places and the level
-  arithmetic is exact, so a `get` never waits on rounding drift. The float level and its tolerance are removed: amounts
-  finer than `decimals` are now rounded, and `put(0.0004)` at the default
-  precision adds nothing. Pass `decimals=` for finer amounts.
-- `digits` (at most 18) sets the maximum; going past it fails the trial.
-  `strict=True` fails the trial on amounts with too many decimals instead of
-  rounding them.
-- Add `FractionalContainer.round()`.
-- Correction to 0.7.6: its tolerance did not absorb all rounding error. It
-  followed the current level, so drift made at a larger level could still
-  make a `get` wait: after `put(100_000_000)`, `put(0.3)` and
-  `get(100_000_000)`, a `get(0.3)` waited. The fixed-point level fixes this.
+- **Breaking:** `FractionalContainer` keeps its level in fixed point, with
+  `decimals` decimal places (default 6). Amounts are rounded half away from
+  zero to that many places once, and every put and get after that is exact,
+  so the level always equals the initial level plus everything put in minus
+  everything taken out. This replaces the 0.7.6 tolerance, which let a `get`
+  through with up to a billionth less than requested, and could still wait on
+  drift made at a larger level: after `put(100_000_000)`, `put(0.3)` and
+  `get(100_000_000)`, a `get(0.3)` waited forever.
+- `FractionalContainer` takes a `capacity`: `put` fills to it and waits for
+  room for the rest, as on a `Container`. The default is unlimited.
+- `FractionalContainer.put()` returns the amount added, as `get()` returns
+  the amount obtained.
+- A bad `FractionalContainer` amount fails the trial with a reason naming the
+  container, such as `plant.silo: put(-1) is not a finite nonnegative amount`.
+- The native ABI version is now 4.
 
 # Cimba Python 0.7.6
 

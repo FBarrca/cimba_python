@@ -26,11 +26,9 @@ from .views import (
 
 for _name in ("cmb_process_hold", "cmb_time", "cpy_buffer_put",
               "cpy_buffer_get", "cpy_buffer_mean_level", "cpy_buffer_level",
-              "cpy_buffer_history", "cpy_timeseries_max", "cpy_timeseries_mean",
-              "cimba_trial_abandon",
-              "cpy_fractional_put", "cpy_fractional_get",
-              "cpy_fractional_round",
-              "cpy_fractional_level", "cpy_fractional_history",
+              "cpy_buffer_history", "cpy_timeseries_max", "cimba_trial_abandon",
+              "cpy_fractional_put", "cpy_fractional_get", "cpy_fractional_level",
+              "cpy_fractional_mean_level", "cpy_fractional_max_level",
               "cmb_resourcepool_acquire", "cmb_resourcepool_preempt",
               "cmb_resourcepool_held", "cmb_resourcepool_release",
               "cpy_resourcepool_available",
@@ -69,17 +67,17 @@ _native_container_level = types.ExternalFunction(
 _native_container_history = types.ExternalFunction(
     "cpy_buffer_history", types.intp(types.intp))
 _native_fractional_put = types.ExternalFunction(
-    "cpy_fractional_put", types.int64(types.intp, types.float64))
-_native_fractional_round = types.ExternalFunction(
-    "cpy_fractional_round", types.float64(types.intp, types.float64))
+    "cpy_fractional_put", types.float64(types.intp, types.float64))
+_native_fractional_get = types.ExternalFunction(
+    "cpy_fractional_get", types.float64(types.intp, types.float64))
 _native_fractional_level = types.ExternalFunction(
     "cpy_fractional_level", types.float64(types.intp))
-_native_fractional_history = types.ExternalFunction(
-    "cpy_fractional_history", types.intp(types.intp))
+_native_fractional_mean = types.ExternalFunction(
+    "cpy_fractional_mean_level", types.float64(types.intp))
+_native_fractional_max = types.ExternalFunction(
+    "cpy_fractional_max_level", types.float64(types.intp))
 _native_timeseries_max = types.ExternalFunction(
     "cpy_timeseries_max", types.float64(types.intp))
-_native_timeseries_mean = types.ExternalFunction(
-    "cpy_timeseries_mean", types.float64(types.intp))
 _native_abandon = types.ExternalFunction("cimba_trial_abandon", types.void())
 _native_resource_acquire = types.ExternalFunction(
     "cmb_resourcepool_acquire", types.int64(types.intp, types.uint64))
@@ -234,28 +232,6 @@ def record_address(typing_context, value):
 
 
 @intrinsic
-def native_fractional_get(typing_context, handle, amount):
-    """Call cpy_fractional_get(handle, &amount), returning the amount
-    actually obtained. The native call takes a pointer: *amntp carries the
-    request in and the obtained amount out."""
-    if not isinstance(handle, types.Integer) or not isinstance(amount, types.Float):
-        raise TypeError("fractional get requires a handle and a float amount")
-    register("cpy_fractional_get")
-
-    def codegen(context, builder, signature, arguments):
-        double = ir.DoubleType()
-        slot = cgutils.alloca_once_value(builder, arguments[1])
-        fnty = ir.FunctionType(ir.IntType(64),
-                               [context.get_value_type(types.intp), double.as_pointer()])
-        fn = cgutils.get_or_insert_function(builder.module, fnty,
-                                            "cpy_fractional_get")
-        builder.call(fn, [arguments[0], slot])
-        return builder.load(slot)
-
-    return types.float64(handle, amount), codegen
-
-
-@intrinsic
 def native_input_next(typing_context, address):
     if not isinstance(address, types.Integer):
         raise TypeError("input address must be an integer")
@@ -303,7 +279,6 @@ def native_series_now(typing_context, address):
 
 # Numba intrinsics are invoked with compiled arguments, not their Python
 # typing-function signatures exposed by static analysis.
-_native_fractional_get = type_cast(Any, native_fractional_get)
 _input_next_draw = type_cast(Any, native_input_next)
 _series_at_draw = type_cast(Any, native_series_at)
 _series_now_draw = type_cast(Any, native_series_now)
@@ -628,7 +603,7 @@ def queue_put(record, value, priority=0):
         return implementation
     if _fractional_handle(record):
         def implementation(record, value, priority=0):
-            _native_fractional_put(record.fractional_handle, float(value))
+            return _native_fractional_put(record.fractional_handle, float(value))
         return implementation
     if "store_int_handle" in record.fields:
         def implementation(record, value, priority=0):
@@ -757,14 +732,6 @@ def queue_get(record, amount=0):
         return get_priority_model
 
 
-@_record_method("round", _fractional_handle)
-def fractional_round(record, amount):
-    if _fractional_handle(record):
-        def implementation(record, amount):
-            return _native_fractional_round(record.fractional_handle, float(amount))
-        return implementation
-
-
 @_record_method("mean_level", _level_handle)
 def container_mean_level(record):
     if _container_handle(record):
@@ -773,8 +740,7 @@ def container_mean_level(record):
         return implementation
     if _fractional_handle(record):
         def implementation(record):
-            return _native_timeseries_mean(
-                _native_fractional_history(record.fractional_handle))
+            return _native_fractional_mean(record.fractional_handle)
         return implementation
 
 
@@ -787,8 +753,7 @@ def container_max_level(record):
         return implementation
     if _fractional_handle(record):
         def implementation(record):
-            return _native_timeseries_max(
-                _native_fractional_history(record.fractional_handle))
+            return _native_fractional_max(record.fractional_handle)
         return implementation
 
 

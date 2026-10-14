@@ -10,7 +10,7 @@
 #define CPY_EXPORT __attribute__((visibility("default")))
 #endif
 
-enum { CPY_ABI_VERSION = 3 };
+enum { CPY_ABI_VERSION = 4 };
 enum { CPY_INPUT_DISTRIBUTION = 1, CPY_INPUT_ROWS = 2, CPY_INPUT_EMPTY = 3 };
 enum { CPY_POLICY_FAIL = 1, CPY_POLICY_WRAP = 2,
        CPY_POLICY_END_TRIAL = 3, CPY_POLICY_EXTEND = 4 };
@@ -66,9 +66,9 @@ typedef struct cpy_entity_descriptor {
     uint64_t field_offset;
     uint32_t kind;
     uint32_t reserved;
-    uint64_t capacity;         /* FractionalContainer: decimals | digits << 8 | strict << 16 */
-    uint64_t initial;          /* initial level: Container units, FractionalContainer steps */
-    double initial_amount;     /* unused, kept for the ABI 3 layout */
+    uint64_t capacity;
+    uint64_t initial;          /* initial level; quanta for a FractionalContainer */
+    double scale;              /* quanta per unit of a FractionalContainer */
     char name[32];
 } cpy_entity_descriptor;
 
