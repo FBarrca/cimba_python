@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import ROUND_HALF_UP, Decimal
 from itertools import count
 from math import inf, isfinite
 from numbers import Real
@@ -119,21 +120,59 @@ class Container(Entity):
         raise NotInCompiledCode("Container.level() requires compiled model code")
 
 
-class FractionalContainer(Entity):
-    """A level with fractional amounts. ``initial`` is present when each trial starts."""
+def _decimal_steps(amount: float, decimals: int) -> tuple[int, bool]:
+    """Steps of ``10**-decimals`` in ``amount``, rounded half away from zero.
 
-    def __init__(self, initial: float = 0.0):
+    Rounds the shortest decimal that reads back as the same float, as the
+    native level does, so ``2.675`` rounds to 2.68 at 2 decimals. Returns the
+    steps and whether rounding changed the amount.
+    """
+    exact = Decimal(repr(float(amount))).scaleb(decimals)
+    steps = exact.quantize(Decimal(1), rounding=ROUND_HALF_UP)
+    return int(steps), steps != exact
+
+
+class FractionalContainer(Entity):
+    """A fixed-point decimal level. ``initial`` is present when each trial starts.
+
+    The level is an exact decimal with ``decimals`` places and at most
+    ``digits`` digits. Amounts are rounded half away from zero to
+    ``decimals`` places, or rejected when ``strict``, and the level
+    arithmetic is exact.
+    """
+
+    def __init__(self, initial: float = 0.0, *, decimals: int = 3, digits: int = 13,
+                 strict: bool = False):
         if isinstance(initial, bool) or not isinstance(initial, Real) or \
                 not isfinite(initial) or initial < 0:
             raise ValueError("FractionalContainer.initial must be a finite nonnegative number")
+        if isinstance(digits, bool) or not isinstance(digits, int) or not 1 <= digits <= 18:
+            raise ValueError("FractionalContainer.digits must be an int from 1 to 18")
+        if isinstance(decimals, bool) or not isinstance(decimals, int) or \
+                not 0 <= decimals <= digits:
+            raise ValueError("FractionalContainer.decimals must be an int from 0 to digits")
+        steps, rounded = _decimal_steps(initial, decimals)
+        if rounded and strict:
+            raise ValueError(f"FractionalContainer.initial {initial!r} has too many decimals; "
+                             f"only {decimals} decimal(s) permitted")
+        if steps > 10 ** digits - 1:
+            raise ValueError(f"FractionalContainer.initial {initial!r} exceeds "
+                             f"{digits} digit(s)")
         super().__init__()
+        self.decimals = decimals
+        self.digits = digits
+        self.strict = strict
         self.initial = float(initial)
+        self.initial_steps = steps
 
     def put(self, amount: float) -> None:
         raise NotInCompiledCode("FractionalContainer.put() requires compiled model code")
 
     def get(self, amount: float) -> float:
         raise NotInCompiledCode("FractionalContainer.get() requires compiled model code")
+
+    def round(self, amount: float) -> float:
+        raise NotInCompiledCode("FractionalContainer.round() requires compiled model code")
 
     def mean_level(self) -> float:
         raise NotInCompiledCode("FractionalContainer.mean_level() requires compiled model code")

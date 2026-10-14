@@ -66,9 +66,9 @@ typedef struct cpy_entity_descriptor {
     uint64_t field_offset;
     uint32_t kind;
     uint32_t reserved;
-    uint64_t capacity;
-    uint64_t initial;          /* initial level of a Container */
-    double initial_amount;     /* initial level of a FractionalContainer */
+    uint64_t capacity;         /* FractionalContainer: decimals | digits << 8 | strict << 16 */
+    uint64_t initial;          /* initial level: Container units, FractionalContainer steps */
+    double initial_amount;     /* unused, kept for the ABI 3 layout */
     char name[32];
 } cpy_entity_descriptor;
 

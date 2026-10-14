@@ -1,3 +1,20 @@
+# Unreleased
+
+- **Breaking:** `FractionalContainer` keeps an exact fixed-point level with
+  `decimals` places (default 3) and at most `digits` digits (default 13).
+  Amounts are rounded half away from zero to `decimals` places and the level
+  arithmetic is exact, so a `get` never waits on rounding drift. The float level and its tolerance are removed: amounts
+  finer than `decimals` are now rounded, and `put(0.0004)` at the default
+  precision adds nothing. Pass `decimals=` for finer amounts.
+- `digits` (at most 18) sets the maximum; going past it fails the trial.
+  `strict=True` fails the trial on amounts with too many decimals instead of
+  rounding them.
+- Add `FractionalContainer.round()`.
+- Correction to 0.7.6: its tolerance did not absorb all rounding error. It
+  followed the current level, so drift made at a larger level could still
+  make a `get` wait: after `put(100_000_000)`, `put(0.3)` and
+  `get(100_000_000)`, a `get(0.3)` waited. The fixed-point level fixes this.
+
 # Cimba Python 0.7.6
 
 Released 2026-10-13.

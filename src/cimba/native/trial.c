@@ -248,6 +248,8 @@ static void free_spawned_nodes(trial_resources *resources, int normal)
 
 static void inspect_inputs(trial_resources *resources)
 {
+    /* Read first: reading also clears it for this thread's next trial */
+    const char *reason = cpy_fractional_failure();
     cpy_trial_header *header = resources->header;
     const cpy_trial_descriptor *descriptor = resources->descriptor;
     for (uint64_t i = 0; i < descriptor->input_count; ++i) {
@@ -291,7 +293,8 @@ static void inspect_inputs(trial_resources *resources)
         }
     }
     header->status = CPY_TRIAL_FAILED;
-    snprintf(header->error, sizeof(header->error), "native trial aborted");
+    snprintf(header->error, sizeof(header->error), "%s",
+             reason != NULL ? reason : "native trial aborted");
 }
 
 static void release_inputs(trial_resources *resources)
@@ -480,8 +483,8 @@ static void run_trial(void *block)
             entity = container;
         } else if (item->kind == CPY_ENTITY_FRACTIONAL) {
             struct cpy_fractional *container = cpy_fractional_create();
-            cpy_fractional_initialize(container, item->name);
-            container->level = item->initial_amount;
+            cpy_fractional_initialize(container, item->name, item->capacity,
+                                      item->initial);
             entity = container;
         } else if (item->kind == CPY_ENTITY_RESOURCE) {
             struct cmb_resourcepool *resource = cmb_resourcepool_create();

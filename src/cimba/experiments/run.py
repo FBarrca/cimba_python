@@ -206,13 +206,15 @@ class Experiment:
                 label = f"{instance.label}.{field.name}"
                 if field.kind == "entity":
                     entity = instance.values[field.name]
-                    initial, initial_amount = 0, 0.0
+                    initial = 0
                     if field.value_type is Container:
                         kind, capacity = 1, 1_000_000_000
                         initial = entity.initial
                     elif field.value_type is FractionalContainer:
-                        kind, capacity = 7, 0
-                        initial_amount = entity.initial
+                        kind = 7
+                        capacity = (entity.decimals | entity.digits << 8 |
+                                    int(entity.strict) << 16)
+                        initial = entity.initial_steps
                     elif field.value_type is Resource:
                         kind, capacity = 2, entity.capacity
                     elif field.value_type is Dataset:
@@ -227,7 +229,7 @@ class Experiment:
                         raise ExperimentConfigError(f"{label}: native handle not implemented")
                     entities.append((placement.offset, offset, kind,
                                      int(entity.captured),
-                                     capacity, initial, initial_amount,
+                                     capacity, initial, 0.0,
                                      _native_name(label)))
                 elif field.kind in {"input", "series"}:
                     inputs.append((placement.offset, offset,

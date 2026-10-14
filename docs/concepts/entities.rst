@@ -65,35 +65,43 @@ FractionalContainer
 
 A level of a divisible quantity, with the same methods as ``Container`` but
 ``float`` amounts: ``put(0.75)``, ``get(1.2)``, and a ``float`` ``level()``.
-It starts empty or with ``FractionalContainer(initial=x)``.
+
+.. code-block:: python
+
+   tank: cb.FractionalContainer = cb.FractionalContainer(initial=0.5)
+
+The level is a fixed-point decimal: an exact count of ``10**-decimals``
+steps, ``digits`` digits wide. The default ``decimals=3, digits=13`` holds up
+to 9,999,999,999.999. ``digits`` can be at most 18.
+
+Each amount is rounded once, half away from zero, to ``decimals`` places, and
+the level arithmetic after that is exact: ``put(0.3)`` followed by three
+``get(0.1)`` leaves exactly 0. Rounding uses the decimal Python prints for the
+float, so ``2.675`` rounds to 2.68 at 2 decimals. ``put(0.0004)`` at 3
+decimals adds nothing: choose ``decimals`` for your smallest flow.
 
 ``get(x)`` behaves as it does on a ``Container``: it takes what is there and
 waits for the rest, so ``get(5.0)`` with 3.0 present takes the 3.0 and blocks
 until 2.0 more has been put. Getters are served in priority order, then first
-come, first served. ``get`` returns the amount actually obtained, which can
-be less than ``x`` (see below); an interrupted ``get`` keeps what it already
-took and that amount is what it returns. Capacity is unlimited, so ``put``
-never blocks.
+come, first served. ``get`` returns the amount obtained, which is the rounded
+request unless the wait was interrupted; an interrupted ``get`` keeps and
+returns what it already took. Capacity is unlimited apart from ``digits``,
+so ``put`` never blocks.
 
-Amounts must be finite and nonnegative; anything else fails the trial.
-Arithmetic is ordinary floating point, so ``put(0.3)`` followed by two
-``get(0.1)`` calls leaves the level at ``0.09999999999999998``, not exactly
-``0.1``. A ``get`` is satisfied once the level is within a small tolerance of
-the amount requested (the same tolerance as :func:`math.isclose`'s defaults,
-with a tiny absolute floor near zero), so a third ``get(0.1)`` here succeeds
-immediately rather than waiting for a gap that is only rounding error. A real
-shortfall, however small, still waits: the tolerance only absorbs the error
-that floating-point arithmetic itself introduces, not a difference the model
-created.
+``round(x)`` returns the amount ``x`` would become.
 
-When tolerance lets a ``get`` through early, it still only removes what is
-actually present, which can be a hair less than requested — the level never
-goes negative to make up the difference. Check the returned amount against
-what you asked for if your model needs to know: ``got = tank.get(x); if got
-< x: ...``. This matters most at large magnitudes, where the tolerance (and
-ordinary floating-point rounding) scale up together: a ``get(1_000_000.0)``
-against a level of ``999999.9999`` succeeds and returns that smaller amount,
-not ``1_000_000.0``.
+These fail the trial with a message naming the container:
+
+* a negative, NaN or infinite amount;
+* an amount or level past ``digits``;
+* with ``strict=True``, an amount with more decimals than allowed, e.g.
+  ``tank: 0.5 has too many decimals; only 0 decimal(s) permitted``. Use
+  ``strict=True`` for counted units such as pieces, and ``round(x)`` to bring
+  computed amounts to precision before passing them.
+
+``level()``, ``mean_level()``, ``max_level()`` and captured histories are
+``float``. Past about 15 significant digits they lose digits, but they only
+report the level and never change it.
 
 Store and PriorityStore
 -----------------------

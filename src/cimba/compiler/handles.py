@@ -29,6 +29,7 @@ for _name in ("cmb_process_hold", "cmb_time", "cpy_buffer_put",
               "cpy_buffer_history", "cpy_timeseries_max", "cpy_timeseries_mean",
               "cimba_trial_abandon",
               "cpy_fractional_put", "cpy_fractional_get",
+              "cpy_fractional_round",
               "cpy_fractional_level", "cpy_fractional_history",
               "cmb_resourcepool_acquire", "cmb_resourcepool_preempt",
               "cmb_resourcepool_held", "cmb_resourcepool_release",
@@ -69,6 +70,8 @@ _native_container_history = types.ExternalFunction(
     "cpy_buffer_history", types.intp(types.intp))
 _native_fractional_put = types.ExternalFunction(
     "cpy_fractional_put", types.int64(types.intp, types.float64))
+_native_fractional_round = types.ExternalFunction(
+    "cpy_fractional_round", types.float64(types.intp, types.float64))
 _native_fractional_level = types.ExternalFunction(
     "cpy_fractional_level", types.float64(types.intp))
 _native_fractional_history = types.ExternalFunction(
@@ -752,6 +755,14 @@ def queue_get(record, amount=0):
         def get_priority_model(record, amount=0):
             return carray(cast(_priority_get_model(record.priority_model_handle)), 1)[0]
         return get_priority_model
+
+
+@_record_method("round", _fractional_handle)
+def fractional_round(record, amount):
+    if _fractional_handle(record):
+        def implementation(record, amount):
+            return _native_fractional_round(record.fractional_handle, float(amount))
+        return implementation
 
 
 @_record_method("mean_level", _level_handle)
