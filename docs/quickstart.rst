@@ -8,7 +8,7 @@ properly, so you can skim now and dig in later.
 1. Install
 ----------
 
-Cimba Python needs Python 3.13 or newer. Wheels for Linux x86_64, Windows
+Cimba Python needs Python 3.12 or newer. Wheels for Linux x86_64, Windows
 AMD64 and macOS arm64 contain the native engine, so there is nothing else to
 compile.
 

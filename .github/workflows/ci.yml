@@ -54,7 +54,7 @@ jobs:
           cp build/asan/libcimba_py.so build/asan-wheel-unpacked/cimba/libcimba_py.so
           ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 \
           LD_PRELOAD="$(gcc -print-file-name=libasan.so)" \
-          PYTHONPATH="$PWD/build/asan-wheel-unpacked:$PWD/.venv/lib/python3.13/site-packages" \
+          PYTHONPATH="$PWD/build/asan-wheel-unpacked:$PWD/.venv/lib/python3.12/site-packages" \
           .venv/bin/python -S -m pytest -q \
             tests/test_spawn_inputs.py tests/test_spawn.py \
             > build/asan-pytest.log 2>&1 || {
