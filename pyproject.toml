@@ -79,8 +79,10 @@ test-requires = "pytest>=8"
 test-command = "pytest {project}/tests"
 
 [tool.cibuildwheel.linux]
-archs = ["x86_64"]
-before-all = "command -v nasm || (dnf install -y nasm || yum install -y nasm || microdnf install -y nasm)"
+# Release CI builds x86_64 and aarch64 on native runners (no QEMU).
+archs = ["native"]
+# Only the x86-64 port's context switch is written in NASM.
+before-all = "[ \"$(uname -m)\" != x86_64 ] || command -v nasm || (dnf install -y nasm || yum install -y nasm || microdnf install -y nasm)"
 
 [tool.cibuildwheel.windows]
 archs = ["AMD64"]

@@ -25,6 +25,9 @@ Pre-built wheels are published for:
    * - Linux (manylinux)
      - x86_64
      -
+   * - Linux (manylinux)
+     - aarch64
+     -
    * - Windows
      - AMD64
      - built with clang-cl

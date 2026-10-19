@@ -157,6 +157,6 @@ Building
 
 ``meson.build`` compiles the engine submodule as a static library and links
 it with ``trial.c``, ``inputs.c``, ``verbs.c`` and ``nbshim.c`` into
-``libcimba_py``. Wheels are built with ``cibuildwheel`` for Linux x86_64,
-Windows AMD64 (clang-cl) and macOS arm64, with the library included in the
+``libcimba_py``. Wheels are built with ``cibuildwheel`` for Linux x86_64 and
+aarch64, Windows AMD64 (clang-cl) and macOS arm64, with the library included in the
 package directory where ``cimba.engine.library`` finds it.
