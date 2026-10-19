@@ -200,7 +200,8 @@ class Optimization:
             raise TypeError("progress must be callable")
         optimizer = optimizer or DifferentialEvolution()
         settings = optimizer.resolved(len(self.space.dimensions), self.replications, workers or cpu_count() or 1)
-        population_size = optimizer.population_size(len(self.space.dimensions), settings['popsize'])
+        population_size = optimizer.population_size(len(self.space.dimensions), settings)
+        generation_size = optimizer.generation_size(len(self.space.dimensions), settings)
         if evaluations is not None and evaluations < population_size:
             raise ExperimentConfigError(f"evaluations must cover the initial population ({population_size})")
         started = monotonic()
@@ -215,7 +216,7 @@ class Optimization:
 
         def evaluate(vectors):
             nonlocal generation, simulated, stopped
-            if generation >= 0 and remaining() < population_size:
+            if generation >= 0 and remaining() < generation_size:
                 stopped = 'budget'
                 raise SearchStopped()
             generation += 1
@@ -241,7 +242,7 @@ class Optimization:
                     eligible, key=lambda r: r.energy(self.direction, on_failure)))):
                 stopped = 'progress'
                 return True
-            if remaining() < population_size:
+            if remaining() < generation_size:
                 stopped = 'budget'
                 return True
             return False

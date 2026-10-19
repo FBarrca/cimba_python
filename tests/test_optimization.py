@@ -477,3 +477,54 @@ def test_tutorial_store_host_work_is_under_quarter_of_native_time():
     best = optimization.run(optimizer=DifferentialEvolution(popsize=60, maxiter=0), validation=8)
     if (os.cpu_count() or 1) > 1:
         assert best.batches[0].busy_cpus > 1
+
+
+def test_rbfopt_searches_one_candidate_at_a_time_and_keeps_numpy_state():
+    pytest.importorskip('rbfopt')
+    from cimba.optimize import RBFOpt
+    _, d, optimization = study()
+    state = np.random.get_state()[1].copy()
+    best = optimization.run(optimizer=RBFOpt(max_evaluations=10), initial=[{d: 2}], validation=6)
+    np.testing.assert_array_equal(np.random.get_state()[1], state)
+    assert best[d] == 2
+    assert best.history[0].values[d] == 2
+    assert best.meta.population_size == best.meta.optimizer.initial == 3
+    assert best.meta.evaluations <= 10
+    assert all(batch.simulated <= 1 for batch in best.batches
+               if batch.phase == 'search' and batch.generation > 0)
+    budget = study()[2].run(optimizer=RBFOpt(), evaluations=5, validation=6)
+    assert budget.meta.evaluations == 5
+    assert budget.meta.stop_reason == 'budget'
+    stopped = study()[2].run(optimizer=RBFOpt(), validation=6,
+                             progress=lambda update: update.generation >= 2)
+    assert stopped.meta.stop_reason == 'progress'
+    assert stopped.meta.generations == 2
+    # Every one of the 11 integer points simulated: stop rather than repropose.
+    exhausted = study()[2].run(optimizer=RBFOpt(), validation=6)
+    assert exhausted.meta.stop_reason == 'converged'
+    assert exhausted.meta.evaluations == 11
+
+
+def test_rbfopt_solver_local_search_matches_the_interface():
+    pytest.importorskip('rbfopt')
+    from cimba.optimize import RBFOpt
+    from cimba.optimize.rbf import _solver
+    try:
+        _solver('bonmin', None)
+    except RuntimeError:
+        pytest.skip('no Bonmin solver')
+    _, d, optimization = study()
+    best = optimization.run(optimizer=RBFOpt(local_search='solver'), evaluations=6,
+                            initial=[{d: 2}], validation=6)
+    assert best.meta.evaluations == 6
+    assert best.meta.optimizer.local_search == 'solver'
+
+
+def test_rbfopt_settings_are_validated():
+    from cimba.optimize import RBFOpt
+    for bad in ({'initial': 1}, {'max_evaluations': 0}, {'max_iterations': True},
+                {'algorithm': 'random'}, {'rbf': 'spline'}, {'local_search': 'bonmin'}):
+        with pytest.raises(ValueError):
+            RBFOpt(**bad)
+    with pytest.raises(ExperimentConfigError, match='initial population'):
+        study()[2].run(optimizer=RBFOpt(initial=4), evaluations=3)
