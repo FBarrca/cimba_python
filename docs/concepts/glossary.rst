@@ -24,7 +24,31 @@ Glossary
       starts from its value in every trial and compiled code may change it.
 
    Param
-      ``cb.Param[T]``: a value fixed for a trial. It can be swept.
+      ``cb.Param[T]``: a value fixed for a trial. It can be swept or optimized.
+
+   Decision
+      A range of allowed values for a ``Param``, assigned with
+      ``cb.decision``. Each decision object is one dimension of an
+      optimization search.
+
+   Objective
+      The function an optimization scores each trial with. The study
+      minimizes or maximizes its expected value.
+
+   Generation
+      One round of differential evolution: a challenger for every population
+      member, evaluated together as one batch.
+
+   Batch
+      The trials of many candidates run by one call to the native runner.
+
+   Finalist
+      One of the best candidates of a search, re-run on fresh seeds before the
+      answer is chosen.
+
+   Estimation seeds
+      Seeds used only to estimate the chosen answer, so the reported
+      estimate isn't flattered by the search's luck.
 
    Output
       ``cb.Output[T]``: a field whose value at the end of each trial is
@@ -111,7 +135,8 @@ Glossary
       or a child model.
 
    Design point
-      One combination of sweep values.
+      One configuration: a combination of sweep values in an experiment or
+      one candidate's decision values in an optimization batch.
 
    Replication
       One independent repetition of a design point, with its own seed.

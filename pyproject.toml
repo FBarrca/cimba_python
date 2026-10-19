@@ -25,7 +25,7 @@ classifiers = [
 dependencies = [
     "numpy>=1.20",
     "numba>=0.57",
-    "scipy>=1.10",
+    "scipy>=1.15",
     "statsmodels>=0.14",
 ]
 
@@ -57,6 +57,10 @@ testpaths = ["tests"]
 # Native stdout tests capture file descriptors explicitly; Python-level pytest
 # capture avoids anonymous temp-file failures on Windows-mounted WSL temp dirs.
 addopts = "--capture=sys"
+markers = [
+    "slow: statistical coverage checks (opt in with CIMBA_SLOW_TESTS=1)",
+    "benchmark: hardware-dependent performance checks (opt in with CIMBA_BENCHMARK=1)",
+]
 
 [tool.meson-python.args]
 # Stable extension target shared by wheel builds and editable rebuilds.

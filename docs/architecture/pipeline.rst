@@ -188,6 +188,31 @@ A few properties fall out of this design:
 * **One host call per chunk.** Python calls the native runner once and
   gets control back when every trial of the chunk has finished.
 
+One generation, one batch
+-------------------------
+
+``Optimization`` creates a reusable snapshot of the configured model. The
+snapshot keeps its assembly, layout and prepared descriptors, so later
+generations only need new candidate bindings and trial blocks.
+
+SciPy receives a vectorized objective and uses deferred population updates:
+all proposals in a generation are evaluated together. The decision space
+converts their coordinates to parameter values, rounding integer and stepped
+dimensions before the study removes duplicates and cache hits. The snapshot
+then runs the new candidates and their common replication seeds as one batch.
+
+Scalar fields are assigned to each design point's replication slice. Input
+slots are seeded in bulk, and generated rows are reused by source, tag, trial
+seed and length. Once results return, the user objective is called on the
+whole batch. The search cache keeps its per-trial objective values, failures
+and summaries; outputs and captured entity histories are not retained there.
+
+After search, the study reruns finalists together on fresh selection seeds.
+It chooses one and runs that candidate again on independent estimation seeds.
+Both stages retain requested captures. Memory chunking and input extension
+can require more than one native call for a logical batch; every call appears
+in the batch report.
+
 Back to Python: results
 -----------------------
 
