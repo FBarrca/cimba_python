@@ -1,3 +1,28 @@
+# Cimba Python 0.9.0
+
+Released 2026-10-19.
+
+- Simulation optimization. `cb.decision(low, high, step=..., log=...)`
+  marks a `Param` as searchable, and `cb.Optimization(model, minimize=...)`
+  (or `maximize=`) finds good values for a per-trial objective built from
+  outputs. `run()` searches with differential evolution
+  (`cb.optimize.DifferentialEvolution`), evaluating each generation as one
+  native batch across all cores, with common random numbers and a cache of
+  simulated candidates. The best few finalists are then re-run on fresh
+  seeds to choose one, and the choice is estimated on independent seeds, so
+  `best.estimate` is not biased by the search.
+- `Optimization.evaluate()` scores candidates on the search trials, and
+  `Optimization.experiment()` replays one as an ordinary `Experiment`.
+  `best.apply()` writes the chosen values into the model.
+- `Samples` support NumPy arithmetic (`results[m].cost + 2 * results[m].wait`),
+  so objectives can combine outputs directly.
+- Experiments now reject a `Param` or field value that doesn't fit its type,
+  such as `2.5` for a `Param[int]`, with `ModelDefinitionError` naming the
+  field. Before, NumPy truncated it.
+- Finished spawned processes return their coroutine stacks for reuse, so
+  models that spawn many short-lived processes allocate far less.
+- New tutorial chapter, concepts, guide and reference pages on optimization.
+
 # Cimba Python 0.8.0
 
 Released 2026-10-15.

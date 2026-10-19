@@ -11,7 +11,7 @@ from .experiments import Experiment, Window
 from .results import Results, Samples, Signal
 from .optimize import Optimization
 
-__version__ = "0.8.2"
+__version__ = "0.9.0"
 
 __all__ = [
     "Model", "Param", "Output", "Input", "Series", "Ref",
