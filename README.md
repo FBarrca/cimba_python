@@ -1,6 +1,6 @@
 ![Cimba logo](docs/static/cimba_logo_large.jpg)
 
-# Cimba Python 0.8
+# Cimba Python
 
 Cimba Python compiles object-oriented discrete-event models to run on the [Cimba C engine](https://github.com/ambonvik/cimba). A model declares its variability as inputs. The same compiled model can use distributions, recorded traces, bootstrap resamples, or fitted sources.
 
