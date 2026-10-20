@@ -7,6 +7,7 @@
 #include "cimba.h"
 #include "cmb_priorityqueue.h"
 #include "abi.h"
+#include "nbshim.h"
 
 static void *word_as_pointer(uint64_t bits)
 {
@@ -18,13 +19,40 @@ static uint64_t pointer_as_word(void *value)
     return (uint64_t)(uintptr_t)value;
 }
 
+/* Hooks and events run outside any process and cannot wait */
+static void store_put_ready(void *store)
+{
+    if (cmb_objectqueue_space(store) == 0u)
+        cpy_require_process(store, "put() would wait for space");
+}
+
+static void store_get_ready(void *store)
+{
+    if (cmb_objectqueue_length(store) == 0u)
+        cpy_require_process(store, "get() would wait for an item");
+}
+
+static void priority_put_ready(void *store)
+{
+    if (cmb_priorityqueue_space(store) == 0u)
+        cpy_require_process(store, "put() would wait for space");
+}
+
+static void priority_get_ready(void *store)
+{
+    if (cmb_priorityqueue_length(store) == 0u)
+        cpy_require_process(store, "get() would wait for an item");
+}
+
 CPY_EXPORT int64_t cpy_store_put_int(void *store, int64_t value)
 {
+    store_put_ready(store);
     return cmb_objectqueue_put(store, word_as_pointer((uint64_t)value));
 }
 
 CPY_EXPORT int64_t cpy_store_get_int(void *store)
 {
+    store_get_ready(store);
     void *value = NULL;
     cmb_objectqueue_get(store, &value);
     return (int64_t)pointer_as_word(value);
@@ -32,6 +60,7 @@ CPY_EXPORT int64_t cpy_store_get_int(void *store)
 
 CPY_EXPORT int64_t cpy_store_put_float(void *store, double value)
 {
+    store_put_ready(store);
     uint64_t bits;
     memcpy(&bits, &value, sizeof(bits));
     return cmb_objectqueue_put(store, word_as_pointer(bits));
@@ -39,6 +68,7 @@ CPY_EXPORT int64_t cpy_store_put_float(void *store, double value)
 
 CPY_EXPORT double cpy_store_get_float(void *store)
 {
+    store_get_ready(store);
     void *value = NULL;
     cmb_objectqueue_get(store, &value);
     uint64_t bits = pointer_as_word(value);
@@ -49,11 +79,13 @@ CPY_EXPORT double cpy_store_get_float(void *store)
 
 CPY_EXPORT int64_t cpy_store_put_model(void *store, void *record)
 {
+    store_put_ready(store);
     return cmb_objectqueue_put(store, record);
 }
 
 CPY_EXPORT void *cpy_store_get_model(void *store)
 {
+    store_get_ready(store);
     void *record = NULL;
     cmb_objectqueue_get(store, &record);
     return record;
@@ -62,12 +94,14 @@ CPY_EXPORT void *cpy_store_get_model(void *store)
 CPY_EXPORT int64_t cpy_priority_put_int(void *store, int64_t value,
                                         int64_t priority)
 {
+    priority_put_ready(store);
     return cmb_priorityqueue_put(store, word_as_pointer((uint64_t)value),
                                  priority, NULL);
 }
 
 CPY_EXPORT int64_t cpy_priority_get_int(void *store)
 {
+    priority_get_ready(store);
     void *value = NULL;
     cmb_priorityqueue_get(store, &value);
     return (int64_t)pointer_as_word(value);
@@ -76,6 +110,7 @@ CPY_EXPORT int64_t cpy_priority_get_int(void *store)
 CPY_EXPORT int64_t cpy_priority_put_float(void *store, double value,
                                           int64_t priority)
 {
+    priority_put_ready(store);
     uint64_t bits;
     memcpy(&bits, &value, sizeof(bits));
     return cmb_priorityqueue_put(store, word_as_pointer(bits), priority, NULL);
@@ -83,6 +118,7 @@ CPY_EXPORT int64_t cpy_priority_put_float(void *store, double value,
 
 CPY_EXPORT double cpy_priority_get_float(void *store)
 {
+    priority_get_ready(store);
     void *value = NULL;
     cmb_priorityqueue_get(store, &value);
     uint64_t bits = pointer_as_word(value);
@@ -94,11 +130,13 @@ CPY_EXPORT double cpy_priority_get_float(void *store)
 CPY_EXPORT int64_t cpy_priority_put_model(void *store, void *record,
                                           int64_t priority)
 {
+    priority_put_ready(store);
     return cmb_priorityqueue_put(store, record, priority, NULL);
 }
 
 CPY_EXPORT void *cpy_priority_get_model(void *store)
 {
+    priority_get_ready(store);
     void *record = NULL;
     cmb_priorityqueue_get(store, &record);
     return record;
@@ -107,6 +145,7 @@ CPY_EXPORT void *cpy_priority_get_model(void *store)
 CPY_EXPORT uint64_t cpy_priority_enqueue_model(void *store, void *record,
                                                 int64_t priority)
 {
+    priority_put_ready(store);
     uint64_t handle = 0;
     if (cmb_priorityqueue_put(store, record, priority, &handle) != 0)
         return 0;
@@ -170,8 +209,8 @@ CPY_EXPORT int64_t cpy_condition_wait_until(void *condition, void *callback,
     bool satisfied = predicate.callback(predicate.context) != 0;
     if (satisfied || timeout == 0.0) return satisfied;
 
+    cpy_require_process(condition, "wait_until() would wait");
     struct cmb_process *process = cmb_process_current();
-    if (process == NULL) cimba_trial_abandon();
     const double deadline = cmb_time() + timeout;
     /* Own one timer, leaving any application timers intact. */
     const uint64_t timer = isfinite(timeout)

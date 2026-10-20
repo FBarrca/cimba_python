@@ -24,14 +24,14 @@ from .views import (
     register_reachable_views,
 )
 
-for _name in ("cmb_process_hold", "cmb_time", "cpy_buffer_put",
+for _name in ("cpy_process_hold", "cmb_time", "cpy_buffer_put",
               "cpy_buffer_get", "cpy_buffer_mean_level", "cpy_buffer_level",
               "cpy_buffer_history", "cpy_timeseries_max", "cimba_trial_abandon",
               "cpy_fractional_put", "cpy_fractional_get", "cpy_fractional_round",
               "cpy_fractional_level",
               "cpy_fractional_mean_level", "cpy_fractional_max_level",
-              "cmb_resourcepool_acquire", "cmb_resourcepool_preempt",
-              "cmb_resourcepool_held", "cmb_resourcepool_release",
+              "cpy_resource_acquire", "cpy_resource_preempt",
+              "cmb_resourcepool_held", "cpy_resource_release",
               "cpy_resourcepool_available",
               "cpy_resourcepool_mean_in_use", "cmb_dataset_add",
               "cpy_dataset_mean", "cpy_dataset_count", "cpy_dataset_max",
@@ -55,7 +55,7 @@ for _name in ("cmb_process_hold", "cmb_time", "cpy_buffer_put",
               "cpy_end_trial", "cpy_logger_user_msg", "cpy_logger_user_f64"):
     register(_name)
 
-_native_hold = types.ExternalFunction("cmb_process_hold", types.int64(types.float64))
+_native_hold = types.ExternalFunction("cpy_process_hold", types.int64(types.float64))
 _native_time = types.ExternalFunction("cmb_time", types.float64())
 _native_container_put = types.ExternalFunction(
     "cpy_buffer_put", types.int64(types.intp, types.uint64))
@@ -83,15 +83,15 @@ _native_timeseries_max = types.ExternalFunction(
     "cpy_timeseries_max", types.float64(types.intp))
 _native_abandon = types.ExternalFunction("cimba_trial_abandon", types.void())
 _native_resource_acquire = types.ExternalFunction(
-    "cmb_resourcepool_acquire", types.int64(types.intp, types.uint64))
+    "cpy_resource_acquire", types.int64(types.intp, types.uint64))
 _native_resource_preempt = types.ExternalFunction(
-    "cmb_resourcepool_preempt", types.int64(types.intp, types.uint64))
+    "cpy_resource_preempt", types.int64(types.intp, types.uint64))
 _native_resource_held = types.ExternalFunction(
     "cmb_resourcepool_held", types.uint64(types.intp, types.intp))
 _native_resource_available = types.ExternalFunction(
     "cpy_resourcepool_available", types.uint64(types.intp))
 _native_resource_release = types.ExternalFunction(
-    "cmb_resourcepool_release", types.void(types.intp, types.uint64))
+    "cpy_resource_release", types.void(types.intp, types.uint64))
 _native_resource_mean = types.ExternalFunction(
     "cpy_resourcepool_mean_in_use", types.float64(types.intp))
 _native_dataset_add = types.ExternalFunction(

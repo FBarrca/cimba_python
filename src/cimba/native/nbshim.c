@@ -175,12 +175,17 @@ uint64_t cpy_event_is_scheduled(const uint64_t hndl)
  */
 int64_t cpy_buffer_put(void *bp, const uint64_t amnt)
 {
+    const struct cmb_buffer *buffer = bp;
+    if (amnt > buffer->capacity - buffer->level)
+        cpy_require_process(bp, "put() would wait for space");
     uint64_t n = amnt;
     return cmb_buffer_put(bp, &n);
 }
 
 int64_t cpy_buffer_get(void *bp, const uint64_t amnt)
 {
+    if (amnt > ((const struct cmb_buffer *)bp)->level)
+        cpy_require_process(bp, "get() would wait for content");
     uint64_t n = amnt;
     return cmb_buffer_get(bp, &n);
 }
@@ -1023,10 +1028,56 @@ void *cpy_process_current(void)
     return cmb_process_current();
 }
 
+void cpy_require_process(const void *entity, const char *what)
+{
+    if (cmb_process_current() != NULL) return;
+    char failure[160];
+    if (entity != NULL)
+        snprintf(failure, sizeof failure, "%s: %s outside a process",
+                 ((const struct cmi_resourcebase *)entity)->name, what);
+    else
+        snprintf(failure, sizeof failure, "%s outside a process", what);
+    cpy_trial_fail(failure);
+}
+
 /* Reschedule the caller at the current time, letting same-time events run */
 int64_t cpy_process_yield(void)
 {
+    cpy_require_process(NULL, "suspend() cannot wait");
     return cmb_process_yield();
+}
+
+/* cmb_process_hold, checking the caller first. It mirrors the engine's body
+ * so the current process is looked up once: hold is the hottest verb, and a
+ * second thread-local lookup costs several percent of an M/M/1 trial. */
+int64_t cpy_process_hold(const double dur)
+{
+    struct cmb_process *pp = cmb_process_current();
+    if (pp == NULL) cpy_require_process(NULL, "hold() cannot wait");
+    const uint64_t handle = cmb_process_timer_add(pp, dur, CMB_PROCESS_SUCCESS);
+    const int64_t sig = (int64_t)cmi_coroutine_yield(NULL);
+    if (sig != CMB_PROCESS_SUCCESS) cmb_process_timer_cancel(pp, handle);
+    return sig;
+}
+
+/* The pool records holders by process, so even a grant without waiting
+ * needs one. */
+int64_t cpy_resource_acquire(void *rpp, const uint64_t amnt)
+{
+    cpy_require_process(rpp, "acquire() cannot hold a resource");
+    return cmb_resourcepool_acquire(rpp, amnt);
+}
+
+int64_t cpy_resource_preempt(void *rpp, const uint64_t amnt)
+{
+    cpy_require_process(rpp, "preempt() cannot hold a resource");
+    return cmb_resourcepool_preempt(rpp, amnt);
+}
+
+void cpy_resource_release(void *rpp, const uint64_t amnt)
+{
+    cpy_require_process(rpp, "release() holds no resource");
+    cmb_resourcepool_release(rpp, amnt);
 }
 
 static uint32_t logger_flags_on_mask = 0u;

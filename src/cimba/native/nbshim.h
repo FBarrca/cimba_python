@@ -15,6 +15,16 @@
 #  endif
 #endif
 
+/* Fails this thread's trial with reason as its error; defined in trial.c.
+ * The reason lives in the trial, not in thread-local storage: the library's
+ * static TLS must fit glibc's small surplus for dlopen'd modules. */
+void cpy_trial_fail(const char *reason);
+
+/* Fails the trial with "<entity>: <what> outside a process" unless a process
+ * is running. Hooks and events run on the dispatcher, which cannot wait: the
+ * engine would assert and abort the interpreter instead. */
+void cpy_require_process(const void *entity, const char *what);
+
 CIMBA_PY_EXPORT double cpy_random_exponential(double mean);
 CIMBA_PY_EXPORT double cpy_random_gamma(double shape, double scale);
 CIMBA_PY_EXPORT double cpy_random01(void);
@@ -58,6 +68,10 @@ CIMBA_PY_EXPORT double cpy_dataset_stddev(const void *dsp);
 CIMBA_PY_EXPORT double cpy_dataset_quantile(const void *dsp, double q);
 CIMBA_PY_EXPORT double cpy_dataset_median(const void *dsp);
 CIMBA_PY_EXPORT int64_t cpy_process_yield(void);
+CIMBA_PY_EXPORT int64_t cpy_process_hold(double dur);
+CIMBA_PY_EXPORT int64_t cpy_resource_acquire(void *rpp, uint64_t amnt);
+CIMBA_PY_EXPORT int64_t cpy_resource_preempt(void *rpp, uint64_t amnt);
+CIMBA_PY_EXPORT void cpy_resource_release(void *rpp, uint64_t amnt);
 CIMBA_PY_EXPORT int64_t cpy_buffer_put(void *bp, uint64_t amnt);
 CIMBA_PY_EXPORT int64_t cpy_buffer_get(void *bp, uint64_t amnt);
 CIMBA_PY_EXPORT double cpy_buffer_mean_level(void *bp);

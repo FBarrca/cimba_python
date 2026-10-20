@@ -73,6 +73,7 @@ EXPORTS
     cpy_process_current
     cpy_process_status
     cpy_process_yield
+    cpy_process_hold
     cmb_process_priority_set
     cpy_process_timer_set
     cmb_process_timer_add
@@ -147,6 +148,9 @@ EXPORTS
     cmb_resourcepool_acquire
     cmb_resourcepool_preempt
     cmb_resourcepool_release
+    cpy_resource_acquire
+    cpy_resource_preempt
+    cpy_resource_release
     cmb_resourcepool_start_recording
     cmb_resourcepool_stop_recording
     cpy_resourcepool_available

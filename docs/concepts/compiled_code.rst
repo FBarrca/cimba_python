@@ -67,7 +67,12 @@ What you can use
   argument).
 
 Functions and helpers may call blocking verbs too. Processes are stackful, so
-a ``cb.hold`` inside one suspends the calling process.
+a ``cb.hold`` inside one suspends the calling process. Hooks and events are not
+processes and cannot wait: there, a verb that would wait (``cb.hold``, a
+``get`` from an empty store, a ``wait_until`` whose predicate is false) fails
+the trial with a reason such as ``"plant.line: get() would wait for an item
+outside a process"``. Verbs that complete at once, like a ``put`` with room,
+work anywhere.
 
 What you can't use
 ------------------
