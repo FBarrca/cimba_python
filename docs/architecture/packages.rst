@@ -209,11 +209,13 @@ or calling the native library directly:
 * ``de.py`` validates DE settings, creates the initial population, and calls
   SciPy with a vectorized objective. Its internal ``search`` method sends a
   whole generation to the study's evaluator.
+* ``rbf.py`` adapts the optional ``rbfopt`` package to the same interface:
+  the initial batch is one evaluation, then each proposal is its own.
 * ``outcome.py`` defines the immutable estimates, candidate evaluations,
   finalist comparisons and report tables returned to the caller.
 
-The solver interface is internal. The public API currently exposes only
-differential evolution.
+The solver interface is internal. The public API exposes differential
+evolution and RBFOpt.
 
 .. _arch-pkg-results:
 

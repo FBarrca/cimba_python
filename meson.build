@@ -102,6 +102,7 @@ py.install_sources('src/cimba/optimize/__init__.py',
                    'src/cimba/optimize/space.py',
                    'src/cimba/optimize/study.py',
                    'src/cimba/optimize/de.py',
+                   'src/cimba/optimize/rbf.py',
                    'src/cimba/optimize/outcome.py', subdir: 'cimba/optimize')
 py.install_sources('src/cimba/diagrams/__init__.py',
                    'src/cimba/diagrams/graph.py',
