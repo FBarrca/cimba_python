@@ -4,7 +4,7 @@
 
 Cimba Python compiles object-oriented discrete-event models to run on the [Cimba C engine](https://github.com/ambonvik/cimba). A model declares its variability as inputs. The same compiled model can use distributions, recorded traces, bootstrap resamples, or fitted sources.
 
-Python 3.12 or newer is required. Linux x86_64 and aarch64, Windows AMD64, and macOS arm64 wheels include the native engine.
+Python 3.11 or newer is required. Linux x86_64 and aarch64, Windows AMD64, and macOS arm64 wheels include the native engine.
 
 ```bash
 pip install cimba

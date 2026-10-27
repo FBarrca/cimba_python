@@ -4,10 +4,10 @@ build-backend = "mesonpy"
 
 [project]
 name = "cimba"
-version = "0.9.0"
+version = "0.9.1"
 description = "Compiled Python models for the Cimba discrete-event simulation engine"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Francisco Barragán Castro", email = "franbarragan87@gmail.com" }]
@@ -15,6 +15,10 @@ keywords = ["simulation", "discrete-event-simulation", "cimba", "numba"]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: C",
     "Operating System :: POSIX :: Linux",
     "Operating System :: Microsoft :: Windows",
@@ -27,6 +31,7 @@ dependencies = [
     "numba>=0.57",
     "scipy>=1.15",
     "statsmodels>=0.14",
+    "typing_extensions>=4.6",
 ]
 
 [project.optional-dependencies]
@@ -71,12 +76,12 @@ install = ["--skip-subprojects"]
 
 [tool.meson-python]
 # The bundled C runtime has no Python C API dependency. An abi3 wheel built
-# on 3.12 is usable by later CPython versions on the same platform.
+# on 3.11 is usable by later CPython versions on the same platform.
 limited-api = true
 
 [tool.cibuildwheel]
-# A single abi3 wheel per platform serves CPython 3.12 and later.
-build = "cp312-*"
+# A single abi3 wheel per platform serves CPython 3.11 and later.
+build = "cp311-*"
 # Numba/llvmlite publish manylinux wheels but not musllinux wheels.
 skip = "*-musllinux*"
 test-requires = "pytest>=8"

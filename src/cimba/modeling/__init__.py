@@ -9,6 +9,8 @@ from numbers import Integral, Real
 from types import UnionType
 from typing import Any, Generic, TypeVar, Union, cast, get_args, get_origin, get_type_hints
 
+from typing_extensions import TypeAliasType
+
 T = TypeVar("T")
 M = TypeVar("M", bound="Model")
 
@@ -30,9 +32,11 @@ class NotInCompiledCode(RuntimeError):
     pass
 
 
-type Param[T] = T
-type Output[T] = T
-type Ref[M] = M
+# Transparent aliases (Param[float] is float for checkers). TypeAliasType keeps
+# the Param/Output/Ref identity that schema resolution compares with ``is``.
+Param = TypeAliasType("Param", T, type_params=(T,))
+Output = TypeAliasType("Output", T, type_params=(T,))
+Ref = TypeAliasType("Ref", M, type_params=(M,))
 
 
 class Input(Generic[T]):

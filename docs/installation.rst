@@ -6,7 +6,7 @@ Installation
 From PyPI
 ---------
 
-Cimba Python requires **Python 3.12 or newer**.
+Cimba Python requires **Python 3.11 or newer**.
 
 .. code-block:: bash
 

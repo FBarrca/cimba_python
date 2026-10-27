@@ -2,7 +2,7 @@
 project(
     'cimba',
     'c',
-    version: '0.9.0',
+    version: '0.9.1',
     meson_version: '>=1.1.0',
     # Fast wheels by default. Use -Dbuildtype=debugoptimized for native INFO logs.
     default_options: ['buildtype=release'],
@@ -18,6 +18,11 @@ cimba_default_options = [
     'external_context_switch_wrapper=false',
     'enable_extras=false',
 ]
+# Newer Apple clang rejects -ffat-lto-objects while Meson's support probe can
+# still claim it works; skip LTO on Darwin until upstream hard-excludes that flag.
+if host_machine.system() == 'darwin'
+    cimba_default_options += ['lto=disabled']
+endif
 
 cimba_proj = subproject('cimba', default_options: cimba_default_options)
 cimba_lib = cimba_proj.get_variable('cimba_lib')

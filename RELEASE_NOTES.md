@@ -1,3 +1,13 @@
+# Cimba Python 0.9.1
+
+Released 2026-10-27.
+
+- Python 3.11 is now supported. Requires-Python is `>=3.11`, and published
+  wheels are `cp311-abi3` so one wheel per platform covers CPython 3.11 and
+  later.
+- `Param`, `Output`, and `Ref` use `typing_extensions.TypeAliasType` so the
+  same declaration markers work on 3.11 without PEP 695 `type` aliases.
+
 # Cimba Python 0.9.0
 
 Released 2026-10-19.
