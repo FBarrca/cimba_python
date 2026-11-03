@@ -84,6 +84,9 @@ typedef struct trial_resources {
     uint64_t process_count;
     uint64_t next_input_stream;
     spawned_model *spawned;
+    spawned_model **spawned_index;       /* open addressing, keyed by record */
+    uint64_t spawned_index_capacity;     /* a power of two, or 0 */
+    uint64_t spawned_index_count;
     released_static_model *released_static;
     observer_relay *relays;
     uint64_t relay_count;
@@ -247,19 +250,83 @@ static void retire_spawned_process(void *subject, void *object)
     *slot = NULL;
 }
 
+/* Whether the current process can end without cmb_process_exit: when it holds
+ * no resources, awaits nothing, has no waiters and no signal is pending at this
+ * instant, all cmb_process_exit would do is sweep the event queue for wakeups
+ * there are none of. */
+static int exits_without_sweep(const struct cmb_process *process)
+{
+    return cmi_slist_is_empty(&(process->resources)) &&
+        cmi_slist_is_empty(&(process->awaits)) &&
+        cmi_slist_is_empty(&(process->waiters)) &&
+        active_trial->signalled_at < cmb_time();
+}
+
 static void *run_spawned_process(struct cmb_process *process, void *argument)
 {
     spawned_process *context = argument;
     void *result = context->callback(process, context->record);
     cmb_event_schedule(retire_spawned_process, process, context->slot,
                        cmb_time(), 0);
-    if (cmi_slist_is_empty(&(process->resources)) &&
-        cmi_slist_is_empty(&(process->awaits)) &&
-        cmi_slist_is_empty(&(process->waiters)) &&
-        active_trial->signalled_at < cmb_time())
-        /* All cmb_process_exit would do is sweep for wakeups there are none of */
-        cmi_coroutine_exit(result);
+    if (exits_without_sweep(process)) cmi_coroutine_exit(result);
     return result;
+}
+
+/* Spawned models are looked up by record on every release, array, start and
+ * is_dynamic call. Released nodes stay registered until the trial ends, so a
+ * linear walk of `spawned` costs O(models spawned so far) per call; this index
+ * makes the lookup O(1). Nodes are only ever added, never removed. */
+static uint64_t spawned_index_slot(const void *record, uint64_t capacity)
+{
+    return (((uint64_t)(uintptr_t)record >> 4) * UINT64_C(0x9e3779b97f4a7c15)) &
+        (capacity - 1u);
+}
+
+static void spawned_index_insert(trial_resources *resources, spawned_model *node)
+{
+    if ((resources->spawned_index_count + 1u) * 2u > resources->spawned_index_capacity) {
+        const uint64_t old_capacity = resources->spawned_index_capacity;
+        spawned_model **old_index = resources->spawned_index;
+        const uint64_t capacity = old_capacity == 0u ? 1024u : old_capacity * 2u;
+        spawned_model **index = calloc((size_t)capacity, sizeof(*index));
+        if (index == NULL) cimba_trial_abandon();
+        for (uint64_t i = 0; i < old_capacity; ++i) {
+            spawned_model *moved = old_index[i];
+            if (moved == NULL) continue;
+            uint64_t slot = spawned_index_slot(moved->record, capacity);
+            while (index[slot] != NULL) slot = (slot + 1u) & (capacity - 1u);
+            index[slot] = moved;
+        }
+        free(old_index);
+        resources->spawned_index = index;
+        resources->spawned_index_capacity = capacity;
+    }
+    const uint64_t capacity = resources->spawned_index_capacity;
+    uint64_t slot = spawned_index_slot(node->record, capacity);
+    while (resources->spawned_index[slot] != NULL) slot = (slot + 1u) & (capacity - 1u);
+    resources->spawned_index[slot] = node;
+    resources->spawned_index_count++;
+}
+
+static spawned_model *spawned_index_find(const trial_resources *resources, const void *record)
+{
+    const uint64_t capacity = resources->spawned_index_capacity;
+    if (capacity == 0u) return NULL;
+    uint64_t slot = spawned_index_slot(record, capacity);
+    for (spawned_model *node = resources->spawned_index[slot]; node != NULL;
+         node = resources->spawned_index[slot]) {
+        if (node->record == record) return node;
+        slot = (slot + 1u) & (capacity - 1u);
+    }
+    return NULL;
+}
+
+static void free_spawned_index(trial_resources *resources)
+{
+    free(resources->spawned_index);
+    resources->spawned_index = NULL;
+    resources->spawned_index_capacity = 0u;
+    resources->spawned_index_count = 0u;
 }
 
 void *cpy_model_allocate(size_t size, const void *class_descriptor)
@@ -276,6 +343,7 @@ void *cpy_model_allocate(size_t size, const void *class_descriptor)
     *(const void **)node->record = class_descriptor;
     node->next = resources->spawned;
     resources->spawned = node;
+    spawned_index_insert(resources, node);
     return node->record;
 }
 
@@ -303,9 +371,7 @@ void cpy_model_array(void *record, uint64_t offset, int64_t length,
 {
     trial_resources *resources = active_trial;
     if (resources == NULL) cimba_trial_abandon();
-    /* Called right after cpy_model_allocate, so the model is at the head */
-    spawned_model *node = resources->spawned;
-    while (node != NULL && node->record != record) node = node->next;
+    spawned_model *node = spawned_index_find(resources, record);
     if (node == NULL || element_size == 0u) cimba_trial_abandon();
     char failure[192];
     if (length < 0) {
@@ -362,8 +428,7 @@ void cpy_model_start(void *record, const cpy_process_descriptor *processes,
 {
     trial_resources *resources = active_trial;
     if (resources == NULL) cimba_trial_abandon();
-    spawned_model *node = resources->spawned;
-    while (node != NULL && node->record != record) node = node->next;
+    spawned_model *node = spawned_index_find(resources, record);
     if (node == NULL || node->processes != NULL) cimba_trial_abandon();
     node->ends = ends;
     node->end_count = end_count;
@@ -408,10 +473,7 @@ int64_t cpy_model_is_dynamic(void *record)
     if (resources == NULL) cimba_trial_abandon();
     /* Released nodes remain registered until trial cleanup. Creation mode
      * is independent of whether the model's processes are still active. */
-    for (spawned_model *node = resources->spawned; node != NULL;
-         node = node->next)
-        if (node->record == record) return 1;
-    return 0;
+    return spawned_index_find(resources, record) != NULL;
 }
 
 static int static_model_released(const trial_resources *resources, const void *record)
@@ -447,8 +509,7 @@ void cpy_model_release(void *record)
 {
     trial_resources *resources = active_trial;
     if (resources == NULL) cimba_trial_abandon();
-    spawned_model *node = resources->spawned;
-    while (node != NULL && node->record != record) node = node->next;
+    spawned_model *node = spawned_index_find(resources, record);
     struct cmb_process *current = cmb_process_current();
     if (node == NULL) {
         if (static_model_released(resources, record)) cimba_trial_abandon();
@@ -485,7 +546,10 @@ void cpy_model_release(void *record)
     }
     if (current != NULL)
         for (uint64_t i = 0; i < node->process_count; ++i)
-            if (node->processes[i] == current) cmb_process_exit(NULL);
+            if (node->processes[i] == current) {
+                if (exits_without_sweep(current)) cmi_coroutine_exit(NULL);
+                cmb_process_exit(NULL);
+            }
 }
 
 static void free_spawned_nodes(trial_resources *resources, int normal)
@@ -518,6 +582,7 @@ static void free_spawned_nodes(trial_resources *resources, int normal)
         node = next;
     }
     resources->spawned = NULL;
+    free_spawned_index(resources);
 }
 
 static void inspect_inputs(trial_resources *resources)
