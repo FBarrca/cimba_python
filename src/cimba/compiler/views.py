@@ -17,9 +17,9 @@ from numba.extending import (
     intrinsic, make_attribute_wrapper, overload,
 )
 
-from cimba.layout import MODEL_RECORD_CLASSES, RecordLayout
+from cimba.layout import HANDLE_ENTITIES, MODEL_RECORD_CLASSES, RecordLayout, entity_handle
 from cimba.modeling import Model, Ref
-from cimba.schema import ClassSchema, is_int_enum
+from cimba.schema import ClassSchema, is_entity_reference, is_int_enum
 from cimba.engine.symbols import register
 from .arrays import ArrayViewType, array_view
 from .enums import member_type
@@ -41,12 +41,21 @@ def _model_class(record):
     return MODEL_RECORD_CLASSES.get(descriptor.title) if descriptor else None
 
 
+def _entity_kind(record) -> str | None:
+    """``Resource`` for a resource's handle record, and so on; else None."""
+    names = list(record.fields) if isinstance(record, types.Record) else []
+    return HANDLE_ENTITIES.get(names[0]) if len(names) == 1 else None
+
+
 # A model handle is a record pointer. Assigning or passing a subclass's handle
 # where a base class is expected keeps the pointer: base-typed views read the
 # base's fields at the same offsets and call through the record's own table.
 @lower_cast(types.Record, types.Record)
 def _upcast_model(context, builder, fromty, toty, value):
     actual, expected = _model_class(fromty), _model_class(toty)
+    if _entity_kind(toty) is not None:
+        raise NumbaTypeError(f"cannot use a {_entity_kind(fromty) or fromty} where a "
+                             f"{_entity_kind(toty)} is expected")
     if actual is None or expected is None or not issubclass(actual, expected):
         raise NumbaTypeError(f"cannot use a {actual.__name__ if actual else fromty} model "
                         f"where a {expected.__name__ if expected else toty} is expected")
@@ -274,6 +283,8 @@ def register_reachable_views(schema: ClassSchema) -> None:
         for field in current.fields:
             if field.kind not in {"child", "ref", "collection"}:
                 continue
+            if is_entity_reference(field):
+                continue
             target = field.value_type
             if field.kind == "collection" and get_origin(target) is Ref:
                 target = get_args(target)[0]
@@ -331,7 +342,13 @@ def register_views(schema: ClassSchema) -> None:
         value_type = field.value_type
         if field.kind == "collection" and get_origin(value_type) is Ref:
             value_type = get_args(value_type)[0]
-        child_type = from_dtype(RecordLayout.of(ClassSchema.of(value_type)).dtype)
+        if is_entity_reference(field):
+            # A reference to an entity points at the handle member of the
+            # owning record, so it is typed as the entity itself.
+            child_type = from_dtype(entity_handle(
+                value_type, f"{schema.cls.__name__}.{field.name}"))
+        else:
+            child_type = from_dtype(RecordLayout.of(ClassSchema.of(value_type)).dtype)
         assert isinstance(child_type, types.Record)
         view_type = (CollectionViewType(child_type)
                      if field.kind == "collection" else

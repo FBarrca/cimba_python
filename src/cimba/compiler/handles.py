@@ -19,7 +19,7 @@ from cimba.modeling import (
 from cimba.schema import ClassSchema
 from .numba_compat import cgutils, infer_getattr, make_overload_method_template
 from .views import (
-    EventHandleType, PredicateHandleType, PROCESS_HANDLE,
+    CollectionViewType, EventHandleType, PredicateHandleType, PROCESS_HANDLE,
     ProcessHandleType, SCHEDULED_HANDLE, ScheduledHandleType,
     register_reachable_views,
 )
@@ -829,30 +829,42 @@ def resource_acquire(record, amount=1, priority=None):
 
 @intrinsic
 def native_acquire_any(typing_context, resources, ranked, rank):
-    """Call cpy_resource_acquire_any with the tuple's handles in a stack array."""
-    if not isinstance(resources, types.BaseTuple) or not isinstance(
+    """Call cpy_resource_acquire_any with the addresses of the members' handles.
+
+    A tuple's are put in a stack array. A ``list[cb.Ref[cb.Resource]]`` view
+    already is such an array, its pointer table, so it is passed as it is:
+    no copy, and the length is the list's at run time.
+    """
+    is_list = (isinstance(resources, CollectionViewType) and
+               _resource_handle(resources.element))
+    if not (is_list or isinstance(resources, types.BaseTuple)) or not isinstance(
             ranked, types.Integer) or not isinstance(rank, types.Integer):
         return None
-    count = len(resources)
 
     def codegen(context, builder, signature, arguments):
         members, flag, value = arguments
         intp = context.get_value_type(types.intp)
         i64 = ir.IntType(64)
-        array = cgutils.alloca_once(builder, intp, size=count)
-        for position, element in enumerate(resources):
-            record = builder.extract_value(members, position)
-            base = builder.bitcast(record, ir.IntType(8).as_pointer())
-            address = builder.gep(base, [ir.Constant(
-                ir.IntType(32), element.offset("resource_handle"))])
-            handle = builder.load(builder.bitcast(address, intp.as_pointer()))
-            builder.store(handle, builder.gep(
-                array, [ir.Constant(ir.IntType(32), position)]))
+        if is_list:
+            view = cgutils.create_struct_proxy(resources)(context, builder, value=members)
+            array = builder.inttoptr(view.data, intp.as_pointer())
+            length = view.length
+        else:
+            tuple_type: Any = resources
+            array = cgutils.alloca_once(builder, intp, size=len(tuple_type))
+            for position, element in enumerate(tuple_type):
+                record = builder.extract_value(members, position)
+                base = builder.bitcast(record, ir.IntType(8).as_pointer())
+                address = builder.gep(base, [ir.Constant(
+                    ir.IntType(32), element.offset("resource_handle"))])
+                builder.store(builder.ptrtoint(address, intp), builder.gep(
+                    array, [ir.Constant(ir.IntType(32), position)]))
+            length = ir.Constant(i64, len(tuple_type))
         function = cgutils.get_or_insert_function(
             builder.module, ir.FunctionType(i64, [intp.as_pointer(), i64, i64, i64]),
             "cpy_resource_acquire_any")
         return builder.call(function, [
-            array, ir.Constant(i64, count),
+            array, length,
             context.cast(builder, flag, ranked, types.uint64),
             context.cast(builder, value, rank, types.int64)])
 
@@ -864,10 +876,14 @@ _acquire_any = type_cast(Any, native_acquire_any)
 
 @overload(acquire_any)
 def model_acquire_any(resources, priority=None):
-    if not (isinstance(resources, types.BaseTuple) and len(resources) > 0 and
-            all(_resource_handle(member) for member in resources)):
-        raise TypeError("acquire_any() takes a nonempty tuple of Resources, "
-                        f"such as (self.clerks, self.seniors), got {resources}")
+    tuple_form = (isinstance(resources, types.BaseTuple) and len(resources) > 0 and
+                  all(_resource_handle(member) for member in resources))
+    list_form = (isinstance(resources, CollectionViewType) and
+                 _resource_handle(resources.element))
+    if not (tuple_form or list_form):
+        raise TypeError("acquire_any() takes a nonempty tuple of Resources, such as "
+                        "(self.clerks, self.seniors), or a list[cb.Ref[cb.Resource]] "
+                        f"field, such as self.pool.resources, got {resources}")
     if _request_ranked(priority, "cb.acquire_any"):
         def ranked(resources, priority=None):
             return _acquire_any(resources, 1, int(priority))

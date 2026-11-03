@@ -200,6 +200,53 @@ that needs one role in particular:
        cb.hold(self.service.next())
        roles[role].release()
 
+When the roles that can do a task come from data, build one pool per set
+of roles on the host and acquire from the pool. A
+``list[cb.Ref[cb.Resource]]`` references resources held elsewhere in the
+tree, and its length is configuration, so pools of any size share one
+compiled process:
+
+.. code-block:: python
+
+   class Role(cb.Model):
+       res: cb.Resource = cb.Resource(capacity=1)
+
+   class Pool(cb.Model):
+       resources: list[cb.Ref[cb.Resource]]
+
+   class Task(cb.Model):
+       pool: cb.Ref[Pool]
+       service: cb.Param[float] = 4.0
+
+       @cb.process
+       def work(self):
+           role = cb.acquire_any(self.pool.resources)
+           cb.hold(self.service)
+           self.pool.resources[role].release()
+
+   class Staffing(cb.Model):
+       roles: list[Role]
+       pools: list[Pool]
+       tasks: list[Task]
+
+       def __init__(self, staff: dict[str, int], needs: list[tuple[str, ...]]):
+           names = list(staff)
+           self.roles = [Role() for _ in names]
+           for role, name in zip(self.roles, names):
+               role.res.initial_capacity = staff[name]
+           pools = {}
+           for need in needs:
+               if need not in pools:
+                   pools[need] = Pool()
+                   pools[need].resources = [self.roles[names.index(n)].res for n in need]
+           self.pools = list(pools.values())
+           self.tasks = [Task() for _ in needs]
+           for task, need in zip(self.tasks, needs):
+               task.pool = pools[need]
+
+The members are checked when the experiment is built: each must be a
+resource of this tree. See :ref:`entity-references`.
+
 Each role keeps its own calendar: a ``set_capacity`` that opens a shift
 grants waiting ``acquire_any`` requests like any other. List the role you
 would rather use first; it only decides between roles that are free at the

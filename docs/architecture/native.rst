@@ -170,7 +170,10 @@ compared with the length as a signed value. A miss calls
 ``cpy_array_index_fail``, which fails the trial with the field, index and
 length, or says that the model was released.
 
-References are pointers in the record, 0 for ``None``. Assigning one in
+References are pointers in the record, 0 for ``None``. A reference to an
+entity points at the handle member of the owning record, so compiled code
+types it as that entity and loads the handle through it, as it would from
+the field itself. Assigning one in
 compiled code stores the new pointer; a required reference is never 0 once
 the model is bound or spawned, and an optional value is checked before it is
 stored there (``cpy_reference_fail``).
@@ -248,9 +251,16 @@ Every release, grant and capacity change signals the guard, so a
 ``Condition`` observing the resource (see :ref:`arch-native-observers`)
 sees each change through the guard's observer list.
 
-**Acquire any.** ``cpy_resource_acquire_any(resources, count, ranked,
+**Acquire any.** ``cpy_resource_acquire_any(handles, count, ranked,
 rank)`` takes one unit from whichever member grants first, without engine
-changes:
+changes. ``handles[i]`` is the address of member *i*'s handle, the record
+member that holds its resource pointer. For a tuple, compiled code puts
+these addresses in a stack array. A ``list[cb.Ref[cb.Resource]]`` already
+is such an array: its pointer table, which the host writes with the address
+of each referenced handle (see :ref:`arch-native-arrays`). So it is passed
+as it is, with its length at run time: no copy and no limit on the number
+of members. Handles are written when the trial starts and destroyed when it
+ends, so they are valid for the whole call. A zero count fails the trial.
 
 * If a member has room, it takes a unit from the first such member at once.
 * Otherwise it enqueues one entry into *every* member's guard, all with the

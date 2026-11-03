@@ -92,6 +92,41 @@ def check_array(field: Field, value, path: str) -> None:
             scalar_value(field, element, f"{path}[{position}]")
 
 
+# Entities a ``cb.Ref`` field (or a ``list[cb.Ref[...]]``) can reference.
+ENTITY_TYPES = (Container, FractionalContainer, Store, PriorityStore, Resource, Condition,
+                Dataset)
+
+
+def entity_class(annotation) -> type[Entity] | None:
+    """The entity class an annotation names (``Store[int]`` gives ``Store``), else None."""
+    origin = get_origin(annotation) or annotation
+    return origin if origin in ENTITY_TYPES else None
+
+
+def entity_name(annotation) -> str:
+    """``Resource``, ``Store[int]``: an entity annotation as written."""
+    origin = get_origin(annotation)
+    if origin is None:
+        return getattr(annotation, "__name__", str(annotation))
+    arguments = ", ".join(getattr(a, "__name__", str(a)) for a in get_args(annotation))
+    return f"{origin.__name__}[{arguments}]"
+
+
+def reference_target(field: "Field"):
+    """What a ``Ref`` field, or each item of a ``list[Ref[...]]``, points at, else None."""
+    if field.kind == "ref":
+        return field.value_type
+    if field.kind == "collection" and get_origin(field.value_type) is Ref:
+        return get_args(field.value_type)[0]
+    return None
+
+
+def is_entity_reference(field: "Field") -> bool:
+    """Whether a field references entities (``Ref[Resource]``, ``list[Ref[Resource]]``)."""
+    target = reference_target(field)
+    return target is not None and entity_class(target) is not None
+
+
 @dataclass(frozen=True)
 class Field:
     name: str
@@ -335,6 +370,8 @@ class Assembly:
     root: Model
     instances: tuple[Instance, ...]
     by_object: MappingProxyType
+    # Each entity of the tree -> (owning model, field name)
+    entities: MappingProxyType
 
     def decisions(self):
         """Decision bindings in tree and field order, preserving object identity."""
@@ -444,7 +481,8 @@ class Assembly:
                     is_refs = get_origin(field.value_type) is Ref
                     expected = (get_args(field.value_type)[0] if is_refs
                                 else field.value_type)
-                    for i, item in enumerate(value):
+                    # Entity references are checked against the tree's entities below
+                    for i, item in enumerate(() if is_entity_reference(field) else value):
                         if item is None and is_refs:
                             continue
                         if not isinstance(item, expected):
@@ -464,9 +502,48 @@ class Assembly:
                 visit(child, child_label)
 
         visit(root, type(root).__name__.lower())
+        owners: dict[Entity, tuple[Instance, Field]] = {}
         for instance in instances:
             for field in instance.schema.fields:
-                if field.kind == "ref":
+                if field.kind == "entity":
+                    owners.setdefault(instance.values[field.name], (instance, field))
+
+        def check_entity(target, annotation, where: str) -> None:
+            """A referenced entity: one of this tree's, held by a field of the
+            referenced type (a ``Ref[Store[int]]`` needs a ``Store[int]``)."""
+            expected = entity_name(annotation)
+            entity_type = entity_class(annotation)
+            assert entity_type is not None
+            if not isinstance(target, entity_type):
+                raise ModelDefinitionError(
+                    f"{where}: expected a {expected} of this model tree, got {target!r}")
+            owner = owners.get(target)
+            if owner is None:
+                raise ModelDefinitionError(
+                    f"{where}: references a {expected} that is not an entity of this "
+                    "model tree (reference an entity a model of the tree holds, such "
+                    "as role.res)")
+            holder, held = owner
+            if held.value_type != annotation:
+                raise ModelDefinitionError(
+                    f"{where}: references {holder.label}.{held.name}, a "
+                    f"{entity_name(held.value_type)}, not a {expected}")
+
+        for instance in instances:
+            for field in instance.schema.fields:
+                if field.kind == "ref" and entity_class(field.value_type) is not None:
+                    target = instance.values[field.name]
+                    if target is None and not field.optional and strict:
+                        raise ModelDefinitionError(
+                            f"{instance.label}.{field.name}: reference missing")
+                    if target is not None:
+                        check_entity(target, field.value_type,
+                                     f"{instance.label}.{field.name}")
+                elif is_entity_reference(field):
+                    for position, target in enumerate(instance.values[field.name]):
+                        check_entity(target, reference_target(field),
+                                     f"{instance.label}.{field.name}[{position}]")
+                elif field.kind == "ref":
                     target = instance.values[field.name]
                     if target is None and not field.optional and strict:
                         raise ModelDefinitionError(
@@ -483,4 +560,6 @@ class Assembly:
                         if target is not None and target not in visited:
                             raise ModelDefinitionError(
                                 f"{instance.label}.{field.name}[{position}]: dangling reference")
-        return cls(root, tuple(instances), MappingProxyType(visited))
+        return cls(root, tuple(instances), MappingProxyType(visited),
+                   MappingProxyType({entity: (holder.model, held.name)
+                                     for entity, (holder, held) in owners.items()}))

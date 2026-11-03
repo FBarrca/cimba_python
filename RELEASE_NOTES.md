@@ -1,3 +1,28 @@
+# Unreleased
+
+- `cb.Ref` fields can reference entities (#26): `cb.Ref[cb.Resource]` for
+  one, `list[cb.Ref[cb.Resource]]` for a list, and `| None` for an optional
+  one. Every entity kind can be referenced (`Resource`, `Container`,
+  `FractionalContainer`, `Store[T]`, `PriorityStore[T]`, `Condition`,
+  `Dataset`). Configure them with entity objects on the host, such as
+  `pool.resources = [role.res for role in roles]`. In compiled code a
+  referenced entity is the entity itself: all its methods, `len()` and
+  bounds-checked indexing of a list. Model code can assign an entity
+  reference, and `cb.spawn` takes one for a spawned model's `Ref` field.
+- Building an experiment checks every entity reference: a value that is not
+  an entity of the same model tree (including one of a swept option the
+  tree doesn't contain), one held by a field of another type, a `None` item
+  in an entity list, or a missing required reference raises
+  `ModelDefinitionError` naming the field.
+- `cb.acquire_any` also takes a `list[cb.Ref[cb.Resource]]` field, such as
+  `cb.acquire_any(self.pool.resources, priority=p)`, with the semantics of
+  the tuple form. Its length is read at run time, so one compiled method
+  serves pools of any size, with no maximum; an empty list fails the trial.
+  The compile error for any other argument names both forms.
+- `structure()` and `process_graph()` draw entity references: a reference
+  is an edge to the model holding the entity, and `acquire_any` over a list
+  draws an edge from every referenced resource.
+
 # Cimba Python 0.9.3
 
 Released 2026-11-03.

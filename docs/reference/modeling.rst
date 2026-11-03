@@ -75,6 +75,21 @@ The wrappers below give a field a role on top of that.
    to a required reference fails the trial if it is ``None``, as does using a
    ``None`` reference as a model.
 
+   ``M`` may also be an entity class: ``cb.Ref[cb.Resource]``,
+   ``cb.Ref[cb.Store[int]]`` and so on for every entity kind, and
+   ``list[cb.Ref[cb.Resource]]`` for a list. Assign it an entity that a model
+   of the same tree holds (``pool.resources = [role.res for role in
+   roles]``). When the experiment is built, a value that is not such an
+   entity, an entity of another tree (or of a swept option the tree doesn't
+   contain), or one held by a field of another type (a ``Store[float]`` for a
+   ``cb.Ref[cb.Store[int]]``) raises :class:`ModelDefinitionError` naming the
+   field; the items of an entity list can't be ``None``.
+
+   *Compiled:* a referenced entity is the entity itself: all its methods,
+   indexing and ``len()`` of a list, with bounds checks as for any list. It
+   can be assigned another entity of its type, and passed to
+   :func:`spawn`.
+
 .. class:: Array(contents=0)
 
    A per-instance table of ``int``, ``float`` or ``bool``, declared as
@@ -123,7 +138,8 @@ The wrappers below give a field a role on top of that.
 Other annotations: a model class (child; it may be assigned a
 :func:`sweep` of model objects, giving one model tree per option),
 ``list[M]`` (owned children),
-and ``list[cb.Ref[M]]`` (references, items may be ``None``). Unannotated
+and ``list[cb.Ref[M]]`` (references, items may be ``None``; for an entity
+class ``M``, entity references, items may not be ``None``). Unannotated
 attributes are host-only.
 
 Entities
@@ -433,11 +449,17 @@ All verbs are *compiled*.
 .. function:: acquire_any(resources, priority=None) -> int
 
    Take one unit from whichever of ``resources`` grants first and return its
-   index in ``resources``. ``resources`` is a nonempty tuple of
-   :class:`Resource` entities written in model code, such as
-   ``(self.clerks, self.seniors)`` or ``(self.desk.clerks, self.back.clerks)``;
-   anything else is a compile error. Listing a resource twice is allowed and
-   returns its first index.
+   index in ``resources``. ``resources`` is either
+
+   * a nonempty tuple of :class:`Resource` entities written in model code,
+     such as ``(self.clerks, self.seniors)`` or
+     ``(self.desk.clerks, self.back.clerks)``, or
+   * a ``list[cb.Ref[cb.Resource]]`` field, such as ``self.pool.resources``,
+     whose members and length are configuration (see :class:`Ref`). Its
+     length is read when the call runs; an empty list fails the trial.
+
+   Anything else is a compile error. Both forms behave the same way. Listing
+   a resource twice is allowed and returns its first index.
 
    * If any of them has a free unit, the call takes it at once from the first
      listed one that has.

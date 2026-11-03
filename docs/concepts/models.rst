@@ -70,6 +70,10 @@ The kinds of field
    * - ``x: list[cb.Ref[OtherModel]]``
      - collection of references
      - A list of pointers, not ownership. Items may be ``None``.
+   * - ``x: cb.Ref[cb.Resource]``, ``x: list[cb.Ref[cb.Resource]]``
+     - entity reference
+     - A pointer to an entity a model of the tree holds, or a list of them.
+       It works as the entity itself. See :ref:`entity-references`.
    * - ``x: cb.Array[T] = cb.Array(n)``
      - array
      - A fixed-length table of ``int``, ``float`` or ``bool`` per instance,
@@ -289,6 +293,49 @@ reference that is ``None`` as a model fails the trial with ``a None
 reference was used as a Station model``. Check it first:
 ``if self.next_station is not None:``.
 
+.. _entity-references:
+
+References to entities
+~~~~~~~~~~~~~~~~~~~~~~
+
+A ``Ref`` can also point at an **entity** another model of the tree holds:
+``cb.Ref[cb.Resource]`` for one, ``list[cb.Ref[cb.Resource]]`` for a list.
+Configure it with the entity objects, as you configure a model reference,
+and the list's length is configuration like the list's members:
+
+.. code-block:: python
+
+   class Role(cb.Model):
+       res: cb.Resource = cb.Resource(capacity=1)
+
+   class Pool(cb.Model):
+       resources: list[cb.Ref[cb.Resource]]
+
+   class Desk(cb.Model):
+       clerks: cb.Ref[cb.Resource]
+
+   pool.resources = [role.res for role in roles]
+   desk.clerks = office.clerks
+
+In compiled code a referenced entity *is* the entity:
+``self.clerks.acquire()``, ``self.pool.resources[i].release()``,
+``len(self.pool.resources)`` and every method of its kind work as on the
+field that holds it, with the same statistics. A list of resource
+references is also what :ref:`acquire_any <concepts-acquire-any>` takes when the set
+of resources is configuration.
+
+Every entity kind can be referenced: ``Resource``, ``Container``,
+``FractionalContainer``, ``Store[T]``, ``PriorityStore[T]``, ``Condition``
+and ``Dataset``. When the experiment is built, each referenced entity must
+be one that a model of the same tree holds, in a field of the referenced
+type (a ``cb.Ref[cb.Store[int]]`` can't reference a ``Store[float]``);
+otherwise :class:`~cimba.ModelDefinitionError` names the field. A required
+entity reference must be set, ``| None`` makes one optional, and the items
+of an entity list can't be ``None``. Like a model reference into a swept
+child, a reference to an entity of one option fails for the trees of the
+other options. Model code can assign an entity reference, and a spawned
+model takes one as a spawn argument: ``cb.spawn(Visit, clerks=self.clerks)``.
+
 Model code may **assign references** at run time. Children and lists are
 structure and can't be reassigned, but a ``Ref`` field can point anywhere,
 including at spawned models, which makes linked structures possible:
@@ -396,7 +443,8 @@ ships, and removed with ``cb.release(model)``. They use the same model classes
 with one restriction: a dynamic model holds values (plain fields,
 ``Param`` and ``Output``), arrays, references, inputs, processes, hooks and
 functions, but no entities, children or lists. Give it a ``Ref`` to a static
-model that owns the shared queues and resources, ``cb.Array`` fields for
+model that owns the shared queues and resources (or a ``Ref`` to one of those
+entities), ``cb.Array`` fields for
 per-instance tables sized at spawn, and ``Ref`` fields to link it to other
 spawned models. See :doc:`processes` for the lifecycle.
 

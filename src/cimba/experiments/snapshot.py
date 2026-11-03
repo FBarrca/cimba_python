@@ -289,6 +289,16 @@ class Batch:
         self.replications = seeds.shape[1]
         self.captures = captures
 
+    def _address(self, target) -> int:
+        """Offset in a trial block of a referenced model's record, or of the
+        handle member of a referenced entity in its owner's record."""
+        owner = self.assembly.entities.get(target)
+        if owner is None:
+            return self.layout.by_object[target].offset
+        model, name = owner
+        placement = self.layout.by_object[model]
+        return placement.offset + placement.record.offset(name)
+
     def _run_single(self, *, workers: int | None = None,
                     on_failure: str = "record", input_memory: int = 1 << 30) -> Results:
         if on_failure not in {"record", "raise"}:
@@ -462,7 +472,7 @@ class Batch:
                     if field.kind in {'param', 'field'}:
                         target[start:stop] = scalar_value(field, value, f'{instance.label}.{field.name}')
                     elif field.kind in {'child', 'ref'} and value is not None:
-                        target[start:stop] = blocks.ctypes.data + indices * self.layout.size + self.layout.by_object[value].offset
+                        target[start:stop] = blocks.ctypes.data + indices * self.layout.size + self._address(value)
                     elif field.kind == 'array':
                         # Elements live in the block after the records (see
                         # TrialImageLayout); the block starts zeroed.
@@ -480,7 +490,7 @@ class Batch:
                             elements[:] = np.asarray(array.values, dtype=element)
                     elif field.kind == 'collection':
                         children = cast(list[Model], value)
-                        offsets = np.asarray([self.layout.by_object[child].offset if child is not None else 0
+                        offsets = np.asarray([self._address(child) if child is not None else 0
                                               for child in children], dtype=np.uintp)
                         pointers = blocks.ctypes.data + indices[:, None] * self.layout.size + offsets
                         for j, child in enumerate(children):

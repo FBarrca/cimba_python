@@ -87,7 +87,7 @@ These calls may suspend the calling process:
      - an item is available / there is room.
    * - ``resource.acquire(n)`` / ``preempt(n)``
      - ``n`` units are granted.
-   * - ``cb.acquire_any((r0, r1, ...))``
+   * - ``cb.acquire_any((r0, r1, ...))`` or ``cb.acquire_any(pool.resources)``
      - one unit of any of the resources is granted; returns its index.
    * - ``condition.wait_until(predicate, timeout=math.inf)``
      - the predicate holds, the timeout expires, or the process is interrupted.

@@ -255,9 +255,31 @@ request leaves the other queues at that moment.
 
 The unit is an ordinary holding of that resource: release it with that
 resource's ``release()``; ``preempt`` can take it. ``priority=`` ranks the
-request as for ``acquire``. A negative return value is the signal that ended
-the wait (``-1`` preempted elsewhere, ``-2`` interrupted, a timer's signal),
-and leaves no request behind in any queue.
+request as for ``acquire``. A resource listed twice counts at its first
+index. A negative return value is the signal that ended the wait (``-1``
+preempted elsewhere, ``-2`` interrupted, a timer's signal), and leaves no
+request behind in any queue.
+
+When *which* resources, and how many, are configuration, hold them in a
+``list[cb.Ref[cb.Resource]]`` field (see :ref:`entity-references`) and pass
+the field. Its length is read at run time, so one compiled method serves
+pools of any size, and the semantics are those of the tuple form:
+
+.. code-block:: python
+
+   class Pool(cb.Model):
+       resources: list[cb.Ref[cb.Resource]]
+
+   # on the host: pool.resources = [role.res for role in roles]
+
+   role = cb.acquire_any(self.pool.resources, priority=priority)
+   if role >= 0:
+       cb.hold(self.service.next())
+       self.pool.resources[role].release()
+
+An empty list fails the trial. Use a tuple when the resources are fixed by
+the model's code, and a list of references when they come from the
+configuration, instead of branching on the pool's size.
 
 Use ``acquire_any`` when a task needs *one unit of any of several pools*.
 For any other rule ("two clerks, or one senior", "the least busy pool"),

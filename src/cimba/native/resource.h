@@ -59,9 +59,10 @@ CIMBA_PY_EXPORT int64_t cpy_resource_preempt_ranked(void *rp, uint64_t amount,
                                                     int64_t rank);
 CIMBA_PY_EXPORT void cpy_resource_release(void *rp, uint64_t amount);
 /* One unit from whichever of count resources grants first: returns its index,
- * or the negative signal that ended the wait. Ranked like acquire when ranked
- * is nonzero, else by the process priority. */
-CIMBA_PY_EXPORT int64_t cpy_resource_acquire_any(void *const *resources,
+ * or the negative signal that ended the wait. handles[i] is the address of
+ * member i's handle, the record member holding its resource pointer. Ranked
+ * like acquire when ranked is nonzero, else by the process priority. */
+CIMBA_PY_EXPORT int64_t cpy_resource_acquire_any(void *const *const *handles,
                                                  uint64_t count, uint64_t ranked,
                                                  int64_t rank);
 CIMBA_PY_EXPORT void cpy_resource_set_capacity(void *rp, int64_t capacity,

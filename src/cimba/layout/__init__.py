@@ -39,6 +39,15 @@ STORE_INT_HANDLE = np.dtype([("store_int_handle", POINTER)], align=True)
 STORE_FLOAT_HANDLE = np.dtype([("store_float_handle", POINTER)], align=True)
 PRIORITY_INT_HANDLE = np.dtype([("priority_int_handle", POINTER)], align=True)
 PRIORITY_FLOAT_HANDLE = np.dtype([("priority_float_handle", POINTER)], align=True)
+# Entity kind of each handle member, for compile errors about entity references
+HANDLE_ENTITIES = {
+    "container_handle": "Container", "fractional_handle": "FractionalContainer",
+    "resource_handle": "Resource", "dataset_handle": "Dataset",
+    "condition_handle": "Condition", "store_int_handle": "Store[int]",
+    "store_float_handle": "Store[float]", "priority_int_handle": "PriorityStore[int]",
+    "priority_float_handle": "PriorityStore[float]", "store_model_handle": "Store",
+    "priority_model_handle": "PriorityStore",
+}
 STORE_MODEL_TARGETS: dict[str, type[Model]] = {}
 MODEL_RECORD_CLASSES: dict[str, type[Model]] = {}
 
@@ -48,6 +57,43 @@ def _model_store_handle(model_class: type[Model], priority: bool) -> np.dtype:
     STORE_MODEL_TARGETS[marker] = model_class
     name = "priority_model_handle" if priority else "store_model_handle"
     return np.dtype([((marker, name), POINTER)], align=True)
+
+
+def entity_handle(annotation: Any, where: str) -> Any:
+    """The record member that holds an entity's native handle.
+
+    A ``Ref`` to an entity points at this member in the owning record, so
+    compiled code reads a referenced entity as the entity itself.
+    """
+    if annotation is Container:
+        return CONTAINER_HANDLE
+    if annotation is FractionalContainer:
+        return FRACTIONAL_HANDLE
+    if annotation is Resource:
+        return RESOURCE_HANDLE
+    if annotation is Dataset:
+        return DATASET_HANDLE
+    if annotation is Condition:
+        return CONDITION_HANDLE
+    if get_origin(annotation) in (Store, PriorityStore):
+        entity_type = get_origin(annotation)
+        arguments = get_args(annotation)
+        if len(arguments) != 1 or not (
+            arguments[0] in (int, float) or
+            isinstance(arguments[0], type) and issubclass(arguments[0], Model)
+        ):
+            raise TypeError(f"{where}: Store value type must be int, float or Model")
+        if arguments[0] in (int, float):
+            return {
+                (Store, int): STORE_INT_HANDLE,
+                (Store, float): STORE_FLOAT_HANDLE,
+                (PriorityStore, int): PRIORITY_INT_HANDLE,
+                (PriorityStore, float): PRIORITY_FLOAT_HANDLE,
+            }[(entity_type, arguments[0])]
+        model_class = arguments[0]
+        assert isinstance(model_class, type) and issubclass(model_class, Model)
+        return _model_store_handle(model_class, entity_type is PriorityStore)
+    return POINTER
 
 
 @dataclass(frozen=True)
@@ -82,41 +128,9 @@ class RecordLayout:
                 # cpy_model_array). A released spawned model's length is -1.
                 members.append((field.name, POINTER))
                 members.append((f"{field.name}_length", np.int64))
-            elif field.kind == "entity" and field.value_type is Container:
-                members.append((field.name, CONTAINER_HANDLE))
-            elif field.kind == "entity" and field.value_type is FractionalContainer:
-                members.append((field.name, FRACTIONAL_HANDLE))
-            elif field.kind == "entity" and field.value_type is Resource:
-                members.append((field.name, RESOURCE_HANDLE))
-            elif field.kind == "entity" and field.value_type is Dataset:
-                members.append((field.name, DATASET_HANDLE))
-            elif field.kind == "entity" and field.value_type is Condition:
-                members.append((field.name, CONDITION_HANDLE))
-            elif field.kind == "entity" and get_origin(field.value_type) in (
-                Store, PriorityStore
-            ):
-                entity_type = get_origin(field.value_type)
-                arguments = get_args(field.value_type)
-                if len(arguments) != 1 or not (
-                    arguments[0] in (int, float) or
-                    isinstance(arguments[0], type) and
-                    issubclass(arguments[0], Model)
-                ):
-                    raise TypeError(f"{schema.cls.__name__}.{field.name}: "
-                                    "Store value type must be int, float or Model")
-                if arguments[0] in (int, float):
-                    handle = {
-                        (Store, int): STORE_INT_HANDLE,
-                        (Store, float): STORE_FLOAT_HANDLE,
-                        (PriorityStore, int): PRIORITY_INT_HANDLE,
-                        (PriorityStore, float): PRIORITY_FLOAT_HANDLE,
-                    }[(entity_type, arguments[0])]
-                else:
-                    model_class = arguments[0]
-                    assert isinstance(model_class, type) and issubclass(model_class, Model)
-                    handle = _model_store_handle(
-                        model_class, entity_type is PriorityStore)
-                members.append((field.name, handle))
+            elif field.kind == "entity":
+                members.append((field.name, entity_handle(
+                    field.value_type, f"{schema.cls.__name__}.{field.name}")))
             else:
                 members.append((field.name, POINTER))
         record = cls(schema, np.dtype(members, align=True))

@@ -677,19 +677,31 @@ void cpy_resource_set_capacity(void *vp, const int64_t value, const uint64_t mod
 
 #define NO_WINNER UINT64_MAX
 
+/* Members are given by the addresses of their handles, the record members
+ * that hold the resource pointers: a tuple's on the caller's stack, a
+ * list[Ref[Resource]]'s pointer table as the host wrote it. Handles are set
+ * when the trial starts and stay put until it ends, so the members are read
+ * through them, with no copy and no limit on their number. */
+typedef void *const *const *members_t;
+
 struct any_request {
     struct request rq;                  /* First: reprioritize() reads it */
-    struct cpy_resource *const *members;
+    members_t members;
     uint64_t count;
     uint64_t key;                       /* The current wait's key, in every queue */
     uint64_t winner;                    /* Granting member, NO_WINNER until then */
 };
 
+static inline struct cpy_resource *member(const members_t members, const uint64_t i)
+{
+    return (struct cpy_resource *)*members[i];
+}
+
 /* Whether members[i] repeats an earlier member; it then has no own entry */
-static bool repeats(struct cpy_resource *const *members, const uint64_t i)
+static bool repeats(const members_t members, const uint64_t i)
 {
     for (uint64_t j = 0u; j < i; j++)
-        if (members[j] == members[i]) return true;
+        if (member(members, j) == member(members, i)) return true;
     return false;
 }
 
@@ -705,7 +717,7 @@ static bool is_available_any(const struct cmi_resourcebase *rbp,
     struct any_request *ar = (struct any_request *)ctx;
     struct cmb_process *waiter = (struct cmb_process *)pp;
     for (uint64_t i = 0u; i < ar->count; i++) {
-        struct cpy_resource *mp = ar->members[i];
+        struct cpy_resource *mp = member(ar->members, i);
         if (mp == rp) {
             if (ar->winner == NO_WINNER) ar->winner = i;
             continue;
@@ -737,19 +749,20 @@ static void take_one(struct cpy_resource *rp, struct cmb_process *caller,
     cmb_resourceguard_signal(&(rp->guard));
 }
 
-static void settle_tags(struct cmb_process *pp, struct cpy_resource *const *members,
+static void settle_tags(struct cmb_process *pp, const members_t members,
                         const uint64_t count)
 {
     for (uint64_t i = 0u; i < count; i++)
-        if (!repeats(members, i)) settle_tag(pp, members[i]);
+        if (!repeats(members, i)) settle_tag(pp, member(members, i));
 }
 
-int64_t cpy_resource_acquire_any(void *const *resources, const uint64_t count,
+int64_t cpy_resource_acquire_any(void *const *const *handles, const uint64_t count,
                                  const uint64_t ranked, const int64_t rank)
 {
-    if (count == 0u) cpy_trial_fail("acquire_any() needs at least one resource");
-    struct cpy_resource *const *members = (struct cpy_resource *const *)resources;
-    cpy_require_process(members[0], "acquire_any() cannot hold a resource");
+    if (count == 0u)
+        cpy_trial_fail("acquire_any() needs at least one resource, got an empty list");
+    const members_t members = handles;
+    cpy_require_process(member(members, 0u), "acquire_any() cannot hold a resource");
     struct cmb_process *caller = cmb_process_current();
 
     struct any_request ar = { { ranked != 0u, rank }, members, count, 0u, NO_WINNER };
@@ -757,8 +770,8 @@ int64_t cpy_resource_acquire_any(void *const *resources, const uint64_t count,
     struct place place = { 0u, 0.0, 0u };
     while (true) {
         for (uint64_t i = 0u; i < count; i++) {
-            if (room(members[i]) > 0u) {
-                take_one(members[i], caller, rq);
+            if (room(member(members, i)) > 0u) {
+                take_one(member(members, i), caller, rq);
                 settle_tags(caller, members, count);
                 return (int64_t)i;
             }
@@ -769,7 +782,7 @@ int64_t cpy_resource_acquire_any(void *const *resources, const uint64_t count,
         ar.winner = NO_WINNER;
         for (uint64_t i = 0u; i < count; i++) {
             if (repeats(members, i)) continue;
-            struct cpy_resource *mp = members[i];
+            struct cpy_resource *mp = member(members, i);
             add_tag(caller, mp);
             (void)cmi_hashheap_enqueue(queue_of(mp), caller, (void *)is_available_any,
                                        (void *)&ar, NULL, ar.key, place.time,
@@ -785,7 +798,7 @@ int64_t cpy_resource_acquire_any(void *const *resources, const uint64_t count,
         /* Clean up as a guarded wait does, in every queue still holding it */
         for (uint64_t i = 0u; i < count; i++) {
             if (repeats(members, i)) continue;
-            struct cpy_resource *mp = members[i];
+            struct cpy_resource *mp = member(members, i);
             (void)cmi_process_remove_awaitable(caller, CMI_PROCESS_AWAITABLE_RESOURCE,
                                                &(mp->guard));
             if (cmi_hashheap_is_enqueued(queue_of(mp), ar.key))
@@ -796,15 +809,15 @@ int64_t cpy_resource_acquire_any(void *const *resources, const uint64_t count,
             if (sig != CMB_PROCESS_CANCELLED)
                 for (uint64_t i = 0u; i < count; i++)
                     if (!repeats(members, i))
-                        (void)cmb_resourceguard_signal(&(members[i]->guard));
+                        (void)cmb_resourceguard_signal(&(member(members, i)->guard));
             settle_tags(caller, members, count);
             return sig;
         }
 
         /* Granted by members[winner]. Someone may have taken the unit since;
          * then look again, and wait again at the same place if none is free. */
-        if (ar.winner != NO_WINNER && room(members[ar.winner]) > 0u) {
-            take_one(members[ar.winner], caller, rq);
+        if (ar.winner != NO_WINNER && room(member(members, ar.winner)) > 0u) {
+            take_one(member(members, ar.winner), caller, rq);
             settle_tags(caller, members, count);
             return (int64_t)ar.winner;
         }

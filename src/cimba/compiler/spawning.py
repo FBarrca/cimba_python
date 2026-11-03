@@ -15,9 +15,9 @@ from numba import from_dtype, types
 
 from cimba.engine.symbols import register
 from cimba.engine.abi import INPUT_EMPTY, INPUT_SLOT, INPUT_SLOT_BOOL, INPUT_SLOT_INT
-from cimba.layout import MODEL_RECORD_CLASSES, RecordLayout, array_dtype
+from cimba.layout import MODEL_RECORD_CLASSES, RecordLayout, array_dtype, entity_handle
 from cimba.modeling import ModelMeta, Sweep, spawn
-from cimba.schema import ClassSchema, is_int_enum
+from cimba.schema import ClassSchema, entity_class, entity_name, is_int_enum
 from .numba_compat import (
     AbstractTemplate, cgutils, infer_global, lower_builtin, lower_constant,
     models, register_model, signature, typeof_impl,
@@ -120,32 +120,34 @@ class SpawnTemplate(AbstractTemplate):
                     raise TypeError(f"{schema.cls.__name__}.{field.name}: spawn takes the "
                                     f"array length as an int, got {length_type}")
             if field.kind == "ref":
+                where = f"{schema.cls.__name__}.{field.name}"
+                entity = entity_class(field.value_type) is not None
+                wanted = (f"a {entity_name(field.value_type)} reference" if entity
+                          else "a model reference")
                 reference_type = kws.get(field.name)
+                record = (reference_type.type if isinstance(reference_type, types.Optional)
+                          else reference_type)
                 if reference_type is None:
                     if not field.optional:
-                        raise TypeError(f"{schema.cls.__name__}.{field.name}: "
-                                        "spawn reference required")
+                        raise TypeError(f"{where}: spawn reference required")
                 elif isinstance(reference_type, types.NoneType):
                     if not field.optional:
-                        raise TypeError(f"{schema.cls.__name__}.{field.name}: "
-                                        "reference cannot be None")
-                elif isinstance(reference_type, types.Record) or (
-                        isinstance(reference_type, types.Optional) and
-                        isinstance(reference_type.type, types.Record)):
+                        raise TypeError(f"{where}: reference cannot be None")
+                elif not isinstance(record, types.Record):
+                    raise TypeError(f"{where}: expected {wanted}")
+                elif entity:
+                    # A referenced entity is typed as the entity's handle member
+                    if record != from_dtype(entity_handle(field.value_type, where)):
+                        raise TypeError(f"{where}: expected {wanted}, such as "
+                                        f"self.{field.name}, got {reference_type}")
+                else:
                     # An optional for a required reference is checked when
                     # spawning: Numba keeps a narrowed optional's type.
-                    record = (reference_type.type if isinstance(reference_type, types.Optional)
-                              else reference_type)
-                    assert isinstance(record, types.Record)
                     actual = next((model_class for marker, model_class
                                    in MODEL_RECORD_CLASSES.items()
                                    if marker in record.fields), None)
                     if actual is None or not issubclass(actual, field.value_type):
-                        raise TypeError(f"{schema.cls.__name__}.{field.name}: "
-                                        "incompatible model reference")
-                else:
-                    raise TypeError(f"{schema.cls.__name__}.{field.name}: "
-                                    "expected a model reference")
+                        raise TypeError(f"{where}: incompatible model reference")
         parameters = [inspect.Parameter(
             "model_class", inspect.Parameter.POSITIONAL_OR_KEYWORD)]
         parameters.extend(inspect.Parameter(

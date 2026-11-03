@@ -22,7 +22,7 @@ import cimba.modeling as modeling
 from cimba.modeling import (
     Condition, Container, Dataset, FractionalContainer, Model, PriorityStore, Resource, Store, Sweep,
 )
-from cimba.schema import Assembly, ClassSchema
+from cimba.schema import Assembly, ClassSchema, entity_name
 
 from .graph import Edge, Graph, Group, Node
 
@@ -116,7 +116,7 @@ class _Analysis:
             if ref.kind == "entity":
                 entity = self.schema(ref.owner)
                 field = next(f for f in entity.fields if f.name == ref.name)
-                label = f"{ref.name} · {_entity_name(field.value_type)}"
+                label = f"{ref.name} · {entity_name(field.value_type)}"
             elif ref.kind == "input" and not isinstance(ref.owner, _Spawned):
                 label = f"{ref.name} · {_source_name(self.assembly.by_object[ref.owner].values[ref.name])}"
         if key not in self.nodes:
@@ -246,7 +246,7 @@ class _Visitor(ast.NodeVisitor):
                     items = analysis.assembly.by_object[ref.owner].values[ref.name]
                     chosen = ([items[literal]] if literal is not None
                               and -len(items) <= literal < len(items) else items)
-                    found |= {_Ref("model", item) for item in chosen if item is not None}
+                    found |= {self.target(item) for item in chosen if item is not None}
             return found
         if isinstance(node, ast.Call):
             func = node.func
@@ -293,7 +293,7 @@ class _Visitor(ast.NodeVisitor):
         if field.kind == "child" and isinstance(value, Sweep):
             return {_Ref("model", option) for option in value.values}
         if field.kind in {"child", "ref"}:
-            return {_Ref("model", value)} if value is not None else set()
+            return {self.target(value)} if value is not None else set()
         if field.kind == "collection":
             return {_Ref("collection", owner, name)}
         if field.kind == "entity":
@@ -301,6 +301,11 @@ class _Visitor(ast.NodeVisitor):
         if field.kind in {"input", "series"}:
             return {_Ref("input", owner, name)}
         return {_Ref("field", owner, name)}
+
+    def target(self, value) -> _Ref:
+        """A referenced model, or the entity field a referenced entity is."""
+        owner = self.analysis.assembly.entities.get(value)
+        return _Ref("model", value) if owner is None else _Ref("entity", *owner)
 
     def store_item(self, ref: _Ref):
         if ref.kind != "entity":
@@ -396,7 +401,7 @@ class _Visitor(ast.NodeVisitor):
             for keyword in node.keywords:
                 if keyword.arg and kinds.get(keyword.arg) in {"ref", "input", "series"}:
                     refs = {r for r in self.resolve(keyword.value)
-                            if r.kind in {"model", "input"}}
+                            if r.kind in {"model", "input", "entity"}}
                     analysis.bindings.setdefault((spawned, keyword.arg), set()).update(refs)
             return
         if verb == "schedule" and node.args:
@@ -409,7 +414,9 @@ class _Visitor(ast.NodeVisitor):
                     analysis.edge(self.actor, key, "schedule")
             return
         if verb == "acquire_any" and node.args:
-            for ref in self.resolve(node.args[0]):
+            # A tuple's members, or every item of a list of references
+            members = node.args[0]
+            for ref in self.resolve(members) | self.resolve(ast.Subscript(members, ast.Name("_"))):
                 if ref.kind == "entity":
                     analysis.edge(analysis.node(ref), self.actor, "acquire any")
             return
@@ -475,14 +482,6 @@ def _function_ast(function) -> ast.FunctionDef | None:
 def _first_param(function) -> str:
     function = getattr(function, "py_func", function)
     return function.__code__.co_varnames[0] if function.__code__.co_argcount else "self"
-
-
-def _entity_name(value_type) -> str:
-    origin = get_origin(value_type)
-    if origin is None:
-        return getattr(value_type, "__name__", str(value_type))
-    arguments = ", ".join(getattr(a, "__name__", str(a)) for a in get_args(value_type))
-    return f"{origin.__name__}[{arguments}]"
 
 
 def _source_name(value) -> str:

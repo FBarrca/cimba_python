@@ -27,6 +27,14 @@ def structure(model: Model) -> Graph:
           for field in instance.schema.fields if isinstance(instance.values[field.name], Decision))]),
         "instance") for instance in assembly.instances)
     label = {instance.model: instance.label for instance in assembly.instances}
+    # A referenced entity is drawn as a reference to the model holding it.
+    label.update({entity: assembly.by_object[model].label
+                  for entity, (model, _) in assembly.entities.items()})
+
+    def referenced(name: str, value) -> str:
+        owner = assembly.entities.get(value)
+        return name if owner is None else f"{name} → {owner[1]}"
+
     edges = []
     for instance in assembly.instances:
         for field in instance.schema.fields:
@@ -37,13 +45,15 @@ def structure(model: Model) -> Graph:
                                       f"{field.name} (option {index})"))
             elif field.kind in {"child", "ref"} and value is not None:
                 style = "solid" if field.kind == "child" else "dotted"
-                edges.append(Edge(instance.label, label[value], field.name, style))
+                edges.append(Edge(instance.label, label[value],
+                                  referenced(field.name, value), style))
             elif field.kind == "collection":
                 style = "dotted" if get_origin(field.value_type) is Ref else "solid"
                 for index, member in enumerate(value or ()):
                     if member is not None:
                         edges.append(Edge(instance.label, label[member],
-                                          f"{field.name}[{index}]", style))
+                                          referenced(f"{field.name}[{index}]", member),
+                                          style))
     return Graph(nodes, tuple(edges))
 
 

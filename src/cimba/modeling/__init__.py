@@ -17,7 +17,7 @@ from typing import (
 from typing_extensions import TypeAliasType
 
 T = TypeVar("T")
-M = TypeVar("M", bound="Model")
+M = TypeVar("M", bound="Model | Entity")
 
 # A FractionalContainer counts quanta in a uint64; its largest value means unlimited.
 FRACTIONAL_UNLIMITED = 2**64 - 1
@@ -520,17 +520,21 @@ def function(method):
     return method
 
 
-def acquire_any(resources: tuple[Resource, ...], priority: int | None = None) -> int:
+def acquire_any(resources: tuple[Resource, ...] | list[Resource],
+                priority: int | None = None) -> int:
     """Wait for one unit of whichever resource grants first; return its index.
 
     ``resources`` is a tuple of resources, such as ``(self.clerks,
-    self.seniors)``. A free unit is taken at once, from the first listed
-    resource that has one. Otherwise the request waits in every resource's
-    queue, with the place an ``acquire()`` would get, and the first to grant
-    serves it. The unit is an ordinary holding of that resource: release it
-    with its ``release()``. ``priority`` ranks the request as for
-    ``acquire()``. Returns the negative signal instead if the wait is
-    interrupted (-2) or preempted (-1), or ends with any other signal.
+    self.seniors)``, or a ``list[cb.Ref[cb.Resource]]`` field, such as
+    ``self.pool.resources``, whose members and length are configuration. A
+    free unit is taken at once, from the first listed resource that has one.
+    Otherwise the request waits in every resource's queue, with the place an
+    ``acquire()`` would get, and the first to grant serves it. A resource
+    listed twice counts at its first index. The unit is an ordinary holding
+    of that resource: release it with its ``release()``. ``priority`` ranks
+    the request as for ``acquire()``. Returns the negative signal instead if
+    the wait is interrupted (-2) or preempted (-1), or ends with any other
+    signal. An empty list fails the trial.
     """
     raise NotInCompiledCode("acquire_any() is available only in compiled model code")
 
