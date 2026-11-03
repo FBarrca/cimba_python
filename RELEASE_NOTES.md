@@ -1,4 +1,6 @@
-# Unreleased
+# Cimba Python 0.9.4
+
+Released 2026-11-03.
 
 - `cb.Ref` fields can reference entities (#26): `cb.Ref[cb.Resource]` for
   one, `list[cb.Ref[cb.Resource]]` for a list, and `| None` for an optional
