@@ -1,3 +1,13 @@
+# Unreleased
+
+- Spawning processes on macOS is about 2.5× faster (#28). The macOS ports
+  of the engine now keep a per-thread pool of guarded coroutine stacks, as
+  the Linux ports do, so a stack is protected with `mprotect` once rather
+  than on every spawn and retire. A churn of short-lived processes drops from
+  1.75 to 0.71 µs per spawn on Apple Silicon. Linux and Windows are
+  unchanged. The engine also skips fat LTO objects when the compiler rejects
+  them together with `-flto`.
+
 # Cimba Python 0.9.4
 
 Released 2026-11-03.
