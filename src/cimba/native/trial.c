@@ -6,9 +6,13 @@
 #include <string.h>
 
 #include "cimba.h"
+#include "cmi_coroutine.h"
 #include "cmb_priorityqueue.h"
 #include "cmb_resourceguard.h"
 #include "cmi_hashheap.h"
+#include "cmi_memregistry.h"
+#include "cmi_memutils.h"
+#include "cmi_slist.h"
 #include "abi.h"
 #include "fractional.h"
 #include "resource.h"
@@ -65,6 +69,13 @@ typedef struct observer_relay {
     uint64_t subject_count;
 } observer_relay;
 
+/* A finished spawned process whose struct is freed once the clock has moved
+ * on (see "Retiring spawned processes" below). */
+typedef struct retired_process {
+    struct cmb_process *process;
+    double time;
+} retired_process;
+
 typedef struct trial_resources {
     cpy_trial_header *header;
     const cpy_trial_descriptor *descriptor;
@@ -76,6 +87,11 @@ typedef struct trial_resources {
     released_static_model *released_static;
     observer_relay *relays;
     uint64_t relay_count;
+    retired_process *retired;            /* FIFO ring, in retirement order */
+    uint64_t retired_head;
+    uint64_t retired_count;
+    uint64_t retired_capacity;
+    double signalled_at;                 /* Last interrupt or resume scheduled */
     int queue_initialized;
     int random_initialized;
     int recording_started;
@@ -129,6 +145,92 @@ static void deferred_process_start(void *subject, void *object)
     cmb_process_start(subject);
 }
 
+/*
+ * Retiring spawned processes. The engine's process exit and destroy make sure
+ * no pending event can still reach the process by sweeping the whole event
+ * queue for it, nine times over its lifetime. With one process per entity in
+ * flight that queue holds an event per live process, so each exit costs time
+ * linear in the live processes and a trial quadratic time (#27). The engine
+ * stays unmodified; spawned processes avoid both sweeps where they can be
+ * shown to find nothing:
+ *
+ * - Every wakeup the sweeps look for (interrupt, resume, preempt, and the
+ *   process, event, condition and resource grant wakeups) is scheduled at the
+ *   time it is scheduled from, so it runs before the clock moves on. A struct
+ *   that is only freed once the clock has passed its retirement can't be
+ *   reached by any of them, so it is freed without the destroy sweeps. Until
+ *   then such a wakeup finds a finished process, which every handler checks.
+ * - The exit sweeps cancel pending interrupts, resumes and preempts. Model
+ *   code schedules these only through cpy_process_interrupt and
+ *   cpy_process_resume, which note the time. A process that finishes holding
+ *   nothing, waiting for nothing and awaited by none, when none was
+ *   scheduled at this time, has none pending: it ends its coroutine directly.
+ *   Any other exit goes through cmb_process_exit as before.
+ */
+
+void cpy_process_interrupt(void *pp, const int64_t sig, const int64_t pri)
+{
+    if (active_trial != NULL) active_trial->signalled_at = cmb_time();
+    cmb_process_interrupt(pp, sig, pri);
+}
+
+void cpy_process_resume(void *pp, const int64_t sig)
+{
+    if (active_trial != NULL) active_trial->signalled_at = cmb_time();
+    cmb_process_resume(pp, sig);
+}
+
+/* cmb_process_destroy without its sweeps: only for a struct no event can reach */
+static void free_retired(struct cmb_process *process)
+{
+    cmi_memregistry_remove(&(process->destroy));
+    cmi_free(process);
+}
+
+/* Free the retired processes no event can reach any more: those of earlier times */
+static void free_retired_before(trial_resources *resources, const double time)
+{
+    while (resources->retired_count > 0u) {
+        retired_process *oldest = &resources->retired[resources->retired_head];
+        if (!(oldest->time < time)) break;
+        free_retired(oldest->process);
+        resources->retired_head = (resources->retired_head + 1u) %
+                                  resources->retired_capacity;
+        resources->retired_count--;
+    }
+}
+
+static void keep_retired(trial_resources *resources, struct cmb_process *process)
+{
+    if (resources->retired_count == resources->retired_capacity) {
+        const uint64_t capacity = resources->retired_capacity ?
+                                  2u * resources->retired_capacity : 64u;
+        retired_process *ring = malloc(capacity * sizeof(*ring));
+        if (ring == NULL) cimba_trial_abandon();
+        for (uint64_t i = 0u; i < resources->retired_count; ++i)
+            ring[i] = resources->retired[(resources->retired_head + i) %
+                                         resources->retired_capacity];
+        free(resources->retired);
+        resources->retired = ring;
+        resources->retired_head = 0u;
+        resources->retired_capacity = capacity;
+    }
+    const uint64_t tail = (resources->retired_head + resources->retired_count) %
+                          resources->retired_capacity;
+    resources->retired[tail] = (retired_process){ process, cmb_time() };
+    resources->retired_count++;
+}
+
+/* At trial end nothing runs any more; on abandonment the engine's registry
+ * frees the structs, so only the ring goes. */
+static void release_retired(trial_resources *resources, int normal)
+{
+    if (normal) free_retired_before(resources, INFINITY);
+    free(resources->retired);
+    resources->retired = NULL;
+    resources->retired_count = 0u;
+}
+
 static void retire_spawned_process(void *subject, void *object)
 {
     struct cmb_process *process = subject;
@@ -138,8 +240,10 @@ static void retire_spawned_process(void *subject, void *object)
      * Model records remain alive for references and end hooks; their finished
      * process stacks can return to the engine's pool immediately. */
     if (cmb_process_status(process) == CMB_PROCESS_RUNNING) return;
+    trial_resources *resources = active_trial;
     cmb_process_terminate(process);
-    cmb_process_destroy(process);
+    free_retired_before(resources, cmb_time());
+    keep_retired(resources, process);
     *slot = NULL;
 }
 
@@ -149,6 +253,12 @@ static void *run_spawned_process(struct cmb_process *process, void *argument)
     void *result = context->callback(process, context->record);
     cmb_event_schedule(retire_spawned_process, process, context->slot,
                        cmb_time(), 0);
+    if (cmi_slist_is_empty(&(process->resources)) &&
+        cmi_slist_is_empty(&(process->awaits)) &&
+        cmi_slist_is_empty(&(process->waiters)) &&
+        active_trial->signalled_at < cmb_time())
+        /* All cmb_process_exit would do is sweep for wakeups there are none of */
+        cmi_coroutine_exit(result);
     return result;
 }
 
@@ -560,6 +670,7 @@ static void abandoned_trial(void *argument)
     inspect_inputs(resources);
     release_inputs(resources);
     free_spawned_nodes(resources, 0);
+    release_retired(resources, 0);
     free_released_static_models(resources);
     cpy_capture_release(resources->header->capture,
                         resources->descriptor->entity_count);
@@ -701,6 +812,7 @@ static void run_trial(void *block)
     if (resources == NULL) abort();
     resources->header = header;
     resources->descriptor = descriptor;
+    resources->signalled_at = -INFINITY;
     active_trial = resources;
     header->status = CPY_TRIAL_RUNNING;
     header->error[0] = '\0';
@@ -821,6 +933,7 @@ static void run_trial(void *block)
         cmb_process_destroy(resources->processes[i]);
     }
     free_spawned_nodes(resources, 1);
+    release_retired(resources, 1);
     free_released_static_models(resources);
     unsubscribe_observers(resources);
     for (uint64_t i = 0; i < descriptor->entity_count; ++i) {

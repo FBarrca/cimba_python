@@ -138,6 +138,25 @@ processes at the current time. ``cpy_model_release`` stops its processes and
 marks it released. All spawned records are freed when the trial ends, so a
 reference to a released model never dangles within the trial.
 
+**Retiring finished processes.** The engine's process exit and destroy make
+sure no pending event can reach a process by sweeping the whole event queue
+for it. With a process per entity in flight, the queue holds an event per
+live process, so these sweeps made each exit linear in the live processes
+and a trial quadratic. Without changing the engine, spawned processes skip
+them where they can't find anything:
+
+* every wakeup the sweeps look for is scheduled at the time it is scheduled
+  from, so it runs before the clock moves on. A finished process's stack goes
+  back to the engine at once, but its struct is kept until the clock has
+  passed its retirement and then freed without the sweeps; until then a stale
+  wakeup finds a finished process, which every handler checks;
+* the exit sweeps cancel pending interrupts, resumes and preemptions. Model
+  code and ``resource.c`` schedule these through ``cpy_process_interrupt``
+  and ``cpy_process_resume``, which note the time. A process that finishes
+  holding nothing, waiting for nothing and awaited by none, when none was
+  scheduled at this time, ends its coroutine directly; any other exit goes
+  through ``cmb_process_exit``.
+
 .. _arch-native-arrays:
 
 Array storage

@@ -52,7 +52,7 @@ for _name in ("cpy_process_hold", "cmb_time", "cpy_buffer_put",
               "cpy_schedule_pending", "cpy_model_release", "cpy_model_is_dynamic",
               "cpy_process_current", "cpy_process_yield",
               "cpy_process_status", "cpy_process_timer_set",
-              "cmb_process_resume", "cmb_process_interrupt",
+              "cpy_process_resume", "cpy_process_interrupt",
               "cmb_process_priority_set",
               "cmb_process_timers_clear",
               "cpy_end_trial", "cpy_logger_user_msg", "cpy_logger_user_f64"):
@@ -180,9 +180,9 @@ _process_timer_set = types.ExternalFunction(
     "cpy_process_timer_set", types.uint64(types.intp, types.float64,
                                          types.int64))
 _process_resume = types.ExternalFunction(
-    "cmb_process_resume", types.void(types.intp, types.int64))
+    "cpy_process_resume", types.void(types.intp, types.int64))
 _process_interrupt = types.ExternalFunction(
-    "cmb_process_interrupt", types.void(types.intp, types.int64,
+    "cpy_process_interrupt", types.void(types.intp, types.int64,
                                         types.int64))
 _process_priority_set = types.ExternalFunction(
     "cmb_process_priority_set", types.void(types.intp, types.int64))

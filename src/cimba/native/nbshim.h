@@ -175,6 +175,10 @@ CIMBA_PY_EXPORT uint64_t cpy_priorityqueue_space(const void *pqp);
 CIMBA_PY_EXPORT void cpy_priorityqueue_reprioritize(void *pqp, uint64_t hndl,
                                                     int64_t priority);
 CIMBA_PY_EXPORT uint64_t cpy_priorityqueue_cancel(void *pqp, uint64_t hndl);
+/* cmb_process_interrupt and cmb_process_resume, noting the time for the
+ * retirement of spawned processes; defined in trial.c */
+CIMBA_PY_EXPORT void cpy_process_interrupt(void *pp, int64_t sig, int64_t pri);
+CIMBA_PY_EXPORT void cpy_process_resume(void *pp, int64_t sig);
 CIMBA_PY_EXPORT uint64_t cpy_process_timer_set(void *pp, double dur,
                                                int64_t sig);
 CIMBA_PY_EXPORT uint64_t cpy_process_timer_cancel(void *pp, uint64_t hndl);

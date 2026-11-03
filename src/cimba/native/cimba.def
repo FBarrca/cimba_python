@@ -75,6 +75,8 @@ EXPORTS
     cpy_process_yield
     cpy_process_hold
     cmb_process_priority_set
+    cpy_process_interrupt
+    cpy_process_resume
     cpy_process_timer_set
     cmb_process_timer_add
     cpy_process_timer_cancel

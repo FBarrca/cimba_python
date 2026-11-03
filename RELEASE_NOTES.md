@@ -19,6 +19,13 @@
   the tuple form. Its length is read at run time, so one compiled method
   serves pools of any size, with no maximum; an empty list fails the trial.
   The compile error for any other argument names both forms.
+- Ending a spawned process no longer costs time proportional to the number
+  of live processes (#27). The engine swept its whole event queue, which
+  holds an event per live process, nine times per process, so trials with
+  tens of thousands of processes alive took quadratic time: 60,000 live
+  workers sharing a million holds took 12.2 s and now take 1.1 s, and a burst
+  of 40,000 short-lived processes costs about 3 µs per process instead of
+  hundreds. Results are unchanged. The vendored engine is not modified.
 - `structure()` and `process_graph()` draw entity references: a reference
   is an edge to the model holding the entity, and `acquire_any` over a list
   draws an edge from every referenced resource.

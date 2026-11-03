@@ -427,7 +427,7 @@ static uint64_t preempt_front(struct cpy_resource *rp)
     (void)cmi_process_remove_holdable(victim, &(rp->core));
     /* It may be waiting for more, here or elsewhere: cancel that */
     cmi_process_cancel_awaiteds(victim);
-    cmb_process_interrupt(victim, CMB_PROCESS_PREEMPTED, cmb_process_priority(victim));
+    cpy_process_interrupt(victim, CMB_PROCESS_PREEMPTED, cmb_process_priority(victim));
     cmb_logger_info(stdout, "Preempted %" PRIu64 " from %s", loot, victim->name);
     return loot;
 }
