@@ -17,6 +17,7 @@ whole system, a station in it, or a customer passing through.
        worker: cb.Resource = cb.Resource(capacity=2)                       # configured entity
        plant: cb.Ref["Plant"]                                              # reference
        next_station: cb.Ref["Station"] | None = None                       # optional reference
+       arrivals: cb.Array[int] = cb.Array(4)                               # array
 
 The kinds of field
 ------------------
@@ -69,16 +70,20 @@ The kinds of field
    * - ``x: list[cb.Ref[OtherModel]]``
      - collection of references
      - A list of pointers, not ownership. Items may be ``None``.
+   * - ``x: cb.Array[T] = cb.Array(n)``
+     - array
+     - A fixed-length table of ``int``, ``float`` or ``bool`` per instance,
+       whose length is configuration. See :ref:`array-fields`.
    * - (no annotation)
      - host-only
      - An ordinary Python attribute, such as a display name. Compiled code
        never sees it.
 
 Scalar field types (``T``) are ``float``, ``int``, ``bool`` and
-``enum.IntEnum`` classes (see below). Strings, lists of numbers and other
-Python objects can't live in trial memory. Keep them as host-only attributes,
-or as module-level constants (NumPy arrays work well) that compiled code
-reads.
+``enum.IntEnum`` classes (see below). A table of numbers that model code
+changes is a ``cb.Array`` field. Strings and other Python objects can't live
+in trial memory. Keep them as host-only attributes, or as module-level
+constants (NumPy arrays work well) that compiled code reads.
 
 Enum fields
 ~~~~~~~~~~~
@@ -129,6 +134,67 @@ holds members:
 Only ``enum.IntEnum`` is supported: a field typed with any other
 ``enum.Enum`` is a ``ModelDefinitionError`` that says to derive it from
 ``IntEnum``.
+
+.. _array-fields:
+
+Array fields
+~~~~~~~~~~~~
+
+A ``cb.Array[T]`` field gives each instance its own table of ``int``,
+``float`` or ``bool`` values. Its element type is part of the class; its
+length is configuration, so changing it never recompiles anything:
+
+.. code-block:: python
+
+   class Case(cb.Model):
+       case_id: int = 0
+       joins: cb.Array[int]                    # length given at spawn
+
+   class Gate(cb.Model):
+       counts: cb.Array[int] = cb.Array(4)     # four zeros
+       weights: cb.Array[float] = cb.Array([0.5, 1.5, 2.0])
+       join_slots: cb.Param[int] = 8
+
+       @cb.process
+       def run(self):
+           case = cb.spawn(Case, case_id=1, joins=self.join_slots)
+           case.joins[3] += 1
+           total = 0
+           for count in case.joins:
+               total += count
+           self.counts[0] = len(case.joins)
+
+   gate = Gate()
+   gate.counts = cb.Array(16)                         # a static model's length
+   gate.counts = cb.sweep(cb.Array(8), cb.Array(16))  # or a sweep of lengths
+
+* **Configuring.** ``cb.Array(n)`` is ``n`` zeros (``False`` for ``bool``);
+  ``cb.Array([1, 2, 3])`` holds those initial values, checked against the
+  element type. A static model's array is a class default or a host
+  assignment, and may be a ``cb.sweep`` of arrays. A static model with an
+  array field and neither is an error when the ``Experiment`` is created.
+* **Spawning.** ``cb.spawn(Case, joins=n)`` takes an ``int`` *length* for an
+  array field and gives a zeroed array of that length. Without the argument
+  the class default is used (its length, and its values if it has any). A
+  negative length fails the trial.
+* **In compiled code** an array supports ``a[i]``, ``a[i] = v``,
+  ``a[i] += 1``, ``len(a)`` and ``for x in a``, on ``self``, through a
+  reference, a list item or a ``@cb.function`` parameter. Indices run from
+  ``0`` to ``len(a) - 1``. Any other index, including a negative one, fails
+  the trial with a reason such as ``Case.joins[8]: index out of range for
+  length 8``; it never reads or writes outside the array. A write must fit
+  the element type: a ``float`` into an ``int`` array is a compile error
+  (convert with ``int()``). The field itself can't be reassigned in model
+  code.
+* **Every trial starts fresh.** A static array starts each trial from its
+  configured contents, and each spawned model gets its own array. Arrays are
+  per-trial state, not results: copy what you want to keep into an
+  ``Output``.
+* **Released models.** Releasing a spawned model frees its arrays at once.
+  The model's record stays valid until the trial ends, so references to it
+  still read its other fields, but its arrays then have length ``0`` and
+  indexing them fails the trial. A static model keeps its arrays when
+  released.
 
 Plain field or output?
 ----------------------
@@ -218,7 +284,45 @@ In compiled code, following a child or reference is a pointer load:
 indexing; loop over it with ``for i in range(len(self.items))``. Indices are
 bounds-checked: an index outside the list, including a negative one, abandons
 the trial with an error rather than reading stray memory. Following a
-required reference that is missing does the same.
+required reference that is missing does the same, and using an optional
+reference that is ``None`` as a model fails the trial with ``a None
+reference was used as a Station model``. Check it first:
+``if self.next_station is not None:``.
+
+Model code may **assign references** at run time. Children and lists are
+structure and can't be reassigned, but a ``Ref`` field can point anywhere,
+including at spawned models, which makes linked structures possible:
+
+.. code-block:: python
+
+   class Link(cb.Model):
+       slot: int = 0
+       next: cb.Ref["Link"] | None = None
+
+   class Case(cb.Model):
+       head: cb.Ref[Link] | None = None
+
+       @cb.function
+       def push(self, slot: int) -> None:
+           link = cb.spawn(Link, slot=slot)
+           head = self.head
+           if head is not None:
+               link.next = head
+           self.head = link
+
+* The value may be a model of the declared class or of a subclass (calls
+  through the reference run the subclass's ``@cb.function`` implementations).
+  Any other class is a compile error with the file and line of the
+  assignment.
+* ``None`` may be assigned to an optional reference only; assigning it to a
+  required one is a compile error. An optional value (such as ``head``
+  above) may be assigned to a required reference: a ``None`` there fails the
+  trial, so check it first.
+* A reference may point at a released spawned model. Its record stays valid
+  until the trial ends, so the reference never dangles: its fields remain
+  readable and writable, its processes never run again, and its arrays are
+  gone (see :ref:`array-fields`). Use a field such as ``closed: bool`` if
+  model code must tell released models apart.
 
 Inheritance
 -----------
@@ -290,9 +394,11 @@ exist for the whole trial.
 ``cb.spawn(ModelClass, field=value, ...)``, like customers, orders, parts and
 ships, and removed with ``cb.release(model)``. They use the same model classes
 with one restriction: a dynamic model holds values (plain fields,
-``Param`` and ``Output``), references, inputs, processes, hooks and functions,
-but no entities or children. Give it a ``Ref`` to a static model that owns the
-shared queues and resources. See :doc:`processes` for the lifecycle.
+``Param`` and ``Output``), arrays, references, inputs, processes, hooks and
+functions, but no entities, children or lists. Give it a ``Ref`` to a static
+model that owns the shared queues and resources, ``cb.Array`` fields for
+per-instance tables sized at spawn, and ``Ref`` fields to link it to other
+spawned models. See :doc:`processes` for the lifecycle.
 
 Inspecting a configured model
 -----------------------------

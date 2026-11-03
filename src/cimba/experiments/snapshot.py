@@ -24,9 +24,9 @@ from cimba.inputs import dist
 from cimba.inputs.sources import (
     DistributionSource, EmptySource, GeneratedRows, Source, TraceSource, trace_rng,
 )
-from cimba.layout import TrialImageLayout
+from cimba.layout import TrialImageLayout, array_dtype
 from cimba.modeling import (
-    FRACTIONAL_UNLIMITED, Condition, Container, Dataset, FractionalContainer, Model,
+    FRACTIONAL_UNLIMITED, Array, Condition, Container, Dataset, FractionalContainer, Model,
     PriorityStore, Resource, Store, Sweep, fractional_quanta,
 )
 from cimba.results import InputRecord, InstanceResults, Results, RunMeta, Samples, Signal
@@ -463,6 +463,21 @@ class Batch:
                         target[start:stop] = scalar_value(field, value, f'{instance.label}.{field.name}')
                     elif field.kind in {'child', 'ref'} and value is not None:
                         target[start:stop] = blocks.ctypes.data + indices * self.layout.size + self.layout.by_object[value].offset
+                    elif field.kind == 'array':
+                        # Elements live in the block after the records (see
+                        # TrialImageLayout); the block starts zeroed.
+                        array = cast(Array, value)
+                        data = self.layout.arrays[instance.model, field.name]
+                        target[start:stop] = (blocks.ctypes.data + indices * self.layout.size +
+                                              data)
+                        record[f'{field.name}_length'][start:stop] = array.length
+                        if array.values is not None and array.length:
+                            element = array_dtype(field.value_type)
+                            elements = np.ndarray(
+                                (reps, array.length), dtype=element, buffer=blocks,
+                                offset=start * self.layout.size + data,
+                                strides=(self.layout.size, element.itemsize))
+                            elements[:] = np.asarray(array.values, dtype=element)
                     elif field.kind == 'collection':
                         children = cast(list[Model], value)
                         offsets = np.asarray([self.layout.by_object[child].offset if child is not None else 0

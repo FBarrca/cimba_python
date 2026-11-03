@@ -138,6 +138,43 @@ processes at the current time. ``cpy_model_release`` stops its processes and
 marks it released. All spawned records are freed when the trial ends, so a
 reference to a released model never dangles within the trial.
 
+.. _arch-native-arrays:
+
+Array storage
+~~~~~~~~~~~~~
+
+A ``cb.Array`` field is two words in the record: the address of its element
+buffer and its length. The record stays fixed-size per class; where the
+elements live depends on the instance:
+
+* **Static models.** The trial image reserves the elements after the
+  records (``TrialImageLayout``), sized for the longest option of a swept
+  length. The host writes each trial's address, length and initial values
+  into the block, so every trial starts from the configured contents, an
+  input-extension rerun restores them with the block, and nothing is
+  allocated or freed natively.
+* **Spawned models.** ``cpy_model_array(record, offset, length, size,
+  initial, label)``, called by the spawn right after ``cpy_model_allocate``,
+  allocates a zeroed buffer (or copies the class default's values), writes
+  its address and length into the record and links it to the model's node.
+  A negative length fails the trial. ``cpy_model_release`` frees the
+  model's buffers at once and sets their length to -1, since nothing of a
+  released model runs again. The node teardown that frees records at trial
+  end, on the normal and the abandonment path, frees any buffer still
+  linked. Each buffer is therefore freed exactly once per trial.
+
+Compiled code holds an array as the address of its two words, not as a copy
+of them, so every access reads the current buffer and length: a view kept
+across ``release`` sees length -1 and can't reach freed memory. Each index is
+compared with the length as a signed value. A miss calls
+``cpy_array_index_fail``, which fails the trial with the field, index and
+length, or says that the model was released.
+
+References are pointers in the record, 0 for ``None``. Assigning one in
+compiled code stores the new pointer; a required reference is never 0 once
+the model is bound or spawned, and an optional value is checked before it is
+stored there (``cpy_reference_fail``).
+
 .. _arch-native-inputs:
 
 ``inputs.c``: the input runtime

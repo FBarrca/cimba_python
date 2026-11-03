@@ -9,6 +9,7 @@ from itertools import count
 from math import copysign, inf, isclose, isfinite, isnan
 from numbers import Integral, Real
 from types import UnionType
+from collections.abc import Iterator
 from typing import (
     Any, Generic, Literal, TypeVar, Union, cast, get_args, get_origin, get_type_hints,
 )
@@ -153,6 +154,67 @@ class Decision:
 def decision(low, high, *, step=None, log=False) -> Decision:
     """Choose a Param's value in inclusive bounds during an Optimization."""
     return Decision(low, high, step, log)
+
+
+class Array(Generic[T]):
+    """A fixed-length table of ``int``, ``float`` or ``bool`` values.
+
+    Declare the field as ``cb.Array[int]`` (or ``float``, ``bool``). The
+    length is configuration, not code: ``Array(4)`` is four zeros (or
+    ``False``), ``Array([1, 2, 3])``
+    holds those initial values. Assign one as a class default or on the host,
+    or sweep it with ``cb.sweep(Array(2), Array(4))``; a spawned model takes
+    its length as an int spawn argument (``cb.spawn(Case, joins=n)``) or uses
+    the class default. Every trial, and every spawned model, starts from the
+    configured contents.
+
+    In compiled model code an array field supports ``a[i]``, ``a[i] = v``,
+    ``a[i] += 1``, ``len(a)`` and ``for x in a``. Indices run from 0 to
+    ``len(a) - 1``; any other index, including a negative one, fails the
+    trial. Arrays are per-trial state, not results.
+    """
+
+    __slots__ = ("length", "values")
+
+    def __init__(self, contents: int | list | tuple = 0):
+        if isinstance(contents, bool) or not isinstance(contents, (Integral, list, tuple)):
+            raise TypeError("Array() takes a nonnegative int length or a list of initial values")
+        if isinstance(contents, Integral):
+            if int(contents) < 0:
+                raise ValueError("Array length must be nonnegative")
+            object.__setattr__(self, "length", int(contents))
+            object.__setattr__(self, "values", None)
+        else:
+            object.__setattr__(self, "length", len(contents))
+            object.__setattr__(self, "values", tuple(contents))
+
+    def __setattr__(self, name, value):
+        raise AttributeError("Array configurations are immutable; assign a new cb.Array")
+
+    def __len__(self) -> int:
+        return self.length
+
+    def __repr__(self) -> str:
+        return f"Array({list(self.values) if self.values is not None else self.length})"
+
+    def __eq__(self, other) -> bool:
+        return (isinstance(other, Array) and
+                (self.length, self.values) == (other.length, other.values))
+
+    def __hash__(self) -> int:
+        return hash((self.length, self.values))
+
+    def __deepcopy__(self, memo):
+        return self
+
+    def __getitem__(self, index: int) -> T:
+        raise NotInCompiledCode("Array elements are available in compiled model code")
+
+    def __setitem__(self, index: int, value: T) -> None:
+        raise NotInCompiledCode("Array elements are available in compiled model code")
+
+    def __iter__(self) -> Iterator[T]:
+        raise NotInCompiledCode("Array elements are available in compiled model code")
 
 
 class Entity:
@@ -485,7 +547,12 @@ def suspend() -> int:
     raise NotInCompiledCode("suspend() is available only in compiled model code")
 
 
-def spawn(*args, **kwargs):
+def spawn(model_class: type[M], /, **fields: Any) -> M:
+    """Create a model of ``model_class`` during the trial and start it.
+
+    Keyword arguments set its fields: scalar values, references, input
+    handles to clone, and an int length for each ``cb.Array`` field.
+    """
     raise NotInCompiledCode("spawn() is available only in compiled model code")
 
 
@@ -628,6 +695,10 @@ class Model(metaclass=ModelMeta):
                 raise TypeError(f"{type(self).__name__}.{name} expects a list of "
                                 f"{expected.__name__} models")
             children = tuple(value)
+        elif origin is Array:
+            if not all(isinstance(option, Array) for option in options(value)):
+                raise TypeError(f"{type(self).__name__}.{name} expects a cb.Array "
+                                "(cb.Array(length) or cb.Array([values])) or a sweep of them")
         elif origin in (Input, Series):
             if origin is Input and optional and value is None:
                 object.__setattr__(self, name, value)

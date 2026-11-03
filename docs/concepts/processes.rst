@@ -288,6 +288,10 @@ Dynamic models: spawn and release
    gets an independent cursor and a new random stream derived from the trial
    seed and the spawn order. Optional inputs may be omitted or passed as
    ``None`` and behave as empty sources;
+   an array field takes an ``int`` length and gets a zeroed array of that
+   length, or the class default's array when omitted (see
+   :ref:`array-fields`); a reference field takes a model, or for an optional
+   one ``None`` or an optional value;
 4. its ``on_start`` hooks run immediately;
 5. its processes are scheduled to start at the current time;
 6. a handle to the new model is returned.
@@ -295,7 +299,8 @@ Dynamic models: spawn and release
 ``cb.release(model)`` stops a static or spawned model's processes, ending
 the caller if it releases its own model. Static models keep their field values
 and ``on_end`` hooks; spawned models are retired and skip those hooks. Children
-continue independently. Memory is reclaimed when the trial ends.
+continue independently. A released spawned model's arrays are freed at once;
+its record is reclaimed when the trial ends, so references to it stay valid.
 
 ``cb.is_dynamic(model)`` returns whether an instance was created by
 ``cb.spawn``. It returns ``False`` for static tree models and stays ``True``

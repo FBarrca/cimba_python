@@ -15,7 +15,7 @@ from typing import Any, TypeGuard, Union, cast, get_args, get_origin, get_type_h
 
 from cimba.inputs.sources import EmptySource, Source
 from cimba.modeling import (
-    Condition, Container, Dataset, Decision, Entity, FractionalContainer, Input, Model, Output,
+    Array, Condition, Container, Dataset, Decision, Entity, FractionalContainer, Input, Model, Output,
     Param, PriorityStore, Ref, Resource, Series, Store, Sweep,
 )
 
@@ -77,6 +77,19 @@ def scalar_value(field: Field, value, path: str):
         raise ModelDefinitionError(f"{path}: expected a boolean value")
     # Runtime numeric ABCs are broader than typing's conversion protocols.
     return kind(cast(Any, value))
+
+
+ARRAY_ELEMENTS = (int, float, bool)
+
+
+def check_array(field: Field, value, path: str) -> None:
+    """Validate an ``Array`` configuration, or each option of a sweep of them."""
+    for option in (value.values if isinstance(value, Sweep) else (value,)):
+        if not isinstance(option, Array):
+            raise ModelDefinitionError(
+                f"{path}: expected a cb.Array (cb.Array(length) or cb.Array([values]))")
+        for position, element in enumerate(option.values or ()):
+            scalar_value(field, element, f"{path}[{position}]")
 
 
 @dataclass(frozen=True)
@@ -212,6 +225,13 @@ class ClassSchema:
                     kind = "series"
                 elif origin is Ref:
                     kind = "ref"
+                elif origin is Array:
+                    kind = "array"
+                    element = args[0] if args else None
+                    if element not in ARRAY_ELEMENTS:
+                        raise ModelDefinitionError(
+                            f"{model_class.__name__}.{name}: cb.Array elements must be "
+                            f"int, float or bool, got {element!r}")
                 elif origin in (Container, FractionalContainer, Store, PriorityStore, Resource,
                                 Condition, Dataset) or (
                     isinstance(origin, type) and issubclass(origin, Entity)
@@ -239,6 +259,8 @@ class ClassSchema:
                     args[0] if args else annotation)
                 fields[name] = Field(name, kind, value_type,
                                      default, step, initial_origin, optional)
+                if kind == "array" and default is not None:
+                    check_array(fields[name], default, f"{model_class.__name__}.{name}")
         roles: dict[str, list[tuple[str, Any]]] = {
             "process": [], "on_start": [], "on_end": [],
         }
@@ -389,6 +411,13 @@ class Assembly:
                     raise ModelDefinitionError(f"{label}.{field.name}: parameter missing")
                 elif field.kind == "field" and value is None and strict:
                     raise ModelDefinitionError(f"{label}.{field.name}: initial value missing")
+                elif field.kind == "array" and value is None:
+                    if strict:
+                        raise ModelDefinitionError(
+                            f"{label}.{field.name}: array length missing; assign "
+                            "cb.Array(length) or give the field a class default")
+                elif field.kind == "array":
+                    check_array(field, value, f"{label}.{field.name}")
                 elif field.kind == "child" and isinstance(value, Sweep):
                     chosen = (picks or {}).get((model, field.name))
                     if chosen is not None:

@@ -2,7 +2,7 @@
 
 from . import analysis, inputs, optimize, random
 from .modeling import (
-    Condition, Container, Dataset, acquire_any, Decision, FractionalContainer, Input, Model, Output, Param,
+    Array, Condition, Container, Dataset, acquire_any, Decision, FractionalContainer, Input, Model, Output, Param,
     PriorityStore, Process, Ref, Resource, Scheduled, Series, Store, end_trial, event,
     function, hold, is_dynamic, log, now, on_end, on_start, options, predicate, process, release, schedule,
     decision, spawn, suspend, sweep, sweeps, this_process,
@@ -14,7 +14,7 @@ from .optimize import Optimization
 __version__ = "0.9.2"
 
 __all__ = [
-    "Model", "Param", "Output", "Input", "Series", "Ref",
+    "Model", "Param", "Output", "Input", "Series", "Ref", "Array",
     "Container", "FractionalContainer", "Store", "PriorityStore", "Resource", "Condition",
     "Dataset", "Process", "Scheduled", "process", "on_start", "on_end",
     "predicate", "event", "function", "acquire_any", "hold", "now", "suspend", "spawn", "release",

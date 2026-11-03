@@ -69,6 +69,26 @@ The wrappers below give a field a role on top of that.
    Write ``cb.Ref[M] | None`` for an optional reference. Forward references
    by string are allowed: ``cb.Ref["Harbor"]``.
 
+   *Compiled:* ``model.field = other`` points it at another model of class
+   ``M`` or a subclass, static or spawned; another class is a compile error.
+   An optional reference may be assigned ``None``. An optional value assigned
+   to a required reference fails the trial if it is ``None``, as does using a
+   ``None`` reference as a model.
+
+.. class:: Array(contents=0)
+
+   A per-instance table of ``int``, ``float`` or ``bool``, declared as
+   ``x: cb.Array[int]``. ``contents`` is a nonnegative length (that many
+   zeros, or ``False``) or a list of initial values. Assign it as a class
+   default or on the host; it may be a :func:`sweep` of arrays. A spawned
+   model takes an ``int`` length as its spawn argument, or uses the class
+   default.
+
+   *Compiled:* ``a[i]``, ``a[i] = v``, ``a[i] += v``, ``len(a)`` and
+   ``for x in a``. An index outside ``0 .. len(a) - 1`` fails the trial. A
+   released spawned model's arrays are freed: their length is ``0``. Arrays
+   are not results.
+
 .. class:: Input[T]
 
    A sequence input of ``float``, ``int`` or ``bool``. Bind a source on the
@@ -460,7 +480,9 @@ All verbs are *compiled*.
    Create a dynamic model instance, set its fields, run its ``on_start``
    hooks, schedule its processes, and return a handle to it. Fields without
    a default must be supplied; input fields take an input of the caller.
-   Enum fields take members of their enum.
+   Enum fields take members of their enum. An array field takes an ``int``
+   length (a zeroed array; a negative length fails the trial) or uses the
+   class default.
    Optional inputs may be omitted or passed as ``None`` to bind an empty source.
 
 .. function:: release(model)
@@ -468,7 +490,8 @@ All verbs are *compiled*.
    Stop this model's processes, including copies and pending starts. Releasing
    the caller's own model ends the calling process. Static tree models keep
    their record, entities, children and ``on_end`` hooks; spawned models are
-   retired and skip their ``on_end`` hooks. Memory is reclaimed at trial end.
+   retired and skip their ``on_end`` hooks, and their arrays are freed.
+   Records are reclaimed at trial end, so references to them stay valid.
    Children continue independently. Releasing the same instance twice fails
    the trial.
 

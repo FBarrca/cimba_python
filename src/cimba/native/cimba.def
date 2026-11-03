@@ -116,6 +116,9 @@ EXPORTS
     cpy_model_input_bind
     cpy_model_start
     cpy_model_release
+    cpy_model_array
+    cpy_array_index_fail
+    cpy_reference_fail
     cpy_end_trial
     cpy_buffer_history
     cpy_buffer_report_file

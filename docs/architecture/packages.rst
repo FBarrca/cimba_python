@@ -112,13 +112,15 @@ Turns logical descriptions into memory:
    The C-compatible record (a NumPy structured dtype) for one class. It
    starts with a pointer to the class's dispatch table, then holds one member
    per field: scalars, a fixed-size ``InputSlot`` per input, an entity handle,
-   a pointer per child or reference, and a pointer plus length per list.
+   a pointer per child or reference, and a pointer plus length per list or
+   array.
    Distinct classes get distinct record types, even when their fields
    coincide.
 
 ``TrialImageLayout.of(assembly)``
    Where every instance's record sits inside one trial's memory block, after
-   the trial header, and the total block size.
+   the trial header, where static arrays keep their elements after the
+   records, and the total block size.
 
 .. _arch-pkg-compiler:
 
@@ -131,6 +133,11 @@ Compiles each model **class** once and never looks at instances or sources.
   reference fields become typed pointer loads, ``Ref | None`` becomes an
   optional, and lists become (pointer, length) views with bounds checks.
   Dereferencing a missing reference abandons the trial instead of crashing.
+  Assigning a ``Ref`` field stores the pointer; a subclass's handle converts
+  to its base's, any other class is a lowering error.
+* **Arrays** (``arrays.py``): ``cb.Array`` fields as views of their record
+  words, with checked ``getitem``, ``setitem``, ``len`` and iteration (see
+  :ref:`arch-native-arrays`).
 * **Handles** (``handles.py``): Numba overloads that give records their
   methods, such as ``Container.put``, ``Store[T].get``, ``Input.next``,
   ``Series.now`` and ``Resource.acquire``, and implement the verbs. Each maps

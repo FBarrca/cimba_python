@@ -21,13 +21,87 @@ from cimba.layout import MODEL_RECORD_CLASSES, RecordLayout
 from cimba.modeling import Model, Ref
 from cimba.schema import ClassSchema, is_int_enum
 from cimba.engine.symbols import register
+from .arrays import ArrayViewType, array_view
 from .enums import member_type
 from .numba_compat import (
-    AttributeTemplate, cgutils, cpu_target, infer_getattr, lower_getattr,
-    models, register_model,
+    AttributeTemplate, NumbaTypeError, cgutils, cpu_target, infer_getattr, lower_cast, lower_getattr,
+    lower_setattr, models, register_model,
 )
 
 register("cimba_trial_abandon")
+register("cpy_reference_fail")
+
+_ARRAY_ELEMENTS = {int: types.int64, float: types.float64, bool: types.boolean}
+
+
+def _model_class(record):
+    if not isinstance(record, types.Record):
+        return None
+    descriptor = record.fields.get("class_descriptor")
+    return MODEL_RECORD_CLASSES.get(descriptor.title) if descriptor else None
+
+
+# A model handle is a record pointer. Assigning or passing a subclass's handle
+# where a base class is expected keeps the pointer: base-typed views read the
+# base's fields at the same offsets and call through the record's own table.
+@lower_cast(types.Record, types.Record)
+def _upcast_model(context, builder, fromty, toty, value):
+    actual, expected = _model_class(fromty), _model_class(toty)
+    if actual is None or expected is None or not issubclass(actual, expected):
+        raise NumbaTypeError(f"cannot use a {actual.__name__ if actual else fromty} model "
+                        f"where a {expected.__name__ if expected else toty} is expected")
+    return builder.bitcast(value, context.get_value_type(toty))
+
+
+@lower_cast(types.Optional, types.Record)
+def _present_model(context, builder, fromty, toty, value):
+    """An optional reference used as a model: a None fails the trial."""
+    optional = context.make_helper(builder, fromty, value=value)
+    expected = _model_class(toty)
+    with builder.if_then(builder.not_(cgutils.as_bool_bit(builder, optional.valid)),
+                         likely=False):
+        fail = cgutils.get_or_insert_function(
+            builder.module, ir.FunctionType(ir.VoidType(), [ir.IntType(8).as_pointer()]),
+            "cpy_reference_fail")
+        builder.call(fail, [context.insert_const_string(
+            builder.module, expected.__name__ if expected else str(toty))])
+    return context.cast(builder, optional.data, fromty.type, toty)
+
+
+@lower_cast(types.NoneType, types.Record)
+def _none_model(context, builder, fromty, toty, value):
+    expected = _model_class(toty)
+    name = expected.__name__ if expected else str(toty)
+    raise NumbaTypeError(f"None is not a {name} model; declare the reference "
+                    f"cb.Ref[{name}] | None to allow None")
+
+
+def _register_reference_assignment(record_type, name, view_type, offset, label):
+    """``model.field = value`` for a ``Ref`` field: store the pointer, or 0 for None."""
+    @lower_setattr(record_type, name)
+    def lower(context, builder, signature, arguments):
+        target, value = arguments
+        if isinstance(view_type, types.Optional):
+            optional = context.make_helper(builder, view_type, value=value)
+            pointer = builder.select(
+                cgutils.as_bool_bit(builder, optional.valid),
+                builder.ptrtoint(optional.data, context.get_value_type(types.intp)),
+                ir.Constant(context.get_value_type(types.intp), 0))
+        else:
+            pointer = builder.ptrtoint(value, context.get_value_type(types.intp))
+        base = builder.bitcast(target, ir.IntType(8).as_pointer())
+        location = builder.bitcast(
+            builder.gep(base, [ir.Constant(ir.IntType(32), offset)]),
+            context.get_value_type(types.intp).as_pointer())
+        builder.store(pointer, location)
+        return context.get_dummy_value()
+
+
+def _register_structure_assignment(record_type, name, message):
+    """Children, lists and arrays are structure: reject replacing them."""
+    @lower_setattr(record_type, name)
+    def lower(context, builder, signature, arguments):
+        raise NumbaTypeError(message)
 
 
 def _abandon_if(context, builder, condition):
@@ -174,7 +248,7 @@ class ModelViewAttributes(AttributeTemplate):
             schema = ClassSchema.of(owner)
             if (attr in schema.events + schema.predicates or
                     any(field.name == attr and field.kind in
-                        {"child", "ref", "collection"} for field in schema.fields)):
+                        {"child", "ref", "collection", "array"} for field in schema.fields)):
                 raise TypeError(f"no view registered for {owner.__name__}.{attr}")
         # ``@function`` methods: resolved here because this template runs
         # before Numba's own record-field lookup (see compiler.functions).
@@ -227,6 +301,30 @@ def register_views(schema: ClassSchema) -> None:
                 raise TypeError(f"{schema.cls.__name__}.{field.name}: model classes with "
                                 "identical native records have incompatible enum fields")
             _view_fields[key] = entry
+            continue
+        if field.kind == "array":
+            label = f"{schema.cls.__name__}.{field.name}"
+            view_type = ArrayViewType(_ARRAY_ELEMENTS[field.value_type], label)
+            entry = (view_type, parent_layout.offset(field.name), None)
+            key = (parent_type, field.name)
+            previous = _view_fields.get(key)
+            if previous is not None:
+                if previous[1:] != entry[1:] or previous[0] != view_type:
+                    raise TypeError(f"{label}: model classes with identical native "
+                                    "records have incompatible array fields")
+                continue
+            _view_fields[key] = entry
+
+            def register_array_lowering(record_type, name, result_type, field_offset):
+                @lower_getattr(record_type, name)
+                def lower(context, builder, typ, value):
+                    return array_view(context, builder, result_type, value, field_offset)
+
+            register_array_lowering(parent_type, field.name, view_type, entry[1])
+            _register_structure_assignment(
+                parent_type, field.name,
+                f"{label} is an array field: assign its elements ({field.name}[i] = value); "
+                "its length is configuration (cb.Array(n), or a spawn argument)")
             continue
         if field.kind not in {"child", "ref", "collection"}:
             continue
@@ -298,6 +396,15 @@ def register_views(schema: ClassSchema) -> None:
                 return view._getvalue()
 
         register_lowering(parent_type, field.name, view_type, offset, length_offset)
+        label = f"{schema.cls.__name__}.{field.name}"
+        if field.kind == "ref":
+            _register_reference_assignment(parent_type, field.name, view_type, offset, label)
+        else:
+            _register_structure_assignment(
+                parent_type, field.name,
+                f"{label} is a {'child model' if field.kind == 'child' else 'list'} field, "
+                "part of the model structure, and cannot be reassigned in model code; "
+                "declare a cb.Ref field to point at a model at run time")
     for name in schema.events + schema.predicates:
         index = schema.slots.index(name)
         view_type = (EVENT_HANDLE if name in schema.events

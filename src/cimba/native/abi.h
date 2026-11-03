@@ -152,6 +152,11 @@ CPY_EXPORT void cpy_model_start(void *record,
                                 const cpy_input_descriptor *inputs,
                                 uint64_t input_count);
 CPY_EXPORT void cpy_model_release(void *record);
+CPY_EXPORT void cpy_model_array(void *record, uint64_t offset, int64_t length,
+                                uint64_t element_size, const void *initial,
+                                const char *label);
+CPY_EXPORT void cpy_array_index_fail(const char *label, int64_t index, int64_t length);
+CPY_EXPORT void cpy_reference_fail(const char *expected);
 CPY_EXPORT int64_t cpy_condition_wait_until(void *condition, void *callback,
                                            void *context, double timeout);
 CPY_EXPORT int64_t cpy_model_is_dynamic(void *record);

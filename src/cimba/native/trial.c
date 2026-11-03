@@ -23,9 +23,18 @@ typedef struct spawned_process {
     struct cmb_process **slot;
 } spawned_process;
 
+/* The element buffer of one cb.Array field of a spawned model. The record
+ * holds its address and length at field_offset; released with the model. */
+typedef struct spawned_array {
+    struct spawned_array *next;
+    uint64_t field_offset;
+    void *elements;
+} spawned_array;
+
 typedef struct spawned_model {
     struct spawned_model *next;
     void *record;
+    spawned_array *arrays;
     struct cmb_process **processes;
     spawned_process *contexts;
     uint64_t *start_events;
@@ -87,6 +96,26 @@ void cpy_trial_fail(const char *reason)
     cimba_trial_abandon();
 }
 
+void cpy_reference_fail(const char *expected)
+{
+    char failure[160];
+    snprintf(failure, sizeof failure, "a None reference was used as a %s model", expected);
+    cpy_trial_fail(failure);
+}
+
+void cpy_array_index_fail(const char *label, int64_t index, int64_t length)
+{
+    char failure[192];
+    if (length < 0)
+        snprintf(failure, sizeof failure,
+                 "%s[%lld]: the model was released, so its arrays are gone",
+                 label, (long long)index);
+    else
+        snprintf(failure, sizeof failure, "%s[%lld]: index out of range for length %lld",
+                 label, (long long)index, (long long)length);
+    cpy_trial_fail(failure);
+}
+
 void cpy_end_trial(void)
 {
     if (active_trial == NULL) cimba_trial_abandon();
@@ -138,6 +167,66 @@ void *cpy_model_allocate(size_t size, const void *class_descriptor)
     node->next = resources->spawned;
     resources->spawned = node;
     return node->record;
+}
+
+/* Writes the array's (elements, length) pair at offset of the record */
+static void array_slot_set(void *record, uint64_t offset, void *elements, int64_t length)
+{
+    void **slot = (void **)((char *)record + offset);
+    slot[0] = elements;
+    ((int64_t *)slot)[1] = length;
+}
+
+static void free_spawned_arrays(spawned_model *node, int64_t length)
+{
+    while (node->arrays != NULL) {
+        spawned_array *array = node->arrays;
+        node->arrays = array->next;
+        array_slot_set(node->record, array->field_offset, NULL, length);
+        free(array->elements);
+        free(array);
+    }
+}
+
+void cpy_model_array(void *record, uint64_t offset, int64_t length,
+                     uint64_t element_size, const void *initial, const char *label)
+{
+    trial_resources *resources = active_trial;
+    if (resources == NULL) cimba_trial_abandon();
+    /* Called right after cpy_model_allocate, so the model is at the head */
+    spawned_model *node = resources->spawned;
+    while (node != NULL && node->record != record) node = node->next;
+    if (node == NULL || element_size == 0u) cimba_trial_abandon();
+    char failure[192];
+    if (length < 0) {
+        snprintf(failure, sizeof failure, "%s: array length %lld is negative",
+                 label, (long long)length);
+        cpy_trial_fail(failure);
+    }
+    if (length == 0) {
+        array_slot_set(record, offset, NULL, 0);
+        return;
+    }
+    if ((uint64_t)length > SIZE_MAX / element_size) {
+        snprintf(failure, sizeof failure, "%s: array length %lld is too large",
+                 label, (long long)length);
+        cpy_trial_fail(failure);
+    }
+    spawned_array *array = calloc(1, sizeof(*array));
+    if (array == NULL) cimba_trial_abandon();
+    array->elements = calloc((size_t)length, element_size);
+    if (array->elements == NULL) {
+        free(array);
+        snprintf(failure, sizeof failure, "%s: cannot allocate %lld elements",
+                 label, (long long)length);
+        cpy_trial_fail(failure);
+    }
+    if (initial != NULL)
+        memcpy(array->elements, initial, (size_t)length * element_size);
+    array->field_offset = offset;
+    array->next = node->arrays;
+    node->arrays = array;
+    array_slot_set(record, offset, array->elements, length);
 }
 
 void cpy_model_input_bind(cpy_input_slot *slot)
@@ -270,6 +359,10 @@ void cpy_model_release(void *record)
     }
     if (node->released) cimba_trial_abandon();
     node->released = 1;
+    /* Nothing of a released model runs again, not even its end hooks, so its
+     * arrays go now. The record stays until the trial ends, so references
+     * remain valid; their arrays read as length -1 and indexing fails. */
+    free_spawned_arrays(node, -1);
     for (uint64_t i = 0; i < node->process_count; ++i) {
         struct cmb_process *process = node->processes[i];
         if (process == NULL) continue;
@@ -306,6 +399,7 @@ static void free_spawned_nodes(trial_resources *resources, int normal)
         free(node->processes);
         free(node->contexts);
         free(node->start_events);
+        free_spawned_arrays(node, -1);
         for (uint64_t i = 0; i < node->input_count; ++i)
             cpy_input_release((cpy_input_slot *)((char *)node->record +
                               node->inputs[i].field_offset));

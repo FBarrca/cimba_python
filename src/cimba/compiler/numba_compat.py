@@ -6,7 +6,10 @@ import numba.core.typing.templates as templates
 from numba.core import cgutils
 from numba.core.compiler_lock import global_compiler_lock
 from numba.core.datamodel import models
-from numba.core.imputils import lower_builtin, lower_cast, lower_constant
+from numba.core.errors import NumbaTypeError
+from numba.core.imputils import (
+    RefType, iternext_impl, lower_builtin, lower_cast, lower_constant, lower_setattr,
+)
 from numba.core.registry import cpu_target
 from numba.core.typing.templates import (
     AbstractTemplate, AttributeTemplate,
@@ -21,7 +24,8 @@ register_model = getattr(extending, "register_model")
 typeof_impl = getattr(extending, "typeof_impl")
 
 __all__ = [
-    "AbstractTemplate", "AttributeTemplate", "cgutils", "cpu_target",
+    "AbstractTemplate", "AttributeTemplate", "NumbaTypeError", "RefType", "cgutils", "cpu_target",
+    "iternext_impl", "lower_setattr",
     "global_compiler_lock",
     "infer_getattr", "infer_global", "lower_builtin", "lower_cast", "lower_constant",
     "lower_getattr", "register_model", "typeof_impl",

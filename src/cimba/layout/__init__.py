@@ -14,6 +14,7 @@ from cimba.engine.abi import (
 )
 from cimba.modeling import (
     Condition, Container, Dataset, FractionalContainer, Model, PriorityStore, Resource, Store,
+    options,
 )
 from cimba.schema import Assembly, ClassSchema, is_int_enum
 
@@ -75,6 +76,12 @@ class RecordLayout:
             elif field.kind == "collection":
                 members.append((field.name, POINTER))
                 members.append((f"{field.name}_length", np.uint64))
+            elif field.kind == "array":
+                # The record holds the element buffer's address and length;
+                # the buffer itself is per instance (see TrialImageLayout and
+                # cpy_model_array). A released spawned model's length is -1.
+                members.append((field.name, POINTER))
+                members.append((f"{field.name}_length", np.int64))
             elif field.kind == "entity" and field.value_type is Container:
                 members.append((field.name, CONTAINER_HANDLE))
             elif field.kind == "entity" and field.value_type is FractionalContainer:
@@ -143,12 +150,25 @@ class Placement:
     record: RecordLayout
 
 
+def array_dtype(element) -> np.dtype:
+    """Element storage of a ``cb.Array[element]``, as compiled code reads it."""
+    return np.dtype({int: np.int64, float: np.float64, bool: np.bool_}[element])
+
+
 @dataclass(frozen=True)
 class TrialImageLayout:
+    """Records of every static instance, then the elements of their arrays.
+
+    A static array's elements live in the trial image after the records, so
+    each trial gets its own copy with the block and nothing is allocated or
+    freed natively. Its space fits the longest option of a swept length.
+    """
+
     assembly: Assembly
     placements: tuple[Placement, ...]
     by_object: MappingProxyType
     size: int
+    arrays: MappingProxyType   # (model, field) -> offset of the elements
 
     @classmethod
     def of(cls, assembly: Assembly) -> "TrialImageLayout":
@@ -163,4 +183,18 @@ class TrialImageLayout:
             placements.append(placement)
             index[instance.model] = placement
             offset += record.dtype.itemsize
-        return cls(assembly, tuple(placements), MappingProxyType(index), offset)
+        arrays: dict[tuple[Any, str], int] = {}
+        for instance in assembly.instances:
+            for field in instance.schema.fields:
+                if field.kind != "array":
+                    continue
+                value = instance.values[field.name]
+                length = max((len(choice) for choice in options(value)
+                              if choice is not None), default=0)
+                offset = (offset + 7) // 8 * 8
+                arrays[(instance.model, field.name)] = offset
+                offset += length * array_dtype(field.value_type).itemsize
+        if arrays:
+            offset = (offset + 7) // 8 * 8
+        return cls(assembly, tuple(placements), MappingProxyType(index), offset,
+                   MappingProxyType(arrays))

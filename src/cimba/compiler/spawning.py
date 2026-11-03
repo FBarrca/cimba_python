@@ -9,13 +9,14 @@ from __future__ import annotations
 import inspect
 from math import nan
 
+import numpy as np
 from llvmlite import ir
 from numba import from_dtype, types
 
 from cimba.engine.symbols import register
 from cimba.engine.abi import INPUT_EMPTY, INPUT_SLOT, INPUT_SLOT_BOOL, INPUT_SLOT_INT
-from cimba.layout import MODEL_RECORD_CLASSES, RecordLayout
-from cimba.modeling import ModelMeta, spawn
+from cimba.layout import MODEL_RECORD_CLASSES, RecordLayout, array_dtype
+from cimba.modeling import ModelMeta, Sweep, spawn
 from cimba.schema import ClassSchema, is_int_enum
 from .numba_compat import (
     AbstractTemplate, cgutils, infer_global, lower_builtin, lower_constant,
@@ -27,6 +28,10 @@ from .views import register_reachable_views
 register("cpy_model_allocate")
 register("cpy_model_start")
 register("cpy_model_input_bind")
+register("cpy_model_array")
+
+# Initial elements of class-default arrays, kept alive for compiled spawns.
+_array_defaults: dict[tuple[type, str], np.ndarray] = {}
 
 
 class ModelClassType(types.Type):
@@ -71,10 +76,13 @@ class SpawnTemplate(AbstractTemplate):
         fields = {field.name: field for field in schema.fields}
         unsupported = [field.name for field in schema.fields
                        if field.kind not in {"param", "field", "output",
-                                             "ref", "input", "series"}]
+                                             "ref", "input", "series", "array"}]
         if unsupported:
             raise TypeError(f"{schema.cls.__name__}: dynamic models do not "
-                            f"support these fields: {', '.join(unsupported)}")
+                            f"support these fields: {', '.join(unsupported)}. "
+                            "Entities, child models and lists are static structure; "
+                            "give a spawned model cb.Array fields for per-instance "
+                            "tables, and cb.Ref fields to link it to other models")
         unknown = set(kws) - fields.keys()
         if unknown:
             raise TypeError(f"{schema.cls.__name__}: unknown spawn fields: "
@@ -97,6 +105,20 @@ class SpawnTemplate(AbstractTemplate):
                     kws[field.name] != member_type(field.value_type)):
                 raise TypeError(f"{schema.cls.__name__}.{field.name}: expected a "
                                 f"{field.value_type.__name__} member, got {kws[field.name]}")
+            if field.kind == "array":
+                length_type = kws.get(field.name)
+                if length_type is None:
+                    if field.default is None:
+                        raise TypeError(f"{schema.cls.__name__}.{field.name}: spawn "
+                                        f"length required ({field.name}=<int length>), "
+                                        "or give the field a class default cb.Array(n)")
+                    if isinstance(field.default, Sweep):
+                        raise TypeError(f"{schema.cls.__name__}.{field.name}: a spawned "
+                                        "model's class default cannot be a sweep; pass "
+                                        "the length at spawn")
+                elif not isinstance(length_type, types.Integer):
+                    raise TypeError(f"{schema.cls.__name__}.{field.name}: spawn takes the "
+                                    f"array length as an int, got {length_type}")
             if field.kind == "ref":
                 reference_type = kws.get(field.name)
                 if reference_type is None:
@@ -107,10 +129,17 @@ class SpawnTemplate(AbstractTemplate):
                     if not field.optional:
                         raise TypeError(f"{schema.cls.__name__}.{field.name}: "
                                         "reference cannot be None")
-                elif isinstance(reference_type, types.Record):
+                elif isinstance(reference_type, types.Record) or (
+                        isinstance(reference_type, types.Optional) and
+                        isinstance(reference_type.type, types.Record)):
+                    # An optional for a required reference is checked when
+                    # spawning: Numba keeps a narrowed optional's type.
+                    record = (reference_type.type if isinstance(reference_type, types.Optional)
+                              else reference_type)
+                    assert isinstance(record, types.Record)
                     actual = next((model_class for marker, model_class
                                    in MODEL_RECORD_CLASSES.items()
-                                   if marker in reference_type.fields), None)
+                                   if marker in record.fields), None)
                     if actual is None or not issubclass(actual, field.value_type):
                         raise TypeError(f"{schema.cls.__name__}.{field.name}: "
                                         "incompatible model reference")
@@ -136,6 +165,39 @@ def _field_pointer(context, builder, record, offset, value_type):
 def _constant_pointer(builder, address):
     return builder.inttoptr(ir.Constant(ir.IntType(64), address),
                             ir.IntType(8).as_pointer())
+
+
+def _spawn_array(context, builder, schema, layout, field, record, argument):
+    """Allocate the element buffer of one array field of a new spawned model.
+
+    An int spawn argument gives a zeroed buffer of that length; otherwise the
+    class default ``cb.Array(n)`` or ``cb.Array([values])`` is copied.
+    """
+    i64 = ir.IntType(64)
+    pointer = ir.IntType(8).as_pointer()
+    element = array_dtype(field.value_type)
+    initial = ir.Constant(pointer, None)
+    if argument is not None:
+        length = context.cast(builder, argument[1], argument[0], types.int64)
+    else:
+        default = field.default
+        length = ir.Constant(i64, default.length)
+        if default.values is not None and default.length:
+            key = (schema.cls, field.name)
+            if key not in _array_defaults:
+                values = np.asarray(default.values, dtype=element)
+                values.flags.writeable = False
+                _array_defaults[key] = values
+            initial = _constant_pointer(builder, _array_defaults[key].ctypes.data)
+    allocate = cgutils.get_or_insert_function(
+        builder.module,
+        ir.FunctionType(ir.VoidType(), [pointer, i64, i64, i64, pointer, pointer]),
+        "cpy_model_array")
+    builder.call(allocate, [
+        record, ir.Constant(i64, layout.offset(field.name)), length,
+        ir.Constant(i64, element.itemsize), initial,
+        context.insert_const_string(builder.module, f"{schema.cls.__name__}.{field.name}"),
+    ])
 
 
 @lower_builtin(spawn, types.VarArg(types.Any))
@@ -176,11 +238,24 @@ def lower_spawn(context, builder, sig, arguments):
                                                  "cpy_model_input_bind")
             builder.call(bind, [builder.bitcast(location, pointer)])
             continue
+        if field.kind == "array":
+            _spawn_array(context, builder, schema, layout, field, record,
+                         supplied.get(field.name))
+            continue
         if field.kind == "ref":
             target_type = types.intp
             argument = supplied.get(field.name)
             if argument is None or isinstance(argument[0], types.NoneType):
                 value = ir.Constant(uintptr, 0)
+            elif isinstance(argument[0], types.Optional) and not field.optional:
+                # A None fails the trial (see views._present_model)
+                present = context.cast(builder, argument[1], argument[0], argument[0].type)
+                value = builder.ptrtoint(present, uintptr)
+            elif isinstance(argument[0], types.Optional):
+                optional = context.make_helper(builder, argument[0], value=argument[1])
+                value = builder.select(cgutils.as_bool_bit(builder, optional.valid),
+                                       builder.ptrtoint(optional.data, uintptr),
+                                       ir.Constant(uintptr, 0))
             elif isinstance(argument[0], types.Record):
                 value = builder.ptrtoint(arguments[
                     tuple(sig.pysig.parameters).index(field.name)], uintptr)

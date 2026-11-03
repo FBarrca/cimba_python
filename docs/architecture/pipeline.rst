@@ -96,12 +96,15 @@ The instance path
       │ record  network.facilities[0]    SourceFacility             │
       │ record  network.facilities[1]    StockingFacility           │
       │ …                                                           │
+      ├─────────────────────────────────────────────────────────────┤
+      │ elements of the static models' cb.Array fields              │
       └─────────────────────────────────────────────────────────────┘
       Shared, read-only, per run:
         trial descriptor → entity, process, hook and input tables
         class dispatch tables · input row buffers · trace arrays
       Per trial, on the side:
-        spawned model records (freed when the trial ends)
+        spawned model records (freed when the trial ends) and their
+        arrays (freed on release or when the trial ends)
 
 3. **Design.** ``Design.of(assembly)`` finds every sweep, including sweeps
    inside distribution parameters, sweeps of sources and sweeps of child

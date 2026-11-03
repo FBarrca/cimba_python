@@ -90,6 +90,7 @@ py.install_sources('src/cimba/engine/library.py', 'src/cimba/engine/symbols.py',
                    subdir: 'cimba/engine')
 py.install_sources('src/cimba/compiler/__init__.py',
                    'src/cimba/compiler/handles.py',
+                   'src/cimba/compiler/arrays.py',
                    'src/cimba/compiler/classes.py',
                    'src/cimba/compiler/entries.py',
                    'src/cimba/compiler/enums.py',

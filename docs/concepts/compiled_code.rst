@@ -19,7 +19,9 @@ for that model instance, not the Python object. Through it you can:
 * call entity methods (``self.queue.get(1)``);
 * read inputs (``self.demand.now()``);
 * follow children, references and lists
-  (``self.network.facilities[i].on_hand``);
+  (``self.network.facilities[i].on_hand``), and point a reference at
+  another model (``link.next = head``);
+* index, assign and loop over array fields (``case.joins[slot] += 1``);
 * pass predicates and events (``wait_until(self.is_ready)``,
   ``cb.schedule(self.fire, 2.0)``).
 

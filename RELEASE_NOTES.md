@@ -22,6 +22,30 @@
   `Enum` member to a number in compiled code, are errors that say to derive
   the enum from `IntEnum`. Plain members still support `==`, `!=` and
   `.value` in compiled code.
+- `cb.Array[T]` fields hold a per-instance table of `int`, `float` or `bool`
+  whose length is configuration, on static and spawned models (#24). Static
+  models take `cb.Array(n)` (zeros) or `cb.Array([values])` as a class
+  default or host assignment, and a sweep of them. `cb.spawn(Case, joins=n)`
+  takes an `int` length and gives a zeroed array, or uses the class default.
+  Compiled code indexes, assigns, takes `len()` of and iterates arrays. Every
+  index is checked: an index out of range, or a negative spawn length, fails
+  the trial with a reason naming the field. A static array lives in the trial
+  block; a spawned model's array is allocated at spawn and freed on release,
+  at trial end or when the trial is abandoned.
+- `Ref` fields can be assigned in compiled code (#24), including a model of a
+  subclass, `None` for an optional reference, and an optional value, so model
+  code can build linked structures of spawned models. Before, these failed to
+  compile with `Cannot cast Record(...) to uint64`. Assigning another class,
+  `None` to a required reference, or a child, list or array field is a
+  compile error with the file and line of the assignment. An optional
+  reference passed at spawn works the same way.
+- Using an optional reference that is `None` as a model, for example reading
+  `self.next.value` without a `None` check, now fails the trial with
+  `a None reference was used as a Node model`. Before, the error was printed
+  and the method returned early while the trial went on.
+- `cb.spawn` is annotated to return an instance of the class it creates.
+- Spawning a model with an entity, child or list field explains that
+  spawned models use `cb.Array` and `cb.Ref` fields instead.
 
 # Cimba Python 0.9.2
 
