@@ -1,4 +1,6 @@
-# Unreleased
+# Cimba Python 0.9.3
+
+Released 2026-11-03.
 
 - `enum.IntEnum` members work in compiled model code (#25). They are
   frozen at compile time like other module-level constants, compare with
