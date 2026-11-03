@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+from enum import Enum, IntEnum
 from itertools import count
 from math import copysign, inf, isclose, isfinite, isnan
 from numbers import Integral, Real
@@ -592,6 +593,19 @@ class Model(metaclass=ModelMeta):
         if isinstance(value, Decision) and origin is not Param:
             raise TypeError(f"{type(self).__name__}.{name}: a decision requires a Param field")
         children: tuple[Model, ...] = ()
+        scalar = (get_args(declaration)[0] if origin in (Param, Output) and get_args(declaration)
+                  else declaration)
+        if (isinstance(scalar, type) and issubclass(scalar, Enum) and value is not None
+                and not isinstance(value, Decision)):
+            # Enum fields hold members: validate now and coerce a valid int value.
+            from cimba.schema import check_scalar_type, enum_member
+            where = f"{type(self).__name__}.{name}"
+            check_scalar_type(scalar, where)     # only IntEnum passes
+            kind = cast(type[IntEnum], scalar)
+            if isinstance(value, Sweep) and origin is Param:
+                value = value.map(lambda option: enum_member(kind, option, where))
+            elif not isinstance(value, Sweep):
+                value = enum_member(kind, value, where)
         if origin is Param:
             pass
         elif isinstance(origin, type) and issubclass(origin, Model):

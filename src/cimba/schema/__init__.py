@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+from enum import Enum, IntEnum
 from functools import lru_cache
 from math import isfinite
-from numbers import Real
+from numbers import Integral, Real
 from types import UnionType
 from types import MappingProxyType
 from collections.abc import Mapping
-from typing import Any, Union, cast, get_args, get_origin, get_type_hints
+from typing import Any, TypeGuard, Union, cast, get_args, get_origin, get_type_hints
 
 from cimba.inputs.sources import EmptySource, Source
 from cimba.modeling import (
@@ -23,9 +24,47 @@ class ModelDefinitionError(ValueError):
     pass
 
 
+def is_int_enum(kind) -> TypeGuard[type[IntEnum]]:
+    """Whether ``kind`` is an ``enum.IntEnum`` class, stored natively as int64."""
+    return isinstance(kind, type) and issubclass(kind, IntEnum)
+
+
+def check_scalar_type(kind, where: str) -> None:
+    """Reject enum classes that native records cannot hold as int64 codes."""
+    if not (isinstance(kind, type) and issubclass(kind, Enum)):
+        return
+    if not issubclass(kind, IntEnum):
+        raise ModelDefinitionError(
+            f"{where}: {kind.__name__} is not an enum.IntEnum; compiled model code "
+            f"stores enums as their integer values, so derive {kind.__name__} "
+            "from enum.IntEnum")
+    members = list(kind.__members__.values())
+    if not members:
+        raise ModelDefinitionError(f"{where}: {kind.__name__} has no members")
+    for member in members:
+        if not -(1 << 63) <= int(member) < (1 << 63):
+            raise ModelDefinitionError(
+                f"{where}: {kind.__name__}.{member.name} is outside int64 range")
+
+
+def enum_member(kind: type[IntEnum], value, path: str) -> IntEnum:
+    """``value`` as a member of ``kind``: a member, or the int value of one."""
+    if isinstance(value, kind):
+        return value
+    if isinstance(value, Enum) or isinstance(value, bool) or not isinstance(value, Integral):
+        raise ModelDefinitionError(f"{path}: expected a {kind.__name__} member, got {value!r}")
+    try:
+        return kind(int(value))
+    except ValueError:
+        raise ModelDefinitionError(
+            f"{path}: {value!r} is not a {kind.__name__} value") from None
+
+
 def scalar_value(field: Field, value, path: str):
     """Validate before NumPy can silently truncate a scalar binding."""
     kind = field.value_type
+    if is_int_enum(kind):
+        return enum_member(kind, value, path)
     if kind not in (float, int, bool):
         raise ModelDefinitionError(f"{path}: expected a float, int or bool field")
     if not isinstance(value, Real):
@@ -60,7 +99,7 @@ class FunctionSignature:
 
     parameters: tuple[tuple[str, Any], ...]
     defaults: tuple[Any, ...]          # for the trailing parameters
-    returns: Any                       # float, int, bool, a Model class or None
+    returns: Any                       # float, int, bool, an IntEnum, a Model class or None
 
     @property
     def types(self) -> tuple[Any, ...]:
@@ -83,29 +122,39 @@ def _function_signature(cls, name: str, method) -> FunctionSignature:
         if kind is None:
             raise ModelDefinitionError(
                 f"{where}: annotate parameter {parameter.name!r} "
-                "(float, int, bool or a model class)")
-        if kind not in _SCALARS and not (isinstance(kind, type) and issubclass(kind, Model)):
+                "(float, int, bool, an IntEnum or a model class)")
+        check_scalar_type(kind, f"{where}: parameter {parameter.name!r}")
+        if kind not in _SCALARS and not is_int_enum(kind) and not (
+            isinstance(kind, type) and issubclass(kind, Model)
+        ):
             raise ModelDefinitionError(
-                f"{where}: parameter {parameter.name!r} must be float, int, bool "
-                "or a model class")
+                f"{where}: parameter {parameter.name!r} must be float, int, bool, "
+                "an IntEnum or a model class")
         if parameter.default is not parameter.empty:
-            if kind not in _SCALARS:
+            if is_int_enum(kind):
+                defaults.append(enum_member(kind, parameter.default,
+                                            f"{where}: parameter {parameter.name!r}"))
+            elif kind not in _SCALARS:
                 raise ModelDefinitionError(f"{where}: only scalar parameters may have defaults")
-            defaults.append(kind(parameter.default))
+            else:
+                defaults.append(kind(parameter.default))
         elif defaults:
             raise ModelDefinitionError(f"{where}: parameters with defaults must come last")
         typed.append((parameter.name, kind))
     if "return" not in hints:
         raise ModelDefinitionError(
-            f"{where}: annotate the return type (float, int, bool, a model class or None)")
+            f"{where}: annotate the return type "
+            "(float, int, bool, an IntEnum, a model class or None)")
     returns = hints["return"]
     if returns is type(None):
         returns = None
-    if returns is not None and returns not in _SCALARS and not (
+    check_scalar_type(returns, f"{where}: return type")
+    if returns is not None and returns not in _SCALARS and not is_int_enum(returns) and not (
         isinstance(returns, type) and issubclass(returns, Model)
     ):
         raise ModelDefinitionError(
-            f"{where}: return type must be float, int, bool, a model class or None")
+            f"{where}: return type must be float, int, bool, an IntEnum, "
+            "a model class or None")
     return FunctionSignature(tuple(typed), tuple(defaults), returns)
 
 
@@ -175,6 +224,15 @@ class ClassSchema:
                 else:
                     # A plain annotated scalar: a per-trial value.
                     kind = "field"
+                if kind in {"param", "field", "output"}:
+                    scalar = args[0] if args else annotation
+                    where = f"{model_class.__name__}.{name}"
+                    check_scalar_type(scalar, where)
+                    if is_int_enum(scalar) and default is not None and not isinstance(
+                            default, Decision):
+                        default = (default.map(lambda value: enum_member(scalar, value, where))
+                                   if isinstance(default, Sweep) else
+                                   enum_member(scalar, default, where))
                 step = default.step if type(default) is Series else None
                 initial_origin = default.origin if type(default) is Series else 0.0
                 value_type = annotation if kind == "entity" else (

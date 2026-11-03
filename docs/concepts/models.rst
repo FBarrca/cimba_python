@@ -74,10 +74,61 @@ The kinds of field
      - An ordinary Python attribute, such as a display name. Compiled code
        never sees it.
 
-Scalar field types (``T``) are ``float``, ``int`` and ``bool``. Strings,
-lists of numbers and other Python objects can't live in trial memory. Keep
-them as host-only attributes, or as module-level constants (NumPy arrays work
-well) that compiled code reads.
+Scalar field types (``T``) are ``float``, ``int``, ``bool`` and
+``enum.IntEnum`` classes (see below). Strings, lists of numbers and other
+Python objects can't live in trial memory. Keep them as host-only attributes,
+or as module-level constants (NumPy arrays work well) that compiled code
+reads.
+
+Enum fields
+~~~~~~~~~~~
+
+A ``Param``, plain field or ``Output`` may be typed with an ``enum.IntEnum``.
+Trial memory holds the member's integer value; everywhere else the field
+holds members:
+
+.. code-block:: python
+
+   class NodeKind(enum.IntEnum):
+       START = 0
+       TASK = 2
+       EXCLUSIVE = 3
+
+   class Node(cb.Model):
+       kind: cb.Param[NodeKind] = NodeKind.TASK
+       state: NodeKind = NodeKind.START
+
+       @cb.process
+       def fire(self):
+           if self.kind == NodeKind.TASK:
+               ...
+           self.state = NodeKind.EXCLUSIVE
+
+   node = Node()
+   node.kind = NodeKind.EXCLUSIVE                 # reads back as the member
+   node.kind = cb.sweep(NodeKind.TASK, NodeKind.EXCLUSIVE)
+
+* On the host, an assignment is checked against the enum when it is made.
+  A member is stored as it is. An ``int`` that is one of the enum's values
+  becomes that member (``node.kind = 3`` stores ``NodeKind.EXCLUSIVE``).
+  Anything else, such as an invalid value, a float, or a member of another
+  enum, raises ``ModelDefinitionError`` naming the field. Class defaults and
+  the options of a sweep are checked the same way.
+* In compiled code the field reads as a member, so it compares with members
+  and converts with ``int()`` and ``float()``. A write must be a member of
+  the field's enum. Compiled code can't turn an ``int`` into a member, so
+  writing ``2`` is a compile error.
+* An ``Output`` typed with an enum is collected like ``Output[int]``: its
+  :class:`~cimba.Samples` hold the integer values as floats (``nan`` for a
+  failed trial). Turn one back into a member with ``NodeKind(int(value))``.
+  Without a default it starts at ``0``, even if no member has that value.
+* ``cb.spawn(Node, kind=NodeKind.EXCLUSIVE)`` takes members for enum fields.
+* A ``cb.decision`` can't be assigned to an enum ``Param``. Sweep the
+  members instead.
+
+Only ``enum.IntEnum`` is supported: a field typed with any other
+``enum.Enum`` is a ``ModelDefinitionError`` that says to derive it from
+``IntEnum``.
 
 Plain field or output?
 ----------------------
@@ -217,7 +268,9 @@ subclasses, goes in a ``@cb.function``:
   when the caller sees only the base class. That's ordinary Python
   semantics, compiled to a per-class function table.
 * Parameters and the return value are annotated with ``float``, ``int``,
-  ``bool`` or a model class (``None`` for no return value). An override must
+  ``bool``, an ``enum.IntEnum`` or a model class (``None`` for no return
+  value). A parameter typed with an enum takes members of that enum only; an
+  ``int`` or ``float`` parameter also takes a member, as its value. An override must
   keep the signature and also be decorated.
 * On the host it stays a normal method, so policy logic is easy to
   unit-test.

@@ -15,7 +15,7 @@ Entry ABI, by role (``self`` is the record address):
     event, hook      void     f(intptr_t self)
     predicate        uint8_t  f(intptr_t self)
     function         ret      f(intptr_t self, args...)     float -> double,
-                     int -> int64, bool -> uint8, model -> intptr_t
+                     int and IntEnum -> int64, bool -> uint8, model -> intptr_t
 """
 
 from __future__ import annotations

@@ -17,7 +17,10 @@ Model
    has no side effects: nothing is compiled or run until an experiment runs.
 
    Assigning attributes is validated: a :func:`sweep` is accepted only by
-   ``Param``, ``Input``, ``Series`` and child-model fields. ``Input``/``Series``
+   ``Param``, ``Input``, ``Series`` and child-model fields. A field typed with
+   an ``enum.IntEnum`` accepts members, or an ``int`` that is one of the
+   enum's values (stored as that member); anything else raises
+   ``ModelDefinitionError``. ``Input``/``Series``
    fields accept sources or sweeps of sources; optional inputs also accept
    ``None``. A child sweep must contain models of the field's type.
 
@@ -38,15 +41,18 @@ Model
 Field types
 -----------
 
-A plain annotated ``float``, ``int`` or ``bool`` (``on_hand: float = 0.0``)
-is a per-trial value: it starts at its value in every trial and compiled code
+A plain annotated ``float``, ``int``, ``bool`` or ``enum.IntEnum``
+(``on_hand: float = 0.0``) is a per-trial value: it starts at its value in every trial and compiled code
 may change it. A static model needs a value, on the class or the instance.
 The wrappers below give a field a role on top of that.
 
 .. class:: Param[T]
 
-   A trial-constant value of type ``float``, ``int`` or ``bool``. It can be
-   set on the class, the instance, or as a sweep.
+   A trial-constant value of type ``float``, ``int``, ``bool`` or an
+   ``enum.IntEnum``. It can be set on the class, the instance, or as a sweep.
+   An enum value is stored natively as the member's integer value and reads
+   as the member in compiled code and on the host. Decisions require
+   ``float``, ``int`` or ``bool``.
 
 .. class:: Output[T]
 
@@ -54,7 +60,8 @@ The wrappers below give a field a role on top of that.
    trial is collected as :class:`Samples`. It starts each trial at its
    default, if it has one
    (``revenue: cb.Output[float] = 0.0``), otherwise at ``nan`` (``float``) or
-   ``0`` (``int``, ``bool``), so processes can count into it directly.
+   ``0`` (``int``, ``bool``, ``enum.IntEnum``), so processes can count into
+   it directly. An enum output is collected as its integer values.
 
 .. class:: Ref[M]
 
@@ -385,8 +392,9 @@ Decorators
 .. decorator:: function
 
    A method callable from compiled code as ``model.name(args)``. Every
-   parameter is annotated ``float``, ``int``, ``bool`` or a model class, and
-   the return type is one of those or ``None``. Scalar parameters may have
+   parameter is annotated ``float``, ``int``, ``bool``, an ``enum.IntEnum``
+   or a model class, and the return type is one of those or ``None``. An
+   enum parameter takes members of that enum only. Scalar parameters may have
    defaults; arguments are positional. Subclasses may override it with the
    same signature (and the decorator). Calls dispatch on the model's actual
    class, so a base-typed reference or list item runs its subclass's
@@ -452,6 +460,7 @@ All verbs are *compiled*.
    Create a dynamic model instance, set its fields, run its ``on_start``
    hooks, schedule its processes, and return a handle to it. Fields without
    a default must be supplied; input fields take an input of the caller.
+   Enum fields take members of their enum.
    Optional inputs may be omitted or passed as ``None`` to bind an empty source.
 
 .. function:: release(model)

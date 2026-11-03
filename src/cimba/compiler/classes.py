@@ -15,6 +15,7 @@ from numba import from_dtype, njit, types
 from cimba.layout import RecordLayout
 from cimba.engine.abi import HOOK_DESCRIPTOR, INPUT_DESCRIPTOR, PROCESS_DESCRIPTOR
 from cimba.schema import ClassSchema
+from . import enums  # register IntEnum conversions
 from . import handles  # register record handle operations
 from . import spawning  # register dynamic Model class typing and spawn lowering
 from .entries import EntryModule

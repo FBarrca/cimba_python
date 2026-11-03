@@ -1,3 +1,28 @@
+# Unreleased
+
+- `enum.IntEnum` members work in compiled model code (#25). They are
+  frozen at compile time like other module-level constants, compare with
+  members and integers, work in `if`/`elif` chains and `match`, convert with
+  `int()`, `float()` and `bool()`, index NumPy arrays and model lists, and
+  pass wherever an `int` or `float` is expected. Before, `float(member)`
+  and similar conversions failed to compile.
+- `cb.Param`, plain fields and `cb.Output` can be typed with an `IntEnum`
+  (`kind: cb.Param[NodeKind] = NodeKind.TASK`). Trial memory holds the
+  member's integer value. Host assignments are checked against the enum: an
+  `int` that is a valid value is stored as its member, and anything else
+  raises `ModelDefinitionError` naming the field. Params can be swept over
+  members. In compiled code the field reads as a member and accepts writes of
+  members only. Enum outputs are collected as integer values, like
+  `Output[int]`. `cb.spawn` takes members for enum fields, and decisions
+  can't be assigned to enum params.
+- `@cb.function` parameters and return values can be typed with an
+  `IntEnum`. An enum parameter takes members of that enum only; `int` and
+  `float` parameters also accept members.
+- A field or function typed with a plain `enum.Enum`, and converting a plain
+  `Enum` member to a number in compiled code, are errors that say to derive
+  the enum from `IntEnum`. Plain members still support `==`, `!=` and
+  `.value` in compiled code.
+
 # Cimba Python 0.9.2
 
 Released 2026-11-03.

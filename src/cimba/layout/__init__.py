@@ -15,17 +15,18 @@ from cimba.engine.abi import (
 from cimba.modeling import (
     Condition, Container, Dataset, FractionalContainer, Model, PriorityStore, Resource, Store,
 )
-from cimba.schema import Assembly, ClassSchema
+from cimba.schema import Assembly, ClassSchema, is_int_enum
 
 
 def _scalar_dtype(annotation: Any) -> Any:
-    if annotation is int:
+    if annotation is int or is_int_enum(annotation):
+        # An IntEnum field holds its member's integer value.
         return np.int64
     if annotation is bool:
         return np.bool_
     if annotation is float:
         return np.float64
-    raise TypeError(f"native records support scalar float, int and bool, got {annotation!r}")
+    raise TypeError(f"native records support scalar float, int, bool and IntEnum, got {annotation!r}")
 
 
 CONTAINER_HANDLE = np.dtype([("container_handle", POINTER)], align=True)

@@ -16,11 +16,12 @@ from cimba.engine.symbols import register
 from cimba.engine.abi import INPUT_EMPTY, INPUT_SLOT, INPUT_SLOT_BOOL, INPUT_SLOT_INT
 from cimba.layout import MODEL_RECORD_CLASSES, RecordLayout
 from cimba.modeling import ModelMeta, spawn
-from cimba.schema import ClassSchema
+from cimba.schema import ClassSchema, is_int_enum
 from .numba_compat import (
     AbstractTemplate, cgutils, infer_global, lower_builtin, lower_constant,
     models, register_model, signature, typeof_impl,
 )
+from .enums import member_type
 from .views import register_reachable_views
 
 register("cpy_model_allocate")
@@ -91,6 +92,11 @@ class SpawnTemplate(AbstractTemplate):
                 if field.default is None and field.name not in kws:
                     raise TypeError(f"{schema.cls.__name__}.{field.name}: "
                                     "spawn value required")
+            if (field.kind in {"field", "param", "output"} and field.name in kws and
+                    is_int_enum(field.value_type) and
+                    kws[field.name] != member_type(field.value_type)):
+                raise TypeError(f"{schema.cls.__name__}.{field.name}: expected a "
+                                f"{field.value_type.__name__} member, got {kws[field.name]}")
             if field.kind == "ref":
                 reference_type = kws.get(field.name)
                 if reference_type is None:
@@ -182,8 +188,9 @@ def lower_spawn(context, builder, sig, arguments):
                 raise TypeError(f"{schema.cls.__name__}.{field.name}: "
                                 "expected a model reference")
         else:
-            target_type = {float: types.float64, int: types.int64,
-                           bool: types.boolean}.get(field.value_type)
+            target_type = (types.int64 if is_int_enum(field.value_type) else
+                           {float: types.float64, int: types.int64,
+                            bool: types.boolean}.get(field.value_type))
             if target_type is None:
                 raise TypeError(f"{schema.cls.__name__}.{field.name}: "
                                 "unsupported dynamic scalar type")
@@ -195,7 +202,8 @@ def lower_spawn(context, builder, sig, arguments):
                 default = field.default
                 if default is None:
                     default = nan if field.kind == "output" and target_type == types.float64 else 0
-                value = context.get_constant(target_type, default)
+                value = context.get_constant(
+                    target_type, int(default) if target_type == types.int64 else default)
         builder.store(value, _field_pointer(
             context, builder, record, layout.offset(field.name), target_type))
     start_type = ir.FunctionType(ir.VoidType(), [pointer, pointer, uintptr,

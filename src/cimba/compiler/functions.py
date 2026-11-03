@@ -6,7 +6,8 @@ class fills the slot with its own implementation, compiled for its own record
 type, behind a C calling convention fixed by the annotated signature:
 
     ret f(intptr_t self, args...)     float -> double, int -> int64,
-                                      bool -> uint8, model -> intptr_t
+                                      IntEnum -> int64, bool -> uint8,
+                                      model -> intptr_t
 
 A call ``view.name(args)`` loads the slot from the *record's* table, not the
 view's class, so a subclass override runs even when the caller only knows the
@@ -23,8 +24,9 @@ from numba import from_dtype, types
 
 from cimba.layout import RecordLayout
 from cimba.modeling import Model
-from cimba.schema import ClassSchema, FunctionSignature
+from cimba.schema import ClassSchema, FunctionSignature, is_int_enum
 from . import views
+from .enums import member_type
 from .handles import _record_model_class
 from .numba_compat import AbstractTemplate, cpu_target, lower_builtin, signature
 
@@ -44,6 +46,8 @@ def _numba_type(kind):
         return types.boolean
     if kind is int:
         return types.int64
+    if is_int_enum(kind):
+        return member_type(kind)
     return _record_type(kind)
 
 
@@ -90,7 +94,7 @@ def _emit_call(context, builder, record_value, values, actual_types, slot: int,
         value, actual = values[index], actual_types[index]
         if kind is float:
             converted.append(context.cast(builder, value, actual, types.float64))
-        elif kind is int:
+        elif kind is int or is_int_enum(kind):
             converted.append(context.cast(builder, value, actual, types.int64))
         elif kind is bool:
             flag = context.cast(builder, value, actual, types.boolean)
@@ -103,7 +107,7 @@ def _emit_call(context, builder, record_value, values, actual_types, slot: int,
         return context.get_dummy_value()
     if returns is bool:
         return builder.icmp_unsigned("!=", result, ir.Constant(ir.IntType(8), 0))
-    if returns in (float, int):
+    if returns in (float, int) or is_int_enum(returns):
         return result
     return builder.inttoptr(result, context.get_value_type(return_type))
 
@@ -115,8 +119,12 @@ def _check_arguments(owner: type[Model], name: str, signature: FunctionSignature
         raise TypeError(f"{where}() takes {required} to {len(signature.parameters)} "
                         f"arguments, got {len(arguments)}")
     for (parameter, kind), actual in zip(signature.parameters, arguments):
-        if kind in (float, int, bool):
-            if not isinstance(actual, (types.Number, types.Boolean)):
+        if is_int_enum(kind):
+            if actual != member_type(kind):
+                raise TypeError(f"{where}: {parameter} expects a {kind.__name__} member, "
+                                f"got {actual}")
+        elif kind in (float, int, bool):
+            if not isinstance(actual, (types.Number, types.Boolean, types.IntEnumMember)):
                 raise TypeError(f"{where}: {parameter} expects {kind.__name__}, got {actual}")
         else:
             model = _record_model_class(actual)

@@ -20,7 +20,9 @@ A **decision** gives a ``Param`` a range instead of a value:
    centre.staff = cb.decision(1, 20)                # Param[int]: 1, 2, ..., 20
 
 The field's annotation sets the kind of value: real for ``Param[float]``,
-integer for ``Param[int]``, ``False``/``True`` for ``Param[bool]``.
+integer for ``Param[int]``, ``False``/``True`` for ``Param[bool]``. An
+enum ``Param`` can't hold a decision, because its members need not be evenly
+spaced or ordered; compare them with a sweep.
 ``step=`` restricts a real range to evenly spaced values, and ``log=True``
 searches a positive range on a log scale.
 

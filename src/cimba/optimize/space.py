@@ -11,7 +11,7 @@ import numpy as np
 from cimba.experiments import Design, DesignPoint
 from cimba.inputs.sources import DistributionSource
 from cimba.modeling import Decision, Sweep
-from cimba.schema import Assembly, ModelDefinitionError, scalar_value
+from cimba.schema import Assembly, ModelDefinitionError, is_int_enum, scalar_value
 
 
 @dataclass(frozen=True)
@@ -22,6 +22,10 @@ class Dimension:
 
     def __post_init__(self):
         d = self.decision
+        if is_int_enum(self.value_type):
+            raise ModelDefinitionError(
+                f"{self.path}: decisions require Param[float, int or bool], not an IntEnum; "
+                "compare enum members with a sweep instead")
         if self.value_type not in (float, int, bool):
             raise ModelDefinitionError(f"{self.path}: decisions require Param[float, int or bool]")
         if self.value_type is int:

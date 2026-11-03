@@ -19,8 +19,9 @@ from numba.extending import (
 
 from cimba.layout import MODEL_RECORD_CLASSES, RecordLayout
 from cimba.modeling import Model, Ref
-from cimba.schema import ClassSchema
+from cimba.schema import ClassSchema, is_int_enum
 from cimba.engine.symbols import register
+from .enums import member_type
 from .numba_compat import (
     AttributeTemplate, cgutils, cpu_target, infer_getattr, lower_getattr,
     models, register_model,
@@ -59,7 +60,8 @@ make_attribute_wrapper(CollectionViewType, "length", "length")
 
 @intrinsic
 def collection_item(typing_context, collection, index):
-    if not isinstance(collection, CollectionViewType) or not isinstance(index, types.Integer):
+    if not isinstance(collection, CollectionViewType) or not isinstance(
+            index, (types.Integer, types.IntEnumMember)):
         return None
 
     def codegen(context, builder, signature, arguments):
@@ -79,7 +81,8 @@ def collection_item(typing_context, collection, index):
 
 @overload(operator.getitem)
 def collection_getitem(collection, index):
-    if isinstance(collection, CollectionViewType) and isinstance(index, types.Integer):
+    if isinstance(collection, CollectionViewType) and isinstance(
+            index, (types.Integer, types.IntEnumMember)):
         def implementation(collection, index):
             return collection_item(collection, index)  # pyright: ignore[reportCallIssue]
         return implementation
@@ -214,6 +217,17 @@ def register_views(schema: ClassSchema) -> None:
     parent_type = from_dtype(parent_layout.dtype)
     assert isinstance(parent_type, types.Record)
     for field in schema.fields:
+        if field.kind in {"param", "field", "output"} and is_int_enum(field.value_type):
+            # Stored as int64 and typed as the enum's members: Numba's own
+            # record lowering loads and stores the value; writes must be members.
+            key = (parent_type, field.name)
+            entry = (member_type(field.value_type), parent_layout.offset(field.name), None)
+            previous = _view_fields.get(key)
+            if previous is not None and previous != entry:
+                raise TypeError(f"{schema.cls.__name__}.{field.name}: model classes with "
+                                "identical native records have incompatible enum fields")
+            _view_fields[key] = entry
+            continue
         if field.kind not in {"child", "ref", "collection"}:
             continue
         value_type = field.value_type

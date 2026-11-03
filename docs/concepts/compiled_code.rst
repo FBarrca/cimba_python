@@ -38,6 +38,16 @@ What you can use
 * **Module-level constants**: numbers, tuples and NumPy arrays defined at
   the top of your module (``TRANSITION_PROBS[at, j]``). They are frozen into
   the compiled code when the class is first compiled.
+* **IntEnum members**: members of an ``enum.IntEnum`` (``NodeKind.TASK``),
+  also frozen at compile time. They compare with members and with integers
+  (``==``, ``!=``, ``<``), work in ``if``/``elif`` chains and ``match``
+  statements, take part in
+  arithmetic, convert with ``int()``, ``float()`` and ``bool()``, index NumPy
+  arrays and model lists, and can be passed wherever an ``int`` or ``float``
+  is expected (``self.log.record(kind)``). Fields and ``@cb.function``
+  parameters can be typed with the enum: see :doc:`models`. Members of a
+  plain ``enum.Enum`` only support ``==``, ``!=`` and ``.value``; converting
+  one to a number is a compile error that says to use ``IntEnum``.
 * The Cimba verbs (``cb.hold``, ``cb.now``, ``cb.spawn``, …),
   :mod:`cimba.random`, entity methods and input reads.
 * **Model functions**: methods decorated with ``@cb.function``, called
