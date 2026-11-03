@@ -1,4 +1,6 @@
-# Unreleased
+# Cimba Python 0.9.2
+
+Released 2026-11-03.
 
 - `Resource.acquire()` and `Resource.preempt()` take a `priority=` argument
   for the request, independent of the process priority. The request priority
