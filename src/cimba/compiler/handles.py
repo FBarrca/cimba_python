@@ -14,7 +14,7 @@ from numba.extending import intrinsic, overload, overload_method
 from cimba.engine.symbols import register
 from cimba.layout import MODEL_RECORD_CLASSES, STORE_MODEL_TARGETS, RecordLayout
 from cimba.modeling import (
-    Process, end_trial, hold, is_dynamic, log, now, release, schedule, suspend, this_process,
+    Process, acquire_any, end_trial, hold, is_dynamic, log, now, release, schedule, suspend, this_process,
 )
 from cimba.schema import ClassSchema
 from .numba_compat import cgutils, infer_getattr, make_overload_method_template
@@ -31,9 +31,12 @@ for _name in ("cpy_process_hold", "cmb_time", "cpy_buffer_put",
               "cpy_fractional_level",
               "cpy_fractional_mean_level", "cpy_fractional_max_level",
               "cpy_resource_acquire", "cpy_resource_preempt",
-              "cmb_resourcepool_held", "cpy_resource_release",
+              "cpy_resource_acquire_ranked", "cpy_resource_preempt_ranked",
+              "cpy_resource_acquire_any", "cpy_resourcepool_held", "cpy_resource_release",
               "cpy_resourcepool_available",
-              "cpy_resourcepool_mean_in_use", "cmb_dataset_add",
+              "cpy_resourcepool_mean_in_use", "cpy_resourcepool_mean_capacity",
+              "cpy_resourcepool_utilization", "cpy_resourcepool_capacity",
+              "cpy_resource_set_capacity", "cmb_dataset_add",
               "cpy_dataset_mean", "cpy_dataset_count", "cpy_dataset_max",
               "cpy_store_put_int", "cpy_store_get_int",
               "cpy_store_put_float", "cpy_store_get_float",
@@ -86,14 +89,28 @@ _native_resource_acquire = types.ExternalFunction(
     "cpy_resource_acquire", types.int64(types.intp, types.uint64))
 _native_resource_preempt = types.ExternalFunction(
     "cpy_resource_preempt", types.int64(types.intp, types.uint64))
+_native_resource_acquire_ranked = types.ExternalFunction(
+    "cpy_resource_acquire_ranked",
+    types.int64(types.intp, types.uint64, types.int64))
+_native_resource_preempt_ranked = types.ExternalFunction(
+    "cpy_resource_preempt_ranked",
+    types.int64(types.intp, types.uint64, types.int64))
 _native_resource_held = types.ExternalFunction(
-    "cmb_resourcepool_held", types.uint64(types.intp, types.intp))
+    "cpy_resourcepool_held", types.uint64(types.intp, types.intp))
 _native_resource_available = types.ExternalFunction(
     "cpy_resourcepool_available", types.uint64(types.intp))
 _native_resource_release = types.ExternalFunction(
     "cpy_resource_release", types.void(types.intp, types.uint64))
 _native_resource_mean = types.ExternalFunction(
     "cpy_resourcepool_mean_in_use", types.float64(types.intp))
+_native_resource_mean_capacity = types.ExternalFunction(
+    "cpy_resourcepool_mean_capacity", types.float64(types.intp))
+_native_resource_utilization = types.ExternalFunction(
+    "cpy_resourcepool_utilization", types.float64(types.intp))
+_native_resource_capacity = types.ExternalFunction(
+    "cpy_resourcepool_capacity", types.uint64(types.intp))
+_native_resource_set_capacity = types.ExternalFunction(
+    "cpy_resource_set_capacity", types.void(types.intp, types.int64, types.uint64))
 _native_dataset_add = types.ExternalFunction(
     "cmb_dataset_add", types.uint64(types.intp, types.float64))
 _native_dataset_mean = types.ExternalFunction(
@@ -289,17 +306,19 @@ _process_handle = type_cast(Any, process_from_pointer)
 _scheduled_handle = type_cast(Any, scheduled_from_id)
 
 
-def _record_method(name, predicate):
+def _record_method(name, predicate, prefer_literal=False):
     """Register a method only on its handle record kind.
 
     Numba's ordinary ``overload_method(types.Record, ...)`` claims the method
     name on *every* record, including unrelated model fields with that name.
     Restricting attribute resolution here keeps handle methods transparent to
-    ordinary record attributes.
+    ordinary record attributes. ``prefer_literal`` types literal arguments as
+    literals, for arguments resolved at compile time.
     """
     def decorate(function):
         base = make_overload_method_template(
-            types.Record, name, function, inline="never")
+            types.Record, name, function, inline="never",
+            prefer_literal=prefer_literal)
 
         class HandleMethod(base):
             def _resolve(self, record, attr):  # pyright: ignore[reportIncompatibleMethodOverride]
@@ -308,7 +327,7 @@ def _record_method(name, predicate):
                 return super()._resolve(record, attr)
 
         infer_getattr(HandleMethod)
-        overload(function)(function)
+        overload(function, prefer_literal=prefer_literal)(function)
         return function
     return decorate
 
@@ -783,20 +802,95 @@ def _resource_handle(record) -> bool:
     return isinstance(record, types.Record) and "resource_handle" in record.fields
 
 
+def _request_ranked(priority, method) -> bool:
+    """Whether a request has an explicit priority; ``None`` tracks the process."""
+    if priority is None or isinstance(priority, (types.NoneType, types.Omitted)):
+        return False
+    if isinstance(priority, types.Integer):
+        return True
+    name = method if "." in method else f"Resource.{method}"
+    raise TypeError(f"{name}() takes an int or None priority, got {priority}")
+
+
 @_record_method("acquire", _resource_handle)
-def resource_acquire(record, amount=1):
-    if _resource_handle(record):
-        def implementation(record, amount=1):
-            return _native_resource_acquire(record.resource_handle, int(amount))
-        return implementation
+def resource_acquire(record, amount=1, priority=None):
+    if not _resource_handle(record):
+        return None
+    if _request_ranked(priority, "acquire"):
+        def ranked(record, amount=1, priority=None):
+            return _native_resource_acquire_ranked(
+                record.resource_handle, int(amount), int(priority))
+        return ranked
+
+    def implementation(record, amount=1, priority=None):
+        return _native_resource_acquire(record.resource_handle, int(amount))
+    return implementation
+
+
+@intrinsic
+def native_acquire_any(typing_context, resources, ranked, rank):
+    """Call cpy_resource_acquire_any with the tuple's handles in a stack array."""
+    if not isinstance(resources, types.BaseTuple) or not isinstance(
+            ranked, types.Integer) or not isinstance(rank, types.Integer):
+        return None
+    count = len(resources)
+
+    def codegen(context, builder, signature, arguments):
+        members, flag, value = arguments
+        intp = context.get_value_type(types.intp)
+        i64 = ir.IntType(64)
+        array = cgutils.alloca_once(builder, intp, size=count)
+        for position, element in enumerate(resources):
+            record = builder.extract_value(members, position)
+            base = builder.bitcast(record, ir.IntType(8).as_pointer())
+            address = builder.gep(base, [ir.Constant(
+                ir.IntType(32), element.offset("resource_handle"))])
+            handle = builder.load(builder.bitcast(address, intp.as_pointer()))
+            builder.store(handle, builder.gep(
+                array, [ir.Constant(ir.IntType(32), position)]))
+        function = cgutils.get_or_insert_function(
+            builder.module, ir.FunctionType(i64, [intp.as_pointer(), i64, i64, i64]),
+            "cpy_resource_acquire_any")
+        return builder.call(function, [
+            array, ir.Constant(i64, count),
+            context.cast(builder, flag, ranked, types.uint64),
+            context.cast(builder, value, rank, types.int64)])
+
+    return types.int64(resources, ranked, rank), codegen
+
+
+_acquire_any = type_cast(Any, native_acquire_any)
+
+
+@overload(acquire_any)
+def model_acquire_any(resources, priority=None):
+    if not (isinstance(resources, types.BaseTuple) and len(resources) > 0 and
+            all(_resource_handle(member) for member in resources)):
+        raise TypeError("acquire_any() takes a nonempty tuple of Resources, "
+                        f"such as (self.clerks, self.seniors), got {resources}")
+    if _request_ranked(priority, "cb.acquire_any"):
+        def ranked(resources, priority=None):
+            return _acquire_any(resources, 1, int(priority))
+        return ranked
+
+    def implementation(resources, priority=None):
+        return _acquire_any(resources, 0, 0)
+    return implementation
 
 
 @_record_method("preempt", _resource_handle)
-def resource_preempt(record, amount=1):
-    if _resource_handle(record):
-        def implementation(record, amount=1):
-            return _native_resource_preempt(record.resource_handle, int(amount))
-        return implementation
+def resource_preempt(record, amount=1, priority=None):
+    if not _resource_handle(record):
+        return None
+    if _request_ranked(priority, "preempt"):
+        def ranked(record, amount=1, priority=None):
+            return _native_resource_preempt_ranked(
+                record.resource_handle, int(amount), int(priority))
+        return ranked
+
+    def implementation(record, amount=1, priority=None):
+        return _native_resource_preempt(record.resource_handle, int(amount))
+    return implementation
 
 
 @_record_method("held", _resource_handle)
@@ -829,6 +923,65 @@ def resource_available(record):
         def implementation(record):
             return _native_resource_available(record.resource_handle)
         return implementation
+
+
+@_record_method("capacity", _resource_handle)
+def resource_capacity(record):
+    if _resource_handle(record):
+        def implementation(record):
+            return _native_resource_capacity(record.resource_handle)
+        return implementation
+
+
+@_record_method("mean_capacity", _resource_handle)
+def resource_mean_capacity(record):
+    if _resource_handle(record):
+        def implementation(record):
+            return _native_resource_mean_capacity(record.resource_handle)
+        return implementation
+
+
+@_record_method("utilization", _resource_handle)
+def resource_utilization(record):
+    if _resource_handle(record):
+        def implementation(record):
+            return _native_resource_utilization(record.resource_handle)
+        return implementation
+
+
+_CAPACITY_MODES = {"finish": 0, "preempt": 1}
+
+
+def _capacity_mode(mode) -> int:
+    """The literal ``mode`` of set_capacity as the native preempt flag."""
+    if isinstance(mode, str):
+        value = mode  # the default, left out of the call
+    elif isinstance(mode, types.Omitted):
+        value = mode.value
+    elif isinstance(mode, types.StringLiteral):
+        value = mode.literal_value
+    else:
+        raise TypeError("Resource.set_capacity() takes mode as a string "
+                        "literal, 'finish' or 'preempt'")
+    if value not in _CAPACITY_MODES:
+        raise TypeError(f"Resource.set_capacity() mode must be 'finish' or "
+                        f"'preempt', got {value!r}")
+    return _CAPACITY_MODES[value]
+
+
+@_record_method("set_capacity", _resource_handle, prefer_literal=True)
+def resource_set_capacity(record, capacity, mode="finish"):
+    if not _resource_handle(record):
+        return None
+    if not isinstance(capacity, types.Integer):
+        raise TypeError(f"Resource.set_capacity() takes an int capacity, "
+                        f"got {capacity}")
+    preempt = _capacity_mode(mode)
+
+    def implementation(record, capacity, mode="finish"):
+        _native_resource_set_capacity(record.resource_handle, int(capacity),
+                                      preempt)
+    return implementation
 
 
 def _dataset_handle(record) -> bool:

@@ -130,7 +130,9 @@ Here's the heart of a rodent's life:
 process. With it, the rodent sets its own **priority** before every grab.
 Priority decides who is served first among waiting processes, and who may be
 robbed by ``preempt``: a rat can only take cheese from holders with *lower*
-priority.
+priority. (A single request can also carry its own priority,
+``acquire(priority=p)``, without changing the process's; see
+:ref:`the Resource rules <concepts-resource-order>`.)
 
 Notice that ``acquire`` and ``preempt`` return a value. Every blocking call in
 Cimba returns a **signal** that tells you *why* the process resumed:
@@ -240,9 +242,9 @@ trial, the mean cheese in use.
    $ uv run python tutorial/tut_2_1.py
    cimba 3.0.0; 5 mice, 2 rats, 20 cheese cubes
    10 trials in 1.69 s
-   mice 370053.5 277871.6 67893.0 14389.5
-   rats 357443.1 183293.2 16095.2 5555.9
-   cat chases: 28496.0
+   mice 371807.8 278260.2 68044.3 14415.4
+   rats 359480.6 183410.5 16131.9 5545.6
+   cat chases: 28527.4
 
 Each row reads *grabbed, stolen, preempted, interrupted*, averaged over ten
 replications of 100,000 time units. The rats, only two of them, grab nearly as

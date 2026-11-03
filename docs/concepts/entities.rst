@@ -38,8 +38,9 @@ from compiled code.
 Container
 ---------
 
-A counted level. ``put(n)`` adds ``n`` units, ``get(n)`` removes ``n``,
-blocking until that many are there. Amounts are integers.
+A counted level. ``put(n)`` adds ``n`` units, ``get(n)`` removes ``n``.
+Amounts are integers. ``get`` takes what is there and blocks until the rest
+arrives.
 
 .. list-table::
    :widths: 35 65
@@ -76,8 +77,14 @@ It starts empty or with ``FractionalContainer(initial=x)``, and holds at most
 ``get(x)`` behaves as it does on a ``Container``: it takes what is there and
 waits for the rest, so ``get(5.0)`` with 3.0 present takes the 3.0 and blocks
 until 2.0 more has been put. ``put(x)`` is the mirror image: it fills the
-container to ``capacity`` and waits for room for the rest. Waiting processes
-are served in priority order, then first come, first served.
+container to ``capacity`` and waits for room for the rest.
+
+Waiting processes of both container kinds are served in priority order, then
+first come, first served, with one difference from a ``Resource``: a ``get``
+or ``put`` that has moved part of its amount and waits again rejoins the line
+behind the waiting requests of the same priority. Two equal-priority ``get``
+calls waiting for more than arrives at once therefore take turns at the
+arriving units rather than the first finishing before the second starts.
 
 The level is kept in fixed point, with ``decimals`` decimal places (6 by
 default, so milligrams when the unit is a kilogram). Each amount is rounded
@@ -139,14 +146,15 @@ FIFO):
 Resource
 --------
 
-A pool of ``capacity`` identical units, ``Resource(capacity=n)`` (default 1).
+A pool of identical units, ``Resource(capacity=n)`` (default 1). The
+capacity can be zero and can change during a trial.
 
 .. list-table::
    :widths: 35 65
 
-   * - ``acquire(n=1)``
+   * - ``acquire(n=1, priority=None)``
      - Take ``n`` units, waiting in priority order. Returns a signal.
-   * - ``preempt(n=1)``
+   * - ``preempt(n=1, priority=None)``
      - Take ``n`` units, taking them from lower-priority holders if needed.
        A preempted holder loses *all* its units and sees signal ``-1``.
    * - ``release(n=1)``
@@ -154,10 +162,107 @@ A pool of ``capacity`` identical units, ``Resource(capacity=n)`` (default 1).
    * - ``held(process)``
      - Units currently held by a process handle.
    * - ``available()``
-     - Free units.
+     - Free units, ``0`` while the units in use are at or above the capacity.
+   * - ``capacity()``
+     - The current capacity.
+   * - ``set_capacity(n, *, mode="finish")``
+     - Change the capacity (see :ref:`concepts-resource-capacity`).
    * - ``mean_in_use()``
-     - Time-weighted mean of units in use over the measurement window
-       (divide by capacity for utilization).
+     - Time-weighted mean of units in use over the measurement window.
+   * - ``mean_capacity()``
+     - Time-weighted mean capacity over the measurement window.
+   * - ``utilization()``
+     - ``mean_in_use() / mean_capacity()``; ``nan`` if the window offered no
+       capacity.
+
+.. _concepts-resource-order:
+
+The ordering rules:
+
+* **Waiting.** Requests are served highest priority first, then first come,
+  first served. A request that can't be fully served yet takes what is free
+  and keeps waiting at the front, blocking the requests behind it even if
+  they would fit. Nothing bypasses it: each time it waits again it keeps its
+  original place in line, so a later request of equal priority is never
+  served before it.
+* **Preempting.** ``preempt`` takes units only from holders with *strictly*
+  lower priority than the request: the lowest first, and among equals the
+  one whose holding started most recently. Then it waits like ``acquire``
+  for whatever is still missing.
+* **Holding.** A process's units in a resource are one holding, ranked at
+  the priority of its latest ``acquire`` or ``preempt``. An interrupted call
+  keeps the holding's previous amount and priority.
+
+By default (``priority=None``) a request and its holding are ranked at the
+process priority, and :meth:`Process.priority_set <cimba.Process.priority_set>`
+re-ranks both. ``priority=p`` ranks them at ``p`` instead, and
+``priority_set`` leaves them alone. This separates the two jobs of process
+priority: the request priority decides who is served and who is preempted,
+while the process priority still decides which of several events at the same
+instant runs first, including the wakeup that grants the request.
+
+.. code-block:: python
+
+   RESUME = 10
+
+   @cb.process
+   def work(self):
+       ...
+       if self.machine.acquire(priority=RESUME) == 0:  # ahead of fresh work
+           ...
+
+.. _concepts-resource-capacity:
+
+Changing the capacity
+~~~~~~~~~~~~~~~~~~~~~
+
+``set_capacity(n, mode=...)`` models shifts, breaks and staffing calendars.
+Raising the capacity grants waiting requests at once, in queue order.
+Lowering it takes one of two string-literal modes:
+
+* ``"finish"`` (the default): holders keep their units and finish their
+  work. The units in use may exceed ``n`` until enough are released; nothing
+  new is granted until they drop below ``n``.
+* ``"preempt"``: holders are preempted in the ``preempt`` victim order
+  (lowest holding priority, most recent first) until the units in use are at
+  most ``n``. Victims lose all their units and see ``-1``, as with
+  ``preempt``; the calling process is never its own victim.
+
+Capacity statistics follow the window like the in-use history, so
+``utilization()`` measures use against the capacity that was actually
+offered, not against the peak. A calendar is an ordinary process; see
+:ref:`policies-shift-calendar`.
+
+.. _concepts-acquire-any:
+
+One unit from any of several resources
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``cb.acquire_any((self.clerks, self.seniors))`` takes one unit from
+whichever resource grants first and returns its index in the tuple. A free
+unit is taken at once, from the first listed resource that has one.
+Otherwise the request waits in *every* resource's queue, at the place an
+``acquire`` made now would get there, so it competes with direct acquirers
+by the same ordering rules. The first resource to grant serves it, and the
+request leaves the other queues at that moment.
+
+.. code-block:: python
+
+   role = cb.acquire_any((self.clerks, self.seniors))
+   if role >= 0:
+       cb.hold(self.service.next())
+       (self.clerks, self.seniors)[role].release()
+
+The unit is an ordinary holding of that resource: release it with that
+resource's ``release()``; ``preempt`` can take it. ``priority=`` ranks the
+request as for ``acquire``. A negative return value is the signal that ended
+the wait (``-1`` preempted elsewhere, ``-2`` interrupted, a timer's signal),
+and leaves no request behind in any queue.
+
+Use ``acquire_any`` when a task needs *one unit of any of several pools*.
+For any other rule ("two clerks, or one senior", "the least busy pool"),
+wait on a :ref:`Condition that observes the resources
+<concepts-condition-observe>` and acquire once it holds.
 
 Condition
 ---------
@@ -165,6 +270,40 @@ Condition
 ``wait_until(predicate, timeout=math.inf)`` waits for a ``@cb.predicate``
 method to hold, a timeout, or an interruption, and returns whether the
 predicate holds. ``signal()`` re-evaluates all waiters. See :doc:`processes`.
+
+.. _concepts-condition-observe:
+
+Observing entities
+~~~~~~~~~~~~~~~~~~
+
+``Condition(observe=...)`` makes a condition signal itself whenever an
+observed ``Resource``, ``Store``, ``PriorityStore``, ``Container`` or
+``FractionalContainer`` changes, as if ``signal()`` were called right after
+every release, grant, capacity change, put and get:
+
+.. code-block:: python
+
+   class Office(cb.Model):
+       clerks: cb.Resource = cb.Resource(capacity=2)
+       seniors: cb.Resource = cb.Resource(capacity=1)
+       staffed: cb.Condition = cb.Condition(observe=(clerks, seniors))
+
+       @cb.predicate
+       def team_free(self) -> bool:     # two clerks, or one senior
+           return self.clerks.available() >= 2 or self.seniors.available() >= 1
+
+Observation is structure: it is set when the model is built and fixed for
+the experiment. Pass entities of the same model tree, which the experiment
+checks. In ``__init__``, observe your own or your children's entities
+(``cb.Condition(observe=(self.north.counter, self.south.counter))``); for
+an owner's entities, call ``condition.observe(owner.pool)`` in
+:meth:`~cimba.Model.attached`. Each model instance gets its own copies of
+class-default entities, so the class-level form above observes each
+instance's own resources.
+
+A waiter woken this way still competes for what it saw: re-check, or
+acquire, after ``wait_until`` returns. Changes to plain fields still need a
+``signal()``.
 
 Dataset
 -------

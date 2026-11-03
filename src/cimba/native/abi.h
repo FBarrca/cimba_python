@@ -10,7 +10,7 @@
 #define CPY_EXPORT __attribute__((visibility("default")))
 #endif
 
-enum { CPY_ABI_VERSION = 4 };
+enum { CPY_ABI_VERSION = 5 };
 enum { CPY_INPUT_DISTRIBUTION = 1, CPY_INPUT_ROWS = 2, CPY_INPUT_EMPTY = 3 };
 enum { CPY_POLICY_FAIL = 1, CPY_POLICY_WRAP = 2,
        CPY_POLICY_END_TRIAL = 3, CPY_POLICY_EXTEND = 4 };
@@ -97,6 +97,12 @@ typedef struct cpy_input_descriptor {
     char name[96];
 } cpy_input_descriptor;
 
+/* A condition observing an entity: indices into the entity table */
+typedef struct cpy_observation_descriptor {
+    uint64_t condition;
+    uint64_t subject;
+} cpy_observation_descriptor;
+
 typedef struct cpy_trial_descriptor {
     const cpy_entity_descriptor *entities;
     uint64_t entity_count;
@@ -108,6 +114,8 @@ typedef struct cpy_trial_descriptor {
     uint64_t end_count;
     const cpy_input_descriptor *inputs;
     uint64_t input_count;
+    const cpy_observation_descriptor *observations;
+    uint64_t observation_count;
 } cpy_trial_descriptor;
 
 enum { CPY_TRIAL_PENDING = 0, CPY_TRIAL_RUNNING = 1,

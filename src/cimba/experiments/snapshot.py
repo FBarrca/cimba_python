@@ -14,6 +14,7 @@ import numpy as np
 from cimba.compiler import ensure
 from cimba.engine.abi import (
     ENTITY_DESCRIPTOR, HOOK_DESCRIPTOR, INPUT_DESCRIPTOR, INPUT_EMPTY, INPUT_SLOT,
+    OBSERVATION_DESCRIPTOR,
     PROCESS_DESCRIPTOR, TRIAL_DESCRIPTOR, TRIAL_HEADER,
 )
 from cimba.engine.runtime import (
@@ -72,6 +73,7 @@ class Snapshot:
         self._row_cache = OrderedDict()
         self._row_bytes = 0
         self._validated_sources = {}
+        self._observations = self._observation_table()
 
     def prepare(self, captures: bool):
         started = monotonic()
@@ -85,7 +87,8 @@ class Snapshot:
             tables = [table.copy() for table in tables]
             tables[0]['reserved'] = 0
             descriptor = descriptor.copy()
-            for name, table in zip(('entities', 'processes', 'starts', 'ends', 'inputs'), tables):
+            for name, table in zip(('entities', 'processes', 'starts', 'ends', 'inputs',
+                                    'observations'), tables):
                 descriptor[name] = table.ctypes.data
             self._tables[captures] = tables, descriptor
         return (self._compiled, *self._tables[captures],
@@ -166,6 +169,35 @@ class Snapshot:
                                 f"{len(source.values)} rows, needs {required}")
                     self._validated_sources[key] = source
 
+    def _observation_table(self):
+        """(condition, observed entity) index pairs into the entity table.
+
+        Observation is structure: each observed entity must be an entity
+        field of this model tree, so the runner can subscribe it.
+        """
+        indices: dict[int, int] = {}
+        conditions = []
+        for instance in self.assembly.instances:
+            for field in instance.schema.fields:
+                if field.kind != "entity":
+                    continue
+                entity = instance.values[field.name]
+                indices.setdefault(id(entity), len(indices))
+                if isinstance(entity, Condition):
+                    conditions.append((len(indices) - 1, entity,
+                                       f"{instance.label}.{field.name}"))
+        pairs = []
+        for index, condition, label in conditions:
+            for subject in condition.observed:
+                position = indices.get(id(subject))
+                if position is None:
+                    raise ModelDefinitionError(
+                        f"{label}: observes a {type(subject).__name__} that is not an "
+                        "entity of this model tree (observe the entities your models "
+                        "hold, after assigning them)")
+                pairs.append((index, position))
+        return np.array(pairs, dtype=OBSERVATION_DESCRIPTOR)
+
     def _descriptors(self, compiled):
         entities = []
         processes = []
@@ -196,7 +228,7 @@ class Snapshot:
                             raise ExperimentConfigError(
                                 f"{label}: capacity must be positive and at least initial")
                     elif field.value_type is Resource:
-                        kind, capacity = 2, entity.capacity
+                        kind, capacity = 2, entity.initial_capacity
                     elif field.value_type is Dataset:
                         kind, capacity = 3, 0
                     elif get_origin(field.value_type) is Store:
@@ -230,12 +262,13 @@ class Snapshot:
             np.array(starts, dtype=HOOK_DESCRIPTOR),
             np.array(ends, dtype=HOOK_DESCRIPTOR),
             np.array(inputs, dtype=INPUT_DESCRIPTOR),
+            self._observations.copy(),
         ]
         descriptor = np.zeros(1, dtype=TRIAL_DESCRIPTOR)
         count_fields = ("entity_count", "process_count", "start_count",
-                        "end_count", "input_count")
+                        "end_count", "input_count", "observation_count")
         for key, count_field, table in zip(
-            ("entities", "processes", "starts", "ends", "inputs"),
+            ("entities", "processes", "starts", "ends", "inputs", "observations"),
             count_fields, tables,
         ):
             descriptor[key] = table.ctypes.data

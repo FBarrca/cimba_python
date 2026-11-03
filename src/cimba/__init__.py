@@ -2,7 +2,7 @@
 
 from . import analysis, inputs, optimize, random
 from .modeling import (
-    Condition, Container, Dataset, Decision, FractionalContainer, Input, Model, Output, Param,
+    Condition, Container, Dataset, acquire_any, Decision, FractionalContainer, Input, Model, Output, Param,
     PriorityStore, Process, Ref, Resource, Scheduled, Series, Store, end_trial, event,
     function, hold, is_dynamic, log, now, on_end, on_start, options, predicate, process, release, schedule,
     decision, spawn, suspend, sweep, sweeps, this_process,
@@ -17,7 +17,7 @@ __all__ = [
     "Model", "Param", "Output", "Input", "Series", "Ref",
     "Container", "FractionalContainer", "Store", "PriorityStore", "Resource", "Condition",
     "Dataset", "Process", "Scheduled", "process", "on_start", "on_end",
-    "predicate", "event", "function", "hold", "now", "suspend", "spawn", "release",
+    "predicate", "event", "function", "acquire_any", "hold", "now", "suspend", "spawn", "release",
     "is_dynamic", "schedule", "this_process", "log", "end_trial", "sweep", "sweeps", "options",
     "Experiment", "Window", "Optimization", "Decision", "decision", "optimize", "Results", "Samples", "Signal", "inputs",
     "random", "analysis", "engine_version", "set_engine_log_level",

@@ -42,6 +42,7 @@ _ENTITY_METHODS: dict[tuple[type, str], tuple[str, str]] = {
     (Resource, "acquire"): ("in", "acquire"),
     (Resource, "preempt"): ("in", "preempt"),
     (Resource, "release"): ("out", "release"),
+    (Resource, "set_capacity"): ("out", "set capacity"),
     (Condition, "wait_until"): ("in", "wait"),
     (Condition, "signal"): ("out", "signal"),
     (Dataset, "record"): ("out", "record"),
@@ -49,7 +50,7 @@ _ENTITY_METHODS: dict[tuple[type, str], tuple[str, str]] = {
 _INPUT_METHODS = {"next", "now", "at"}
 _VERBS = {name: getattr(modeling, name) for name in (
     "spawn", "schedule", "release", "hold", "now", "suspend", "end_trial",
-    "this_process", "log")}
+    "this_process", "log", "acquire_any")}
 
 
 @dataclass(frozen=True, eq=False)
@@ -158,6 +159,7 @@ class _Analysis:
                     self.node(_Ref("input" if field.kind != "entity" else "entity",
                                    instance.model, field.name))
             self.analyze_owner(instance.model)
+        self.observations()
         done: dict[_Spawned, int] = {}
         for _ in range(20):
             pending = [s for s in list(self.spawned.values())
@@ -171,6 +173,25 @@ class _Analysis:
         order = {group.key: index for index, group in enumerate(groups)}
         nodes = sorted(self.nodes.values(), key=lambda node: order.get(node.group or "", len(order)))
         return Graph(tuple(nodes), tuple(self.edges), tuple(groups))
+
+    def observations(self):
+        """Dotted edges from observed entities to the conditions they signal."""
+        entities = {}
+        for instance in self.assembly.instances:
+            for field in instance.schema.fields:
+                if field.kind == "entity":
+                    entities[id(instance.values[field.name])] = _Ref(
+                        "entity", instance.model, field.name)
+        for instance in self.assembly.instances:
+            for field in instance.schema.fields:
+                condition = instance.values[field.name]
+                if field.kind != "entity" or not isinstance(condition, Condition):
+                    continue
+                for subject in condition.observed:
+                    ref = entities.get(id(subject))
+                    if ref is not None:
+                        self.edge(self.node(ref), self.node(entities[id(condition)]),
+                                  "observe", "dotted")
 
     def _binding_size(self, spawned: _Spawned) -> int:
         return sum(len(refs) for (owner, _), refs in self.bindings.items()
@@ -241,6 +262,8 @@ class _Visitor(ast.NodeVisitor):
                 if cls is not None:
                     return {_Ref("model", analysis.spawned_of(cls))}
             return set()
+        if isinstance(node, (ast.Tuple, ast.List)):
+            return set().union(*(self.resolve(element) for element in node.elts))
         if isinstance(node, ast.IfExp):
             return self.resolve(node.body) | self.resolve(node.orelse)
         if isinstance(node, ast.BoolOp):
@@ -384,6 +407,11 @@ class _Visitor(ast.NodeVisitor):
                         analysis.nodes[key] = Node(key, ref.name, "event",
                                                    analysis.group(ref.owner))
                     analysis.edge(self.actor, key, "schedule")
+            return
+        if verb == "acquire_any" and node.args:
+            for ref in self.resolve(node.args[0]):
+                if ref.kind == "entity":
+                    analysis.edge(analysis.node(ref), self.actor, "acquire any")
             return
         if verb is not None:
             return

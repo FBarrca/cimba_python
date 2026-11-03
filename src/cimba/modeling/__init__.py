@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from itertools import count
 from math import copysign, inf, isclose, isfinite, isnan
 from numbers import Integral, Real
 from types import UnionType
-from typing import Any, Generic, TypeVar, Union, cast, get_args, get_origin, get_type_hints
+from typing import (
+    Any, Generic, Literal, TypeVar, Union, cast, get_args, get_origin, get_type_hints,
+)
 
 from typing_extensions import TypeAliasType
 
@@ -272,16 +275,30 @@ class PriorityStore(Store[T]):
 
 
 class Resource(Entity):
-    def __init__(self, *, capacity: int = 1):
-        if capacity < 1:
-            raise ValueError("Resource.capacity must be positive")
-        super().__init__()
-        self.capacity = capacity
+    """A pool of ``capacity`` identical units, possibly zero.
 
-    def acquire(self, amount: int = 1) -> int:
+    ``capacity`` is the capacity each trial starts with, kept as
+    ``initial_capacity``. Model code reads the current capacity with
+    ``capacity()`` and changes it with ``set_capacity()``.
+    """
+
+    def __init__(self, *, capacity: int = 1):
+        super().__init__()
+        self.initial_capacity = capacity
+
+    def __setattr__(self, name, value):
+        if name == "capacity":
+            raise AttributeError("Resource.capacity() is the current capacity in "
+                                 "model code; configure initial_capacity")
+        if name == "initial_capacity" and (
+                isinstance(value, bool) or not isinstance(value, int) or value < 0):
+            raise ValueError("Resource.capacity must be a nonnegative int")
+        super().__setattr__(name, value)
+
+    def acquire(self, amount: int = 1, priority: int | None = None) -> int:
         raise NotInCompiledCode("Resource.acquire() requires compiled model code")
 
-    def preempt(self, amount: int = 1) -> int:
+    def preempt(self, amount: int = 1, priority: int | None = None) -> int:
         raise NotInCompiledCode("Resource.preempt() requires compiled model code")
 
     def held(self, process: "Process") -> int:
@@ -296,8 +313,49 @@ class Resource(Entity):
     def available(self) -> int:
         raise NotInCompiledCode("Resource.available() requires compiled model code")
 
+    def capacity(self) -> int:
+        raise NotInCompiledCode("Resource.capacity() requires compiled model code")
+
+    def set_capacity(self, capacity: int, *,
+                     mode: Literal["finish", "preempt"] = "finish") -> None:
+        raise NotInCompiledCode("Resource.set_capacity() requires compiled model code")
+
+    def mean_capacity(self) -> float:
+        raise NotInCompiledCode("Resource.mean_capacity() requires compiled model code")
+
+    def utilization(self) -> float:
+        raise NotInCompiledCode("Resource.utilization() requires compiled model code")
+
 
 class Condition(Entity):
+    """A wait for a predicate over model state.
+
+    A waiting process resumes when a signal finds its predicate true. Model
+    code signals with ``signal()``. A condition can also observe entities:
+    every change to an observed entity signals it, as if ``signal()`` were
+    called right after. ``observe`` takes entities of the same model tree:
+    ``Resource``, ``Store``, ``PriorityStore``, ``Container`` or
+    ``FractionalContainer``.
+    """
+
+    def __init__(self, *, observe: Entity | tuple[Entity, ...] | list[Entity] = ()):
+        super().__init__()
+        self.observed: tuple[Entity, ...] = ()
+        if isinstance(observe, Entity):
+            observe = (observe,)
+        self.observe(*observe)
+
+    def observe(self, *entities: Entity) -> Condition:
+        """Also observe ``entities``, for those that exist only after this
+        condition, such as a parent's in ``attached()``. Returns the condition."""
+        for entity in entities:
+            if not isinstance(entity, OBSERVABLE):
+                raise TypeError("Condition can observe a Resource, Store, PriorityStore, "
+                                f"Container or FractionalContainer, not {entity!r}")
+            if not any(entity is seen for seen in self.observed):
+                self.observed = (*self.observed, entity)
+        return self
+
     def wait_until(self, predicate, timeout: float = inf) -> bool:
         """Wait for a predicate, returning whether it holds on return.
 
@@ -308,6 +366,9 @@ class Condition(Entity):
 
     def signal(self) -> None:
         raise NotInCompiledCode("Condition.signal() requires compiled model code")
+
+
+OBSERVABLE = (Resource, Store, Container, FractionalContainer)
 
 
 class Dataset(Entity):
@@ -396,6 +457,21 @@ def function(method):
     return method
 
 
+def acquire_any(resources: tuple[Resource, ...], priority: int | None = None) -> int:
+    """Wait for one unit of whichever resource grants first; return its index.
+
+    ``resources`` is a tuple of resources, such as ``(self.clerks,
+    self.seniors)``. A free unit is taken at once, from the first listed
+    resource that has one. Otherwise the request waits in every resource's
+    queue, with the place an ``acquire()`` would get, and the first to grant
+    serves it. The unit is an ordinary holding of that resource: release it
+    with its ``release()``. ``priority`` ranks the request as for
+    ``acquire()``. Returns the negative signal instead if the wait is
+    interrupted (-2) or preempted (-1), or ends with any other signal.
+    """
+    raise NotInCompiledCode("acquire_any() is available only in compiled model code")
+
+
 def hold(duration: float) -> int:
     raise NotInCompiledCode("hold() is available only in compiled model code")
 
@@ -447,7 +523,32 @@ def end_trial() -> None:
 
 
 class ModelMeta(type):
-    """Marker used by the compiler for static model-class arguments."""
+    """Marker used by the compiler for static model-class arguments.
+
+    Constructing a model gives it its own copies of the entities declared as
+    class defaults, before ``__init__`` runs, so model code and configuration
+    such as ``Condition(observe=...)`` refer to this instance's entities.
+    """
+
+    def __call__(cls, *args, **kwargs):
+        model = cls.__new__(cls, *args, **kwargs)
+        defaults: dict[str, Entity] = {}
+        for klass in reversed(cls.__mro__):
+            for name, value in vars(klass).items():
+                if isinstance(value, Entity):
+                    defaults[name] = value
+                elif name in defaults:
+                    del defaults[name]
+        if defaults:
+            # One copy for all, so entities that refer to each other (a
+            # condition observing a resource) refer to each other's copies
+            copies = deepcopy(defaults)
+            for name, value in copies.items():
+                if name not in model.__dict__:
+                    object.__setattr__(model, name, value)
+        if isinstance(model, cls):
+            model.__init__(*args, **kwargs)
+        return model
 
 
 class Model(metaclass=ModelMeta):

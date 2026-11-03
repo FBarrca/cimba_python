@@ -140,6 +140,74 @@ the same trials. When that matters, use separate options instead:
    store = Store()
    store.policy = cb.sweep(OrderUpTo(), lean, generous)
 
+.. _policies-shift-calendar:
+
+Staffing calendars
+------------------
+
+When to have how many staff is a policy too. A shift calendar is an ordinary
+process that holds and calls ``set_capacity`` in a cycle:
+
+.. code-block:: python
+
+   class Office(cb.Model):
+       clerks: cb.Resource = cb.Resource(capacity=0)
+       day: cb.Param[int] = 5
+       evening: cb.Param[int] = 2
+       utilization: cb.Output[float]
+
+       @cb.process(priority=10)                 # before same-time arrivals
+       def shifts(self):
+           while True:                          # 08-16, 16-20, closed overnight
+               self.clerks.set_capacity(self.day)
+               cb.hold(8.0)
+               self.clerks.set_capacity(self.evening)
+               cb.hold(4.0)
+               self.clerks.set_capacity(0)      # finish the customer at hand
+               cb.hold(12.0)
+
+       @cb.on_end
+       def collect(self):
+           self.utilization = self.clerks.utilization()
+
+The default ``mode="finish"`` lets clerks finish the customer at hand when a
+shift ends. ``mode="preempt"`` sends them home at once: the customers being
+served see ``-1`` from their ``hold``, keep their remaining work in their
+own fields, and ``acquire`` again. ``utilization()`` divides by the capacity
+that was actually staffed, so closed hours don't count as idle time.
+
+``day`` and ``evening`` are parameters, so they sweep like any other. To
+compare calendars of different shapes, put the ``shifts`` process on a
+calendar child model with a ``cb.Ref`` back to the office, and sweep the
+child as above.
+
+.. _policies-any-role:
+
+Any of several roles
+~~~~~~~~~~~~~~~~~~~~
+
+A task that either a clerk or a senior can do waits for *one unit of
+either* with ``cb.acquire_any``. The request waits in both queues, takes the
+first unit either grants, and competes first come, first served with work
+that needs one role in particular:
+
+.. code-block:: python
+
+   @cb.process
+   def customer(self):
+       roles = (self.clerks, self.seniors)
+       role = cb.acquire_any(roles)       # the clerk if both are free
+       cb.hold(self.service.next())
+       roles[role].release()
+
+Each role keeps its own calendar: a ``set_capacity`` that opens a shift
+grants waiting ``acquire_any`` requests like any other. List the role you
+would rather use first; it only decides between roles that are free at the
+same moment. For a rule that isn't "one unit of any", such as "two clerks or
+one senior", wait on a ``cb.Condition(observe=(self.clerks, self.seniors))``
+with a predicate for the rule, then acquire what it found (see
+:ref:`concepts-condition-observe`).
+
 Rules for ``@cb.function``
 --------------------------
 

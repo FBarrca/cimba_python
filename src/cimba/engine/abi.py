@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 from typing import Any
 
-ABI_VERSION = 4
+ABI_VERSION = 5
 INPUT_EMPTY = 3
 POINTER = np.uintp
 
@@ -69,10 +69,15 @@ INPUT_DESCRIPTOR = np.dtype([
     ("name", "S96"),
 ], align=True)
 
+OBSERVATION_DESCRIPTOR = np.dtype([
+    ("condition", np.uint64), ("subject", np.uint64),
+], align=True)
+
 TRIAL_DESCRIPTOR = np.dtype([
     ("entities", POINTER), ("entity_count", np.uint64),
     ("processes", POINTER), ("process_count", np.uint64),
     ("starts", POINTER), ("start_count", np.uint64),
     ("ends", POINTER), ("end_count", np.uint64),
     ("inputs", POINTER), ("input_count", np.uint64),
+    ("observations", POINTER), ("observation_count", np.uint64),
 ], align=True)

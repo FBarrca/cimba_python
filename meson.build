@@ -108,15 +108,20 @@ py.install_sources('src/cimba/diagrams/__init__.py',
                    'src/cimba/diagrams/processes.py',
                    subdir: 'cimba/diagrams')
 
+# INFO logging follows the engine's own build: compiled out of release builds.
+native_c_args = get_option('buildtype') == 'release' ? ['-DNLOGINFO'] : []
+
 # The only native artifact has no Python headers or interpreter linkage.
 cimba_native_lib = shared_library(
     'cimba_py',
     'src/cimba/native/nbshim.c',
     'src/cimba/native/fractional.c',
     'src/cimba/native/inputs.c',
+    'src/cimba/native/resource.c',
     'src/cimba/native/trial.c',
     'src/cimba/native/verbs.c',
     include_directories: [inc_api, inc_int, 'src/cimba/native'],
+    c_args: native_c_args,
     dependencies: native_dependencies,
     link_whole: cimba_lib,
     vs_module_defs: windows_module_defs,

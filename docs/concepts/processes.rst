@@ -14,7 +14,9 @@ opening or closing. Time jumps from event to event. Nothing happens
 decide (minutes, hours, days), as long as you're consistent.
 
 When several events fall at the same time, higher **priority** goes first;
-equal priorities run in the order they were scheduled.
+equal priorities run in the order they were scheduled. A process's events,
+including the wakeups that end its waits, are scheduled at its process
+priority.
 
 Processes
 ---------
@@ -85,13 +87,16 @@ These calls may suspend the calling process:
      - an item is available / there is room.
    * - ``resource.acquire(n)`` / ``preempt(n)``
      - ``n`` units are granted.
+   * - ``cb.acquire_any((r0, r1, ...))``
+     - one unit of any of the resources is granted; returns its index.
    * - ``condition.wait_until(predicate, timeout=math.inf)``
      - the predicate holds, the timeout expires, or the process is interrupted.
    * - ``cb.suspend()``
      - something resumes, interrupts or times out the process.
 
 ``hold``, ``acquire``, ``preempt`` and ``suspend`` return an integer
-**signal** that explains why the process resumed:
+**signal** that explains why the process resumed (``acquire_any`` returns
+the index it was granted, or a negative signal):
 
 .. list-table::
    :header-rows: 1
@@ -204,6 +209,11 @@ the model holds. Two pieces are involved:
 * ``signal()`` makes the condition re-evaluate its waiters' predicates and
   wake those that are true. Conditions don't watch fields by themselves:
   whoever changes a field a predicate reads must signal.
+* A condition can **observe** entities instead:
+  ``cb.Condition(observe=(self.clerks, self.seniors))`` signals itself after
+  every change to those resources, stores or containers, so a predicate that
+  reads only them needs no manual ``signal()``. See
+  :ref:`concepts-condition-observe`.
 * ``wait_until`` checks the predicate before blocking and returns a bool.
   Use ``if self.gate.wait_until(self.is_ready, timeout=5.0): ...`` to wait at
   most five time units.
@@ -248,7 +258,9 @@ process that needs to wake it.
    * - ``status()``
      - ``0`` initialized, ``1`` running, ``2`` finished.
    * - ``priority_set(p)``
-     - Change the process's priority.
+     - Change the process's priority. Its pending events and the resource
+       requests and holdings ranked at the process priority move with it;
+       requests made with an explicit ``priority=`` keep their own rank.
    * - ``interrupt(signal, priority=0)``
      - Wake the process from its current blocking call, which returns
        ``signal``. Resources held are kept.

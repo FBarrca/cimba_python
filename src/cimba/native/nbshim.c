@@ -16,6 +16,7 @@
 #include "cimba.h"
 #include "cmb_priorityqueue.h"   /* not part of the cimba.h umbrella */
 #include "nbshim.h"
+#include "resource.h"
 
 double cpy_random_exponential(const double mean)
 {
@@ -211,11 +212,6 @@ double cpy_resource_mean_in_use(void *rp)
     return mean_of_history(cmb_resource_history(rp));
 }
 
-double cpy_resourcepool_mean_in_use(void *rpp)
-{
-    return mean_of_history(cmb_resourcepool_get_history(rpp));
-}
-
 double cpy_objectqueue_mean_length(void *oqp)
 {
     return mean_of_history(cmb_objectqueue_history(oqp));
@@ -234,11 +230,6 @@ void *cpy_buffer_history(void *bp)
 void *cpy_resource_history(void *rp)
 {
     return cmb_resource_history(rp);
-}
-
-void *cpy_resourcepool_history(void *rpp)
-{
-    return cmb_resourcepool_get_history(rpp);
 }
 
 void *cpy_objectqueue_history(void *oqp)
@@ -660,7 +651,7 @@ static void resource_report_writer(FILE *fp, void *ctx)
 
 static void resourcepool_report_writer(FILE *fp, void *ctx)
 {
-    cmb_resourcepool_print_report(ctx, fp);
+    cpy_resourcepool_print_report(ctx, fp);
 }
 
 static void objectqueue_report_writer(FILE *fp, void *ctx)
@@ -727,17 +718,6 @@ uint64_t cpy_resource_in_use(const void *rp)
 uint64_t cpy_resource_held_by_process(const void *rp, const void *pp)
 {
     return cmb_resource_held_by_process((void *)rp, pp);
-}
-
-uint64_t cpy_resourcepool_available(const void *rpp)
-{
-    return cmb_resourcepool_available((void *)rpp);
-}
-
-uint64_t cpy_resourcepool_in_use(const void *rpp)
-{
-    /* Header inline takes a non-const pointer */
-    return cmb_resourcepool_in_use((void *)rpp);
 }
 
 uint64_t cpy_objectqueue_length(const void *oqp)
@@ -1058,26 +1038,6 @@ int64_t cpy_process_hold(const double dur)
     const int64_t sig = (int64_t)cmi_coroutine_yield(NULL);
     if (sig != CMB_PROCESS_SUCCESS) cmb_process_timer_cancel(pp, handle);
     return sig;
-}
-
-/* The pool records holders by process, so even a grant without waiting
- * needs one. */
-int64_t cpy_resource_acquire(void *rpp, const uint64_t amnt)
-{
-    cpy_require_process(rpp, "acquire() cannot hold a resource");
-    return cmb_resourcepool_acquire(rpp, amnt);
-}
-
-int64_t cpy_resource_preempt(void *rpp, const uint64_t amnt)
-{
-    cpy_require_process(rpp, "preempt() cannot hold a resource");
-    return cmb_resourcepool_preempt(rpp, amnt);
-}
-
-void cpy_resource_release(void *rpp, const uint64_t amnt)
-{
-    cpy_require_process(rpp, "release() holds no resource");
-    cmb_resourcepool_release(rpp, amnt);
 }
 
 static uint32_t logger_flags_on_mask = 0u;

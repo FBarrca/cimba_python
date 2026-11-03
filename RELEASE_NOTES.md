@@ -1,3 +1,67 @@
+# Unreleased
+
+- `Resource.acquire()` and `Resource.preempt()` take a `priority=` argument
+  for the request, independent of the process priority. The request priority
+  decides the queue position, which holders a `preempt` may take from, and
+  the priority the granted units are held at, so later preempts rank victims
+  by it. `priority_set()` no longer moves such a request or holding. The
+  process priority still orders same-time events, including the wakeup that
+  grants the request. The default `priority=None` behaves as before.
+- The documentation now states the resource ordering rules: higher priority
+  first and first come, first served among equals; no bypassing a request
+  that can't be fully served; `preempt` takes only from strictly lower
+  holders, lowest and most recent first, and the victim loses all its units.
+
+- Time-varying `Resource` capacity. `set_capacity(n, mode="finish")`
+  changes the capacity during a trial, from processes, functions or hooks;
+  `n` may be zero, and a negative `n` fails the trial. Raising it grants
+  waiting requests at once, in queue order. Lowering it with `"finish"` lets
+  holders keep their units (`available()` is `0` until the units in use drop
+  below `n`); with `"preempt"` it preempts holders in the `preempt` victim
+  order until the units in use fit. `mode` must be a string literal and is
+  checked when the model compiles. `capacity()` returns the current
+  capacity. The guide on policies shows a shift-calendar process.
+- `Resource.mean_capacity()` is the time-weighted capacity over the window,
+  and `Resource.utilization()` is `mean_in_use() / mean_capacity()` (`nan`
+  when the window offered no capacity).
+- `Resource(capacity=0)` is allowed. A request larger than the current
+  capacity now waits for the capacity to rise instead of aborting the engine.
+- A partially served `Resource` request now keeps its place in line: each
+  time it waits again for the rest, it returns to its original position, so
+  a later request of equal priority is no longer served before it. Models
+  whose multi-unit requests wait after taking part of their amount (such as
+  the cheese tutorial) can give different results for the same seed; other
+  models are unchanged. `Container` and `FractionalContainer` keep the
+  engine's behaviour, now documented: a partially served `get` or `put`
+  rejoins the line behind waiting calls of equal priority.
+- `Resource` is now implemented in Cimba Python's own native layer
+  (`resource.c`) on the engine's waiting-room and holding interfaces; the
+  vendored Cimba engine is unmodified. Invalid amounts (`0`, negative) and
+  releasing more than is held now fail the trial with a reason.
+- `cb.acquire_any((r0, r1, ...), priority=None)` takes one unit from
+  whichever of several resources grants first and returns its index (or the
+  negative signal that ended the wait). A free unit is taken from the first
+  listed resource that has one; otherwise the request waits in every
+  resource's queue at the place an `acquire` would get, competing first
+  come, first served with direct acquirers, and leaves the other queues the
+  moment one grants. The unit is an ordinary, preemptable holding of that
+  resource. Interrupts, stops, preemption and process timers leave no
+  request behind. The guide on policies shows "any of several roles".
+- `Condition(observe=...)` and `condition.observe(...)` make a condition
+  signal itself after every change to the observed `Resource`, `Store`,
+  `PriorityStore`, `Container` or `FractionalContainer`, so predicates over
+  them need no manual `signal()`. Observed entities must belong to the same
+  model tree, which the experiment checks. Use `acquire_any` for "one unit
+  of any of these pools" and an observing condition for any other rule.
+- Constructing a model now gives it its own copies of the entities declared
+  as class defaults, before `__init__` runs (previously this happened when
+  the experiment was set up), so `self.clerks` in `__init__` is the
+  instance's own entity.
+- Native ABI version 5: the trial descriptor carries the observation table.
+- **Breaking:** the host-side configuration attribute of a `Resource` is
+  `initial_capacity`; `capacity` is now the model-code method. Assigning
+  `resource.capacity` raises `AttributeError`.
+
 # Cimba Python 0.9.1
 
 Released 2026-10-27.

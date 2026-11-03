@@ -112,7 +112,11 @@ Entity methods are *compiled*, except ``capture()`` and the constructors.
    .. method:: put(amount)
    .. method:: get(amount)
 
-      Add or remove ``amount`` units; ``get`` blocks until enough are present.
+      Add or remove ``amount`` units. ``get`` takes what is present and blocks
+      until the rest arrives. Waiting calls are served by process priority,
+      then first come, first served, but a ``get`` that has taken part of its
+      amount rejoins the line behind waiting calls of equal priority each
+      time it waits again.
 
    .. method:: level()
    .. method:: mean_level()
@@ -205,16 +209,44 @@ Entity methods are *compiled*, except ``capture()`` and the constructors.
 
 .. class:: Resource(*, capacity=1)
 
-   A pool of ``capacity`` identical units.
+   A pool of identical units. ``capacity`` is the number each trial starts
+   with, a nonnegative ``int`` (zero is a closed pool). On the host it is the
+   ``initial_capacity`` attribute; model code reads the current capacity with
+   :meth:`capacity` and changes it with :meth:`set_capacity`.
 
-   .. method:: acquire(amount=1)
+   .. method:: acquire(amount=1, priority=None)
 
-      Take units, blocking in priority order. Returns a signal.
+      Take ``amount`` units, waiting for any that aren't free. Returns a
+      signal: ``0`` once all are held. If the wait is interrupted, the call
+      returns the signal and the process holds what it held before the call.
 
-   .. method:: preempt(amount=1)
+      Waiting requests are served by **request priority**, higher first, and
+      first come, first served among equal priorities. Only the request at
+      the front is served: one that can't be fully served yet keeps the units
+      it has taken so far and blocks the requests behind it, even if they
+      would fit. It keeps its place in line each time it waits again, so a
+      later request of equal priority is never served first.
 
-      Take units from lower-priority holders if necessary. Preempted holders
-      lose all their units and see signal ``-1``. Returns a signal.
+      ``priority=None`` ranks the request at the process priority and follows
+      it: :meth:`Process.priority_set` moves the waiting request and the
+      units it holds. An ``int`` ranks the request at that value instead, and
+      ``priority_set`` doesn't move it. Either way, the process priority still
+      orders the process's events, including its wakeup when the request is
+      granted, so a high request priority gets a process to the front of the
+      queue without making it run before other processes at the same instant.
+
+      A process's units in one resource are one **holding**, ranked at the
+      priority of its latest ``acquire`` or ``preempt`` call. A call that is
+      interrupted gives the holding its previous priority back.
+
+   .. method:: preempt(amount=1, priority=None)
+
+      As :meth:`acquire`, but first takes units from holders whose holding
+      priority is *strictly* lower than the request priority: the lowest
+      first and, among equals, the one whose holding started most recently.
+      A preempted holder loses all its units in this resource and sees signal
+      ``-1``. If that is still not enough, the request waits in line for the
+      rest. Returns a signal.
 
    .. method:: release(amount=1)
    .. method:: held(process)
@@ -222,15 +254,79 @@ Entity methods are *compiled*, except ``capture()`` and the constructors.
       Units held by a :class:`Process` handle.
 
    .. method:: available()
+
+      Free units: the capacity minus the units in use, or ``0`` while the
+      units in use are at or above the capacity.
+
+   .. method:: capacity()
+
+      The current capacity.
+
+   .. method:: set_capacity(n, *, mode="finish")
+
+      Change the capacity to ``n``, a nonnegative ``int``; a negative ``n``
+      fails the trial. Setting the current capacity again does nothing. It
+      never waits, so it works in processes, functions and hooks.
+
+      Raising it grants waiting requests at once, in queue order. Lowering
+      it depends on ``mode``, a string literal resolved when the model
+      compiles:
+
+      * ``"finish"``: holders keep their units, so the units in use may stay
+        above ``n`` for a while. Nothing is granted until they drop below
+        ``n``, and :meth:`available` is ``0`` meanwhile.
+      * ``"preempt"``: holdings are taken in the :meth:`preempt` victim
+        order, lowest holding priority first, the most recent among equals,
+        until the units in use are at most ``n``. Each victim loses all its
+        units in this resource and sees signal ``-1``, waking at its own
+        process priority. Room left below ``n`` goes to waiting requests. The
+        calling process is never its own victim.
+
+      A request larger than the current capacity waits until the capacity
+      rises enough.
+
    .. method:: mean_in_use()
 
       Time-weighted mean units in use over the window.
+
+   .. method:: mean_capacity()
+
+      Time-weighted mean capacity over the window, sampled with the in-use
+      history.
+
+   .. method:: utilization()
+
+      ``mean_in_use() / mean_capacity()``: the time-weighted units in use
+      over the time-weighted capacity, both over the window. It can exceed
+      ``1`` while ``"finish"`` lets holders run past a lowered capacity, and
+      it is ``nan`` when the window offered no capacity.
 
    .. method:: capture()
 
       *Host.* Keep the in-use history.
 
-.. class:: Condition()
+.. class:: Condition(*, observe=())
+
+   A wait for an arbitrary predicate over model state. ``observe`` is a
+   :class:`Resource`, :class:`Store`, :class:`PriorityStore`,
+   :class:`Container` or :class:`FractionalContainer`, or a tuple of them.
+   Every change to an observed entity signals the condition, as if
+   :meth:`signal` were called right after it: a release, grant or capacity
+   change of a resource, a put or get of a store or container. Model code
+   then needs no ``signal()`` of its own for those changes.
+
+   Observation is structure, fixed for an experiment. Observed entities must
+   belong to the same model tree; the experiment checks this when it is set
+   up and raises :class:`~cimba.schema.ModelDefinitionError` otherwise. A
+   condition declared as a class default can observe entities declared
+   before it in the same class body. Every model instance gets its own copy
+   of the class-default entities, observing each other's copies.
+
+   .. method:: observe(*entities) -> Condition
+
+      *Host.* Also observe ``entities``. Use it for entities that don't exist
+      when the condition is created, such as an owner's in
+      :meth:`Model.attached`. Returns the condition.
 
    .. method:: wait_until(predicate, timeout=math.inf) -> bool
 
@@ -305,6 +401,43 @@ All verbs are *compiled*.
 .. function:: hold(duration)
 
    Suspend the calling process for ``duration`` time units. Returns a signal.
+
+.. function:: acquire_any(resources, priority=None) -> int
+
+   Take one unit from whichever of ``resources`` grants first and return its
+   index in ``resources``. ``resources`` is a nonempty tuple of
+   :class:`Resource` entities written in model code, such as
+   ``(self.clerks, self.seniors)`` or ``(self.desk.clerks, self.back.clerks)``;
+   anything else is a compile error. Listing a resource twice is allowed and
+   returns its first index.
+
+   * If any of them has a free unit, the call takes it at once from the first
+     listed one that has.
+   * Otherwise the request waits in **every** resource's queue at the place a
+     :meth:`Resource.acquire` made now would get there: same request
+     priority, same arrival time. Each resource serves it in turn with its
+     direct acquirers, by priority and then first come, first served.
+   * The first resource to grant serves it. The request leaves every other
+     queue at that moment, so two resources never both grant it.
+
+   ``priority`` works as for :meth:`Resource.acquire`: ``None`` ranks the
+   request at the process priority in every queue and follows
+   :meth:`Process.priority_set`; an ``int`` fixes it. The unit is an
+   ordinary holding of the resource that granted it: release it with that
+   resource's :meth:`~Resource.release`, read it with
+   :meth:`~Resource.held`, and a :meth:`~Resource.preempt` can take it.
+
+   If the wait ends otherwise, the call returns the negative signal and
+   leaves no request behind in any queue: ``-1`` when the process is
+   preempted from another resource, ``-2`` (or another code) when
+   interrupted. A process timer set with :meth:`Process.timer_set` bounds the
+   wait; the call then returns the timer's signal. Raising a resource's
+   capacity with :meth:`~Resource.set_capacity` can grant a waiting
+   ``acquire_any``; a resource without room never does.
+
+   It takes one unit, never more: grabbing parts of an amount from several
+   pools has no single fair answer. For anything other than "one unit of any
+   of these", wait on a :class:`Condition` that observes the resources.
 
 .. function:: now()
 

@@ -7,8 +7,11 @@
 
 #include "cimba.h"
 #include "cmb_priorityqueue.h"
+#include "cmb_resourceguard.h"
+#include "cmi_hashheap.h"
 #include "abi.h"
 #include "fractional.h"
+#include "resource.h"
 
 typedef void *(*cpy_process_callback)(struct cmb_process *, void *);
 typedef void (*cpy_hook_callback)(void *);
@@ -39,6 +42,20 @@ typedef struct released_static_model {
     void *record;
 } released_static_model;
 
+/*
+ * Observing conditions. The engine forwards every signal of a resource guard
+ * to the guards registered as its observers (cmb_resourceguard_register), as
+ * one cmb_resourceguard_signal each, which looks at the front waiter only. A
+ * condition must evaluate every waiter, as cmb_condition_signal does, so each
+ * observation registers a relay guard instead: its queue holds one permanent
+ * entry whose demand function signals the condition and declines the grant.
+ */
+typedef struct observer_relay {
+    struct cmb_resourceguard guard;
+    struct cmb_resourceguard *subjects[2];
+    uint64_t subject_count;
+} observer_relay;
+
 typedef struct trial_resources {
     cpy_trial_header *header;
     const cpy_trial_descriptor *descriptor;
@@ -48,6 +65,8 @@ typedef struct trial_resources {
     uint64_t next_input_stream;
     spawned_model *spawned;
     released_static_model *released_static;
+    observer_relay *relays;
+    uint64_t relay_count;
     int queue_initialized;
     int random_initialized;
     int recording_started;
@@ -359,10 +378,91 @@ static void release_inputs(trial_resources *resources)
     }
 }
 
+static bool relay_signal(const struct cmi_resourcebase *rbp,
+                         const struct cmb_process *process, const void *context)
+{
+    (void)process;
+    (void)context;
+    (void)cmb_condition_signal((struct cmb_condition *)rbp);
+    return false;
+}
+
+/* The guards whose signals report a change to the entity */
+static uint64_t observed_guards(uint32_t kind, void *entity,
+                                struct cmb_resourceguard **guards)
+{
+    if (kind == CPY_ENTITY_RESOURCE) {
+        guards[0] = &(((struct cpy_resource *)entity)->guard);
+        return 1;
+    }
+    if (kind == CPY_ENTITY_CONTAINER || kind == CPY_ENTITY_FRACTIONAL) {
+        /* A FractionalContainer starts with its cmb_buffer */
+        guards[0] = &(((struct cmb_buffer *)entity)->front_guard);
+        guards[1] = &(((struct cmb_buffer *)entity)->rear_guard);
+        return 2;
+    }
+    if (kind == CPY_ENTITY_STORE) {
+        guards[0] = &(((struct cmb_objectqueue *)entity)->front_guard);
+        guards[1] = &(((struct cmb_objectqueue *)entity)->rear_guard);
+        return 2;
+    }
+    if (kind == CPY_ENTITY_PRIORITY_STORE) {
+        guards[0] = &(((struct cmb_priorityqueue *)entity)->front_guard);
+        guards[1] = &(((struct cmb_priorityqueue *)entity)->rear_guard);
+        return 2;
+    }
+    return 0;
+}
+
+/* After every entity exists: one subscribed relay per observation */
+static void subscribe_observers(trial_resources *resources)
+{
+    const cpy_trial_descriptor *descriptor = resources->descriptor;
+    if (descriptor->observation_count == 0) return;
+    resources->relays = calloc(descriptor->observation_count,
+                               sizeof(*resources->relays));
+    if (resources->relays == NULL) cimba_trial_abandon();
+    for (uint64_t i = 0; i < descriptor->observation_count; ++i) {
+        const cpy_observation_descriptor *item = &descriptor->observations[i];
+        if (item->condition >= descriptor->entity_count ||
+            item->subject >= descriptor->entity_count ||
+            descriptor->entities[item->condition].kind != CPY_ENTITY_CONDITION)
+            cimba_trial_abandon();
+        struct cmb_condition *condition = resources->entities[item->condition];
+        observer_relay *relay = &resources->relays[i];
+        relay->subject_count = observed_guards(
+            descriptor->entities[item->subject].kind,
+            resources->entities[item->subject], relay->subjects);
+        if (relay->subject_count == 0) cimba_trial_abandon();
+        cmb_resourceguard_initialize(&(relay->guard), &(condition->base));
+        (void)cmi_hashheap_enqueue(&(relay->guard.priority_queue), NULL,
+                                   (void *)relay_signal, NULL, NULL, 1u, 0.0, 0);
+        for (uint64_t j = 0; j < relay->subject_count; ++j)
+            cmb_resourceguard_register(relay->subjects[j], &(relay->guard));
+        resources->relay_count = i + 1;
+    }
+}
+
+/* Before any entity is destroyed, also on abandonment */
+static void unsubscribe_observers(trial_resources *resources)
+{
+    for (uint64_t i = 0; i < resources->relay_count; ++i) {
+        observer_relay *relay = &resources->relays[i];
+        for (uint64_t j = 0; j < relay->subject_count; ++j)
+            (void)cmb_resourceguard_unregister(relay->subjects[j], &(relay->guard));
+        cmb_resourceguard_terminate(&(relay->guard));
+    }
+    free(resources->relays);
+    resources->relays = NULL;
+    resources->relay_count = 0;
+}
+
 static void abandoned_trial(void *argument)
 {
     trial_resources *resources = argument;
     active_trial = NULL;
+    /* The entities are still alive: the engine tears them down after this */
+    unsubscribe_observers(resources);
     inspect_inputs(resources);
     release_inputs(resources);
     free_spawned_nodes(resources, 0);
@@ -387,7 +487,7 @@ static void record_start(void *subject, void *object)
         if (kind == CPY_ENTITY_CONTAINER || kind == CPY_ENTITY_FRACTIONAL)
             cmb_buffer_recording_start(resources->entities[i]);
         else if (kind == CPY_ENTITY_RESOURCE)
-            cmb_resourcepool_start_recording(resources->entities[i]);
+            cpy_resource_recording_start(resources->entities[i]);
         else if (kind == CPY_ENTITY_DATASET)
             cmb_dataset_reset(resources->entities[i]);
         else if (kind == CPY_ENTITY_STORE)
@@ -408,7 +508,7 @@ static void record_stop(void *subject, void *object)
         if (kind == CPY_ENTITY_CONTAINER || kind == CPY_ENTITY_FRACTIONAL)
             cmb_buffer_recording_stop(resources->entities[i]);
         else if (kind == CPY_ENTITY_RESOURCE)
-            cmb_resourcepool_stop_recording(resources->entities[i]);
+            cpy_resource_recording_stop(resources->entities[i]);
         else if (kind == CPY_ENTITY_STORE)
             cmb_objectqueue_recording_stop(resources->entities[i]);
         else if (kind == CPY_ENTITY_PRIORITY_STORE)
@@ -470,7 +570,7 @@ static void copy_captures(trial_resources *resources)
         if (kind == CPY_ENTITY_CONTAINER || kind == CPY_ENTITY_FRACTIONAL)
             history = cmb_buffer_history(resources->entities[i]);
         else if (kind == CPY_ENTITY_RESOURCE)
-            history = cmb_resourcepool_get_history(resources->entities[i]);
+            history = cpy_resource_usage_history(resources->entities[i]);
         else if (kind == CPY_ENTITY_STORE)
             history = cmb_objectqueue_history(resources->entities[i]);
         else if (kind == CPY_ENTITY_PRIORITY_STORE)
@@ -541,8 +641,8 @@ static void run_trial(void *block)
             }
             entity = container;
         } else if (item->kind == CPY_ENTITY_RESOURCE) {
-            struct cmb_resourcepool *resource = cmb_resourcepool_create();
-            cmb_resourcepool_initialize(resource, item->name, item->capacity);
+            struct cpy_resource *resource = cpy_resource_create();
+            cpy_resource_initialize(resource, item->name, item->capacity);
             entity = resource;
         } else if (item->kind == CPY_ENTITY_DATASET) {
             struct cmb_dataset *dataset = cmb_dataset_create();
@@ -566,6 +666,7 @@ static void run_trial(void *block)
         resources->entities[i] = entity;
         *(void **)((char *)block + item->record_offset + item->field_offset) = entity;
     }
+    subscribe_observers(resources);
 
     for (uint64_t i = 0; i < descriptor->start_count; ++i) {
         const cpy_hook_descriptor *item = &descriptor->starts[i];
@@ -627,6 +728,7 @@ static void run_trial(void *block)
     }
     free_spawned_nodes(resources, 1);
     free_released_static_models(resources);
+    unsubscribe_observers(resources);
     for (uint64_t i = 0; i < descriptor->entity_count; ++i) {
         const uint32_t kind = descriptor->entities[i].kind;
         if (kind == CPY_ENTITY_CONTAINER) {
@@ -636,8 +738,8 @@ static void run_trial(void *block)
             cpy_fractional_terminate(resources->entities[i]);
             cpy_fractional_destroy(resources->entities[i]);
         } else if (kind == CPY_ENTITY_RESOURCE) {
-            cmb_resourcepool_terminate(resources->entities[i]);
-            cmb_resourcepool_destroy(resources->entities[i]);
+            cpy_resource_terminate(resources->entities[i]);
+            cpy_resource_destroy(resources->entities[i]);
         } else if (kind == CPY_ENTITY_DATASET) {
             cmb_dataset_terminate(resources->entities[i]);
             cmb_dataset_destroy(resources->entities[i]);
