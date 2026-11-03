@@ -1,4 +1,6 @@
-# Unreleased
+# Cimba Python 0.9.5
+
+Released 2026-11-03.
 
 - Spawning processes on macOS is about 2.5× faster (#28). The macOS ports
   of the engine now keep a per-thread pool of guarded coroutine stacks, as
@@ -7,6 +9,13 @@
   1.75 to 0.71 µs per spawn on Apple Silicon. Linux and Windows are
   unchanged. The engine also skips fat LTO objects when the compiler rejects
   them together with `-flto`.
+- `cb.release()` of a spawned model takes constant time. It used to walk
+  the list of every model spawned in the trial, so trials that release
+  models long after spawning them became quadratic: 400,000 late releases
+  drop from 112 s to 1.4 s. A model releasing itself from its own process
+  also ends through the fast exit of a returning process, so 200,000
+  self-releases with 50,000 processes alive drop from 16.6 s to 0.86 s.
+  Results are unchanged.
 
 # Cimba Python 0.9.4
 
