@@ -1,4 +1,6 @@
-# Unreleased
+# Cimba Python 0.9.6
+
+Released 2026-11-06.
 
 - Structural design points (#29). `cb.sweep` now works on `cb.Ref` fields
   (`flow.target = cb.sweep(review, approve)`, for models or entities) and on
