@@ -99,3 +99,5 @@ environment = { CC = "clang-cl" }
 
 [tool.cibuildwheel.macos]
 archs = ["native"]
+# Keep the wheel tag at macosx_11_0 whatever the runner image
+environment = { MACOSX_DEPLOYMENT_TARGET = "11.0" }

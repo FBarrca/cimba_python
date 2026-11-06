@@ -123,7 +123,7 @@ jobs:
             artifact: windows-x86_64
             arch: AMD64
           - name: macOS arm64
-            os: macos-14
+            os: macos-15
             artifact: macos-arm64
             arch: arm64
     runs-on: ${{ matrix.os }}
