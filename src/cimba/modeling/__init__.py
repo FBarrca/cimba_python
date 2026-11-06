@@ -693,12 +693,27 @@ class Model(metaclass=ModelMeta):
             issubclass(get_args(declaration)[0], Model)
         ):
             expected = get_args(declaration)[0]
-            if not isinstance(value, list) or not all(
-                isinstance(child, expected) for child in value
-            ):
+            lists = options(value)
+            if isinstance(value, Sweep) and not all(isinstance(x, list) for x in lists):
+                raise TypeError(f"{type(self).__name__}.{name} sweep must contain lists "
+                                f"of {expected.__name__} models (cb.sweep([a], [a, b]))")
+            if not all(isinstance(x, list) and all(isinstance(child, expected) for child in x)
+                       for x in lists):
                 raise TypeError(f"{type(self).__name__}.{name} expects a list of "
                                 f"{expected.__name__} models")
-            children = tuple(value)
+            # Options may share items; each is attached once.
+            children = tuple(dict.fromkeys(
+                child for x in cast(tuple[list[Model], ...], lists) for child in x))
+        elif origin is list and isinstance(value, Sweep):
+            # A sweep of reference lists: list[cb.Ref[...]]
+            if get_origin(get_args(declaration)[0] if get_args(declaration) else None) is not Ref:
+                raise TypeError(f"{type(self).__name__}.{name} is not a Param, input, "
+                                "child model, reference or collection")
+            if not all(isinstance(x, list) for x in value.values):
+                raise TypeError(f"{type(self).__name__}.{name} sweep must contain lists "
+                                "of references (cb.sweep([a], [a, b]))")
+        elif origin is Ref:
+            pass        # options are checked against the model tree
         elif origin is Array:
             if not all(isinstance(option, Array) for option in options(value)):
                 raise TypeError(f"{type(self).__name__}.{name} expects a cb.Array "
@@ -715,7 +730,8 @@ class Model(metaclass=ModelMeta):
             ):
                 raise TypeError(f"{type(self).__name__}.{name} sweep must contain sources")
         elif isinstance(value, Sweep):
-            raise TypeError(f"{type(self).__name__}.{name} is not a Param, input or child model")
+            raise TypeError(f"{type(self).__name__}.{name} is not a Param, input, "
+                            "child model, reference or collection")
         object.__setattr__(self, name, value)
         for child in children:
             child.attached(self, name)

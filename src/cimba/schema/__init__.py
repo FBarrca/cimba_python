@@ -24,6 +24,11 @@ class ModelDefinitionError(ValueError):
     pass
 
 
+# Field kinds whose value shapes the model tree. A sweep of one of these is a
+# structural axis: each design point runs on a tree holding only its option.
+STRUCTURAL = frozenset({"child", "ref", "collection"})
+
+
 def is_int_enum(kind) -> TypeGuard[type[IntEnum]]:
     """Whether ``kind`` is an ``enum.IntEnum`` class, stored natively as int64."""
     return isinstance(kind, type) and issubclass(kind, IntEnum)
@@ -385,9 +390,13 @@ class Assembly:
         """Snapshot the configured tree rooted at ``root``.
 
         A child field set to a sweep of models contributes every option, each
-        labelled ``path.field#i``, unless ``picks`` fixes the option for that
-        (model, field): then the tree contains only the chosen model, under the
-        plain label ``path.field``. With ``strict=False`` missing sources,
+        labelled ``path.field#i``, and a swept ``list[Model]`` every option's
+        items, as ``path.field#i[j]`` (an item shared by options joins once,
+        under its first label). Swept references (``Ref`` and ``list[Ref]``)
+        are checked option by option. ``picks`` fixes the option of a swept
+        child, reference or collection for that (model, field): the tree then
+        holds only the chosen value, under the plain label, and references are
+        resolved against that tree. With ``strict=False`` missing sources,
         parameters, initial states and required references are tolerated (used
         to draw unfinished models).
         """
@@ -414,6 +423,10 @@ class Assembly:
                     # per owner, never again when snapshotting a swept variant.
                     value = deepcopy(value)
                     setattr(model, field.name, value)
+                if (isinstance(value, Sweep) and field.kind in STRUCTURAL and
+                        picks is not None and (model, field.name) in picks):
+                    # This tree holds the option a design point selects.
+                    value = picks[(model, field.name)]
                 if field.kind == "entity" and value is None:
                     entity_type = get_origin(field.value_type) or field.value_type
                     value = entity_type() if isinstance(entity_type, type) else Entity()
@@ -456,16 +469,12 @@ class Assembly:
                 elif field.kind == "array":
                     check_array(field, value, f"{label}.{field.name}")
                 elif field.kind == "child" and isinstance(value, Sweep):
-                    chosen = (picks or {}).get((model, field.name))
-                    if chosen is not None:
-                        children.append((chosen, f"{label}.{field.name}"))
-                    else:
-                        for i, option in enumerate(value.values):
-                            if not isinstance(option, field.value_type):
-                                raise ModelDefinitionError(
-                                    f"{label}.{field.name}: sweep option {i} is not a "
-                                    f"{field.value_type.__name__}")
-                            children.append((option, f"{label}.{field.name}#{i}"))
+                    for i, option in enumerate(value.values):
+                        if not isinstance(option, field.value_type):
+                            raise ModelDefinitionError(
+                                f"{label}.{field.name}: sweep option {i} is not a "
+                                f"{field.value_type.__name__}")
+                        children.append((option, f"{label}.{field.name}#{i}"))
                 elif field.kind == "child" and value is None and field.optional:
                     pass
                 elif field.kind == "child":
@@ -476,24 +485,36 @@ class Assembly:
                     assert isinstance(value, Model)
                     children.append((value, f"{label}.{field.name}"))
                 elif field.kind == "collection":
-                    if not isinstance(value, list):
-                        raise ModelDefinitionError(f"{label}.{field.name}: expected list")
                     is_refs = get_origin(field.value_type) is Ref
                     expected = (get_args(field.value_type)[0] if is_refs
                                 else field.value_type)
-                    # Entity references are checked against the tree's entities below
-                    for i, item in enumerate(() if is_entity_reference(field) else value):
-                        if item is None and is_refs:
-                            continue
-                        if not isinstance(item, expected):
+                    axis = value.axis if isinstance(value, Sweep) else None
+                    swept = axis is not None
+                    lists: tuple[Any, ...] = (value.values if isinstance(value, Sweep)
+                                              else (value,))
+                    owned: dict[Model, str] = {}
+                    for option, items in enumerate(lists):
+                        where = f"{label}.{field.name}" + (f"#{option}" if swept else "")
+                        # A design point's tree holds the option as a tuple.
+                        if not isinstance(items, (list, tuple)):
                             raise ModelDefinitionError(
-                                f"{label}.{field.name}[{i}]: expected "
-                                f"{expected.__name__}")
-                    if not is_refs:
-                        for i, item in enumerate(value):
-                            if isinstance(item, Model):
-                                children.append((item, f"{label}.{field.name}[{i}]"))
-                    value = tuple(value)
+                                f"{where}: expected list" +
+                                (" (sweep lists: cb.sweep([a], [a, b]))" if swept else ""))
+                        # Entity references are checked against the tree's entities below
+                        for i, item in enumerate(() if is_entity_reference(field) else items):
+                            if item is None and is_refs:
+                                continue
+                            if not isinstance(item, expected):
+                                raise ModelDefinitionError(
+                                    f"{where}[{i}]: expected {expected.__name__}")
+                        if not is_refs:
+                            # Options may share items: each joins the tree once,
+                            # labelled by its first option.
+                            for i, item in enumerate(items):
+                                owned.setdefault(item, f"{where}[{i}]")
+                    children.extend(owned.items())
+                    value = (Sweep(tuple(tuple(items) for items in lists), axis)
+                             if axis is not None else tuple(lists[0]))
                 values[field.name] = value
             instance = Instance(model, label, schema, MappingProxyType(values))
             visited[model] = instance
@@ -529,37 +550,41 @@ class Assembly:
                     f"{where}: references {holder.label}.{held.name}, a "
                     f"{entity_name(held.value_type)}, not a {expected}")
 
+        def check_model(target, model_type, where: str) -> None:
+            """A referenced model: one of this tree's, of the referenced class."""
+            if not isinstance(target, model_type):
+                raise ModelDefinitionError(f"{where}: expected {model_type.__name__} reference")
+            if target not in visited:
+                raise ModelDefinitionError(
+                    f"{where}: dangling reference" if picks is None else
+                    f"{where}: dangling reference (the referenced model is not part of this "
+                    "design point's tree; sweep the reference with the option it points "
+                    "into, as in cb.sweeps([a, b], [a.node, b.node]))")
+
         for instance in instances:
             for field in instance.schema.fields:
-                if field.kind == "ref" and entity_class(field.value_type) is not None:
-                    target = instance.values[field.name]
-                    if target is None and not field.optional and strict:
-                        raise ModelDefinitionError(
-                            f"{instance.label}.{field.name}: reference missing")
-                    if target is not None:
-                        check_entity(target, field.value_type,
-                                     f"{instance.label}.{field.name}")
-                elif is_entity_reference(field):
-                    for position, target in enumerate(instance.values[field.name]):
-                        check_entity(target, reference_target(field),
-                                     f"{instance.label}.{field.name}[{position}]")
-                elif field.kind == "ref":
-                    target = instance.values[field.name]
-                    if target is None and not field.optional and strict:
-                        raise ModelDefinitionError(
-                            f"{instance.label}.{field.name}: reference missing")
-                    if target is not None and not isinstance(target, field.value_type):
-                        raise ModelDefinitionError(
-                            f"{instance.label}.{field.name}: expected "
-                            f"{field.value_type.__name__} reference")
-                    if target is not None and target not in visited:
-                        raise ModelDefinitionError(
-                            f"{instance.label}.{field.name}: dangling reference")
-                elif field.kind == "collection" and get_origin(field.value_type) is Ref:
-                    for position, target in enumerate(instance.values[field.name]):
-                        if target is not None and target not in visited:
-                            raise ModelDefinitionError(
-                                f"{instance.label}.{field.name}[{position}]: dangling reference")
+                target_type = reference_target(field)
+                if target_type is None:
+                    continue
+                value = instance.values[field.name]
+                swept = isinstance(value, Sweep)
+                for option, choice in enumerate(value.values if swept else (value,)):
+                    where = f"{instance.label}.{field.name}" + (f"#{option}" if swept else "")
+                    if field.kind == "ref":
+                        if choice is None:
+                            if not field.optional and strict:
+                                raise ModelDefinitionError(f"{where}: reference missing")
+                        elif entity_class(target_type) is not None:
+                            check_entity(choice, target_type, where)
+                        else:
+                            check_model(choice, target_type, where)
+                    elif entity_class(target_type) is not None:
+                        for position, target in enumerate(choice):
+                            check_entity(target, target_type, f"{where}[{position}]")
+                    else:
+                        for position, target in enumerate(choice):
+                            if target is not None:
+                                check_model(target, target_type, f"{where}[{position}]")
         return cls(root, tuple(instances), MappingProxyType(visited),
                    MappingProxyType({entity: (holder.model, held.name)
                                      for entity, (holder, held) in owners.items()}))

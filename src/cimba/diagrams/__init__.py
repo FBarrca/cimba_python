@@ -43,17 +43,26 @@ def structure(model: Model) -> Graph:
                 for index, option in enumerate(value.values):
                     edges.append(Edge(instance.label, label[option],
                                       f"{field.name} (option {index})"))
+            elif field.kind == "ref" and isinstance(value, Sweep):
+                for index, option in enumerate(value.values):
+                    if option is not None:
+                        edges.append(Edge(instance.label, label[option],
+                                          referenced(f"{field.name} (option {index})", option),
+                                          "dotted"))
             elif field.kind in {"child", "ref"} and value is not None:
                 style = "solid" if field.kind == "child" else "dotted"
                 edges.append(Edge(instance.label, label[value],
                                   referenced(field.name, value), style))
             elif field.kind == "collection":
                 style = "dotted" if get_origin(field.value_type) is Ref else "solid"
-                for index, member in enumerate(value or ()):
-                    if member is not None:
-                        edges.append(Edge(instance.label, label[member],
-                                          referenced(f"{field.name}[{index}]", member),
-                                          style))
+                swept = isinstance(value, Sweep)
+                for option, items in enumerate(value.values if swept else (value or (),)):
+                    suffix = f" (option {option})" if swept else ""
+                    for index, member in enumerate(items):
+                        if member is not None:
+                            edges.append(Edge(
+                                instance.label, label[member],
+                                referenced(f"{field.name}[{index}]{suffix}", member), style))
     return Graph(nodes, tuple(edges))
 
 

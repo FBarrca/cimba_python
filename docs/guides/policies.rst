@@ -281,9 +281,12 @@ Rules for sweeping a model
   type. Each option gets its own model tree, and each trial contains only its
   design point's option.
 * Options must not be used anywhere else in the tree; a reference into an
-  option from outside would dangle in the other trees. An option may
-  reference the rest of the model, for example a policy with a
-  ``store: cb.Ref["Store"]`` back-reference.
+  option from outside would dangle in the other trees, and
+  ``cb.Experiment(...)`` rejects it, naming the design point. Link such a
+  reference to the child instead, ``policies, targets =
+  cb.sweeps([a, b], [a.node, b.node])``, so it follows the selected option.
+  An option may reference the rest of the model, for example a policy with
+  a ``store: cb.Ref["Store"]`` back-reference.
 * Classes are compiled once, however many options and design points there
   are. ``results.meta.variants`` reports how many model trees were run.
 * The model sweep crosses with every other sweep, including sweeps of

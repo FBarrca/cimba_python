@@ -12,7 +12,7 @@ import numpy as np
 from cimba.inputs.sources import Source
 from cimba.modeling import Condition, Container, Dataset, Model, PriorityStore, Resource, Store, Sweep
 from cimba.results import InputRecord, InstanceResults, Results, RunMeta, Samples, Signal
-from cimba.schema import Assembly, ModelDefinitionError
+from cimba.schema import STRUCTURAL, Assembly, ModelDefinitionError
 from .design import Design, DesignPoint, trial_seed
 
 
@@ -54,15 +54,17 @@ class Experiment:
         self.window = window or Window()
         self.seed = int(seed)
         self.seeding = seeding
-        # The full tree includes every option of a swept child model; it is used
-        # for validation and design expansion. Trials run on per-option trees.
+        # The full tree includes every option of a swept child, reference or
+        # collection; it is used for design expansion. Trials run on per-option
+        # trees, each built and validated here, before any trial runs.
         self.assembly = Assembly.of(model)
         self.design = Design.of(self.assembly)
-        self._swept_children = tuple(
+        self._swept_structure = tuple(
             (instance.model, field.name)
             for instance in self.assembly.instances for field in instance.schema.fields
-            if field.kind == "child" and isinstance(instance.values[field.name], Sweep))
-        # With swept children this lays out every option; runs then use one
+            if field.kind in STRUCTURAL and isinstance(instance.values[field.name], Sweep))
+        self._variants = self._build_variants()
+        # With structural sweeps this lays out every option; runs then use one
         # layout per option (see _run_variants).
         self.seeds = None if seeds is None else np.asarray(seeds, dtype=np.uint64).copy()
         if self.seeds is not None and self.seeds.shape not in {
@@ -73,6 +75,36 @@ class Experiment:
         self.snapshot = Snapshot(self.assembly, self.window)
         self.layout = self.snapshot.layout
         self.snapshot.validate(self.design)
+
+    def _variant_key(self, point: DesignPoint) -> tuple[int, ...]:
+        return tuple(id(point.bindings[swept]) for swept in self._swept_structure)
+
+    def _build_variants(self) -> dict[tuple[int, ...], Any]:
+        """One snapshot per combination of structural options, keyed by the
+        identity of the options a design point binds."""
+        if not self._swept_structure:
+            return {}
+        from .snapshot import Snapshot
+        variants = {}
+        for point in self.design.points:
+            key = self._variant_key(point)
+            if key in variants:
+                continue
+            picks = {swept: point.bindings[swept] for swept in self._swept_structure}
+            try:
+                variants[key] = Snapshot(Assembly.of(self.model, picks=picks), self.window)
+            except ModelDefinitionError as exc:
+                chosen = ", ".join(
+                    f"{self.assembly.by_object[owner].label}.{name}"
+                    f"#{self._option(owner, name, point)}"
+                    for owner, name in self._swept_structure)
+                raise ModelDefinitionError(
+                    f"design point {point.index} ({chosen}): {exc}") from exc
+        return variants
+
+    def _option(self, owner: Model, name: str, point: DesignPoint) -> int:
+        value = self.assembly.by_object[owner].values[name]
+        return point.levels[value.axis]
 
     def describe(self) -> list[dict[str, Any]]:
         rows = []
@@ -105,7 +137,7 @@ class Experiment:
             points.append(DesignPoint(new_index, original.levels,
                                       original.bindings))
             seeds[new_index, 0] = self._seed(point_index, replication)
-        if self._swept_children:
+        if self._swept_structure:
             return self._run_variants(points, seeds, workers=workers,
                                       on_failure=on_failure, input_memory=input_memory)
         return self.snapshot.run(Design(self.design.axes, tuple(points)), seeds,
@@ -117,7 +149,7 @@ class Experiment:
         """Run every trial; returns immutable :class:`Results`."""
         if input_memory < 1:
             raise ExperimentConfigError("input_memory must be positive")
-        if self._swept_children:
+        if self._swept_structure:
             seeds = np.asarray([[self._seed(point.index, r) for r in range(self.replications)]
                                 for point in self.design.points], dtype=np.uint64)
             return self._run_variants(list(self.design.points), seeds, workers=workers,
@@ -136,7 +168,7 @@ class Experiment:
 
     def _run_variants(self, points: list[DesignPoint], seeds: np.ndarray, *,
                       workers: int | None, on_failure: str, input_memory: int) -> Results:
-        """Run each combination of swept child models on its own model tree.
+        """Run each combination of structural options on its own model tree.
 
         A trial contains only the options its design point selects: the other
         options do not exist in it, so their processes and hooks never run.
@@ -145,14 +177,10 @@ class Experiment:
         """
         groups: dict[tuple[int, ...], list[int]] = {}
         for position, point in enumerate(points):
-            key = tuple(id(point.bindings[swept]) for swept in self._swept_children)
-            groups.setdefault(key, []).append(position)
+            groups.setdefault(self._variant_key(point), []).append(position)
         parts = []
-        for positions in groups.values():
-            first = points[positions[0]]
-            picks = {swept: first.bindings[swept] for swept in self._swept_children}
-            from .snapshot import Snapshot
-            snapshot = Snapshot(Assembly.of(self.model, picks=picks), self.window)
+        for key, positions in groups.items():
+            snapshot = self._variants[key]
             design = Design(self.design.axes, tuple(
                 DesignPoint(local, points[position].levels, points[position].bindings)
                 for local, position in enumerate(positions)))

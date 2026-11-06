@@ -48,8 +48,9 @@ Invariants
        scheduling, memory chunking and input extension.
    * - Structural immutability
      - The instance tree, fields and input declarations are fixed for an
-       experiment, except that a swept child model gives one tree per
-       option. Experiments vary values, sources and model options.
+       experiment, except that swept children, references and lists give
+       one tree per combination of options. Experiments vary values,
+       sources and structural options.
    * - Window semantics
      - Time-weighted statistics cover the measurement window. Datasets are
        cleared when it opens.

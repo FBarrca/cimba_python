@@ -56,12 +56,35 @@ Sweeps
   option. This is how you compare model classes, such as policies written as
   polymorphic ``@cb.function`` methods, in one experiment (see
   :doc:`../guides/policies`).
+* a ``cb.Ref`` field, as a sweep of models or entities of this tree:
+  ``flow.target = cb.sweep(review, approve)``;
+* a **list** field, as a sweep of lists: ``hub.outgoing =
+  cb.sweep([a], [a, b])`` for ``list[cb.Ref[Node]]``, or ``pool.servers =
+  cb.sweep([s1], [s1, s2])`` for an owned ``list[Server]``. Options may share
+  items. Pass the lists as separate arguments: ``cb.sweep([a, b])`` is a
+  sweep of ``a`` and ``b``.
 
-Assigning a sweep anywhere else (plain fields, references, entity
-capacities) is a ``TypeError`` at that line. Those define the model's
-*structure*, which is fixed for an experiment. To compare structural
-variants, sweep a child model whose options differ, or build one model per
-variant and run each with the same seed (see :doc:`../guides/comparing`).
+Swept children, references and lists are **structural** axes. Each design
+point runs on a tree holding only its options, so they cross with each
+other and with parameter sweeps, under the same trial seeds. A reference
+from outside a swept child into one of its options would dangle in the
+other options' trees: link it to the child, so it moves with the option it
+points into:
+
+.. code-block:: python
+
+   graphs, entries = cb.sweeps([graph_a, graph_b],
+                               [graph_a.entry, graph_b.entry])
+   root.graph = graphs
+   root.driver.watch = entries      # 2 design points, each resolved
+
+``cb.Experiment(...)`` builds and checks every design point's tree, so a
+dangling reference fails there and names its design point.
+
+Assigning a sweep anywhere else (plain fields, entity capacities) is a
+``TypeError`` at that line. To compare variants that no sweep can express,
+build one model per variant and run each with the same seed (see
+:doc:`../guides/comparing`).
 
 **Crossing.** Independent sweeps combine as a full factorial. Two sweeps of 3
 and 4 values give 12 design points. Points are ordered like nested loops, the

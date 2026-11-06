@@ -243,10 +243,12 @@ class _Visitor(ast.NodeVisitor):
                                       and type(index.value) is int) else None
             for ref in self.resolve(node.value):
                 if ref.kind == "collection":
-                    items = analysis.assembly.by_object[ref.owner].values[ref.name]
-                    chosen = ([items[literal]] if literal is not None
-                              and -len(items) <= literal < len(items) else items)
-                    found |= {self.target(item) for item in chosen if item is not None}
+                    value = analysis.assembly.by_object[ref.owner].values[ref.name]
+                    # A swept collection may hold any of its options' items
+                    for items in (value.values if isinstance(value, Sweep) else (value,)):
+                        chosen = ([items[literal]] if literal is not None
+                                  and -len(items) <= literal < len(items) else items)
+                        found |= {self.target(item) for item in chosen if item is not None}
             return found
         if isinstance(node, ast.Call):
             func = node.func
@@ -292,6 +294,8 @@ class _Visitor(ast.NodeVisitor):
         value = analysis.assembly.by_object[owner].values[name]
         if field.kind == "child" and isinstance(value, Sweep):
             return {_Ref("model", option) for option in value.values}
+        if field.kind == "ref" and isinstance(value, Sweep):
+            return {self.target(option) for option in value.values if option is not None}
         if field.kind in {"child", "ref"}:
             return {self.target(value)} if value is not None else set()
         if field.kind == "collection":

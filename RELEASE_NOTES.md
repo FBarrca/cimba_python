@@ -1,3 +1,19 @@
+# Unreleased
+
+- Structural design points (#29). `cb.sweep` now works on `cb.Ref` fields
+  (`flow.target = cb.sweep(review, approve)`, for models or entities) and on
+  list fields, as a sweep of lists (`hub.outgoing = cb.sweep([a], [a, b])`
+  for `list[cb.Ref[Node]]`, or `pool.servers = cb.sweep([s1], [s1, s2])` for
+  an owned `list[Server]`, whose options may share items). Like swept child
+  models, these are structural axes: each design point runs on a tree that
+  holds only its options, with the same trial seeds, so independent
+  structural axes cross with each other and with parameter sweeps. A
+  reference from a stable model into a swept child can be linked to it,
+  `cb.sweeps([a, b], [a.entry, b.entry])`, and then follows the selected
+  option. `cb.Experiment(...)` now builds and checks every design point's
+  tree, so a dangling reference fails there, naming its design point,
+  rather than inside `run()`.
+
 # Cimba Python 0.9.5
 
 Released 2026-11-03.
