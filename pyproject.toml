@@ -36,6 +36,9 @@ dependencies = [
 
 [project.optional-dependencies]
 plot = ["matplotlib>=3.8"]
+rbf = [
+    "rbfopt>=4.3",
+]
 
 [project.urls]
 Homepage = "https://github.com/FBarrca/cimba_python"

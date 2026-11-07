@@ -73,6 +73,23 @@ trials. By default ``finalists=5`` and ``validation`` is four times
 To keep searching longer before convergence is declared, lower the
 tolerance: ``optimizer=optimize.DifferentialEvolution(tol=1e-4)``.
 
+Search with fewer candidates
+----------------------------
+
+When each candidate is expensive and you can afford only a few hundred,
+try RBFOpt. It fits a surrogate to the candidates seen so far and proposes
+the next one where the surrogate predicts a low objective or knows little:
+
+.. code-block:: python
+
+   best = study.run(optimizer=optimize.RBFOpt(max_evaluations=200))
+
+It needs ``pip install cimba[rbf]``. After its initial batch, RBFOpt runs
+one candidate per batch, so it uses fewer cores than differential evolution;
+give it more ``replications`` to fill them. When a candidate's trials take a
+fraction of a second, differential evolution reaches as good an answer at
+least as fast.
+
 Use every core
 --------------
 

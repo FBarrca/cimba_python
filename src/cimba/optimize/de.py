@@ -61,14 +61,17 @@ class DifferentialEvolution:
             settings['popsize'] = max(15, ceil(256 * workers / (dimensions * replications)))
         return settings
 
-    def population_size(self, dimensions, popsize):
+    def population_size(self, dimensions, settings):
         # rand2 needs five distinct donors in addition to the target member.
         minimum = 6 if self.strategy.startswith('rand2') else 5
-        size = max(minimum, dimensions * popsize)
+        size = max(minimum, dimensions * settings['popsize'])
         return 1 << (size - 1).bit_length() if self.init == 'sobol' else size
 
+    def generation_size(self, dimensions, settings):
+        return self.population_size(dimensions, settings)
+
     def population(self, space, rng, settings, initial):
-        size = self.population_size(len(space.dimensions), settings['popsize'])
+        size = self.population_size(len(space.dimensions), settings)
         if self.init == 'random':
             unit = rng.uniform(size=(size, len(space.dimensions)))
         elif self.init == 'latinhypercube':

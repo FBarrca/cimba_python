@@ -86,8 +86,9 @@ Optimization
       :param evaluations: Maximum distinct candidates simulated in the search.
          Must cover the initial population. Cached candidates are free. The
          search stops before a generation that might exceed it.
-      :param optimizer: A :class:`~cimba.optimize.DifferentialEvolution`;
-         ``None`` uses the defaults.
+      :param optimizer: A :class:`~cimba.optimize.DifferentialEvolution` or
+         :class:`~cimba.optimize.RBFOpt`; ``None`` uses differential
+         evolution's defaults.
       :param initial: Candidates that replace the first members of the
          initial population (at most the population size).
       :param finalists: Maximum candidates re-run for selection (≥ 1).
@@ -98,7 +99,8 @@ Optimization
          :meth:`Experiment.run`.
       :param on_failure: ``"reject"``, ``"ignore"`` or ``"raise"`` (below).
       :param progress: Called with a :class:`~cimba.optimize.Progress` after
-         each evolved generation; a truthy return stops the search.
+         each evolved generation (each RBFOpt proposal); a truthy return
+         stops the search.
 
       Repeated runs reuse the study's cache of simulated candidates.
 
@@ -166,6 +168,45 @@ Differential evolution
    vectorized objective, and always uses ``updating="deferred"``,
    ``workers=1`` and ``polish=False``: each generation is evaluated as one
    native batch.
+
+RBFOpt
+------
+
+.. class:: RBFOpt(*, initial=None, max_evaluations=300, max_iterations=1000, algorithm="MSRSM", rbf="auto", local_search="surrogate", minlp_solver_path=None, nlp_solver_path=None)
+
+   Settings for `RBFOpt <https://github.com/coin-or/rbfopt>`_, a surrogate
+   search that fits radial basis functions to the candidates seen so far and
+   proposes one new candidate at a time. It suits searches where each
+   candidate is expensive and the budget is a few hundred candidates.
+
+   Optional: install ``cimba[rbf]``.
+
+   :param initial: Size of the initial batch, a Latin hypercube (≥ 2).
+      ``None`` uses ``2 * D + 1`` for *D* decisions, recorded in
+      ``meta.optimizer.initial``.
+   :param max_evaluations: Candidates RBFOpt proposes, counting the initial
+      batch (≥ 1).
+   :param max_iterations: RBFOpt iterations (≥ 1).
+   :param algorithm: ``"MSRSM"`` or ``"Gutmann"``.
+   :param rbf: ``"auto"``, ``"cubic"``, ``"thin_plate_spline"``, ``"linear"``,
+      ``"multiquadric"`` or ``"gaussian"``.
+   :param local_search: How each proposal minimizes the surrogate.
+      ``"surrogate"`` uses RBFOpt's genetic search on the surrogate, in
+      process. ``"solver"`` is RBFOpt's own method: it runs the Bonmin solver
+      on each proposal, which takes seconds each. It needs Bonmin and Ipopt
+      (on ``PATH``, or ``pip install --extra-index-url https://pypi.ampl.com
+      ampl-module-coin``).
+   :param minlp_solver_path: Path to Bonmin for ``local_search="solver"``;
+      ``None`` looks on ``PATH``, then in ``ampl_module_coin``.
+   :param nlp_solver_path: Path to Ipopt, found the same way.
+
+   The initial batch runs as one native batch; each later proposal runs as
+   its own batch, so ``evaluations`` caps the search exactly. Rejected
+   candidates are reported to RBFOpt as twice the worst finite value seen
+   plus one. RBFOpt seeds NumPy's global generator; cimba restores it after
+   the search. ``stop_reason`` is ``maxiter`` when ``max_evaluations`` or
+   ``max_iterations`` is spent, and ``converged`` when RBFOpt stops on its
+   own rules or when every point of an all-integer space has been simulated.
 
 Results
 -------
@@ -270,7 +311,8 @@ seeded ``Experiment``. Selection and estimation use
 ``trial_seed(selection_seed, r)`` and ``trial_seed(estimation_seed, r)``.
 Those base seeds, and DE's own generator, are drawn from
 ``inputs.trace_rng(seed, tag)`` with the tags ``"cimba.optimize.selection"``,
-``"cimba.optimize.estimation"`` and ``"cimba.optimize.de"``. NumPy's global
+``"cimba.optimize.estimation"`` and ``"cimba.optimize.de"`` (also used by
+RBFOpt). NumPy's global
 random state is never used.
 
 Errors
@@ -283,7 +325,7 @@ Errors
    * - Exception
      - Raised when
    * - ``ValueError``
-     - invalid decision bounds, DE settings or candidate mappings.
+     - invalid decision bounds, DE or RBFOpt settings or candidate mappings.
    * - ``TypeError``
      - a decision is assigned to a field that isn't a ``Param``.
    * - ``ModelDefinitionError``
