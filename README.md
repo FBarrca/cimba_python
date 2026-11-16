@@ -1,8 +1,6 @@
-![Cimba logo](docs/static/cimba_logo_large.jpg)
+# PyCimba
 
-# Cimba Python
-
-Cimba Python compiles object-oriented discrete-event models to run on the [Cimba C engine](https://github.com/ambonvik/cimba). A model declares its variability as inputs. The same compiled model can use distributions, recorded traces, bootstrap resamples, or fitted sources.
+PyCimba is an object-oriented discrete-event simulation library for python. It allows the user to use Python tooling whilst avoiding the JIT overhead of Python, achieving more that one level of magnitude faster speed than alternatives like Simpy.  A model declares its variability as inputs. The same compiled model can use distributions, recorded traces, bootstrap resamples, or fitted sources.
 
 Python 3.11 or newer is required. Linux x86_64 and aarch64, Windows AMD64, and macOS arm64 wheels include the native engine.
 
